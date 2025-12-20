@@ -126,8 +126,8 @@ ADX (14): {adx_str} (趋势强度)"""
                     {"role": "system", "content": role_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=200, # 限制最大 Token 数以加快响应
-                timeout=30 # 缩短超时时间
+                max_tokens=500, # 增加 Token 数以支持更复杂的分析
+                timeout=45 # 适当延长超时
             )
             
             req_time = time.time() - req_start

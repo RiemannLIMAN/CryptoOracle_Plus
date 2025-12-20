@@ -28,7 +28,8 @@ class RiskManager:
         
         self.smart_baseline = None
         
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        # 获取项目根目录 (src/services/risk -> src/services -> src -> root)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         self.data_dir = os.path.join(project_root, "data")
         if not os.path.exists(self.data_dir):
             os.makedirs(self.data_dir)
