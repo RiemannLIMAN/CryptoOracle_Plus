@@ -5,22 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [v3.1.1] - 2025-12-21 (Classic Features Restoration)
-### 🐛 Missing Features Fix
-- **Periodic Fee Calibration**: 
-  - Fixed the missing periodic fee update logic during v3.0 refactoring.
-  - Restored behavior: Updates on startup and automatically refreshes VIP fee rates every **4 hours** to ensure accurate micro-profit filtering.
-- **Test Mode Params**:
-  - Fixed `get_account_balance` ignoring `test_mode`.
-  - Now correctly passes `{'simulated': True}` to the exchange when `test_mode: true`.
+## [v3.1.1] - 2025-12-21 (Stability & Fixes)
+### 🐛 Critical Fixes
+- **Network Stability**: 
+  - Added strict `timeout=10` constraint to DeepSeek API and Exchange OHLCV requests to prevent permanent hanging during network instability.
+- **Risk Calculation Fix**: 
+  - Fixed a critical bug in `RiskManager` where contract position value was double-counted (once in Total Equity, once in Position Value), causing inflated baseline capital and false stop-loss triggers.
+- **Notification Fix**: 
+  - Fixed Webhook notification failure caused by incorrect configuration scope reading (`root` vs `trading`). Now correctly injects notification config into trading scope.
 
-### 📝 Docs & UX
-- **Version Comparison Update**: 
-  - Updated `README.md` to correctly reflect v2.3's capabilities, focusing the comparison on **Architecture Upgrade** and **Async Core**.
-- **UI Polish**:
-  - Optimized `start_bot.sh` startup logs.
-  - Fixed double logging issue in Windows terminals.
-  - Fixed broken image paths in `README.md`.
+### ✨ UX Improvements
+- **Real-time Log Monitoring**: 
+  - Upgraded `start_bot.sh` to automatically enter `tail -f` mode after startup, providing immediate visibility of the bot's status.
+- **Log Persistence**: 
+  - Changed asset initialization output from `print` to `logger.info` to ensure it's recorded in log files.
 
 ## [v3.1.0] - 2025-12-21 (Logic Refinement & Safety)
 ### 🧠 Logic Refinement
