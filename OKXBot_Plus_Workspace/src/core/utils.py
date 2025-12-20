@@ -64,7 +64,8 @@ def setup_logger(name="crypto_oracle"):
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
-    log_filename = os.path.join(log_dir, f"trading_bot_async_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    # [优化] 使用固定文件名，以便 RotatingFileHandler 能正常工作（文件过大时自动轮转，而不是每次重启都生成新文件）
+    log_filename = os.path.join(log_dir, "trading_bot.log")
 
     # 强制输出到 stdout，确保控制台可见
     console_handler = logging.StreamHandler(sys.stdout)

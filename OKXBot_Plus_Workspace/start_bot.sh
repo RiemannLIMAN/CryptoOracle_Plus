@@ -122,7 +122,7 @@ echo "🐍 Python 版本: $PY_VERSION"
 
 # 4. 准备日志文件
 # 确保日志目录存在
-LOG_DIR="../log"
+LOG_DIR="log"
 if [ ! -d "$LOG_DIR" ]; then
     mkdir -p "$LOG_DIR"
 fi
