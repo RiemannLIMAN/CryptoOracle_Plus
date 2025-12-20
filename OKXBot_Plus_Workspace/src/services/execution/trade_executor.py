@@ -185,7 +185,11 @@ class DeepSeekTrader:
             
             # [Fix 51000 Error] 确保 limit 足够大，有些交易所对小周期请求有最小数量要求
             # 或者当 API 周期为 1m 时，不要请求奇怪的数量
-            ohlcv = await self.exchange.fetch_ohlcv(self.symbol, api_timeframe, limit=100)
+            # 增加超时设置，防止 fetch_ohlcv 永久挂起
+            ohlcv = await asyncio.wait_for(
+                self.exchange.fetch_ohlcv(self.symbol, api_timeframe, limit=100),
+                timeout=10
+            )
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
 

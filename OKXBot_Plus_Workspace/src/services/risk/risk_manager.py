@@ -279,11 +279,10 @@ class RiskManager:
         # User requested Chinese header to match old screenshot
         table_header = f"{'交易对':<18} | {'分配比例':<8} | {'理论配额(U)':<12} | {'持仓数量':<10} | {'持仓市值(U)':<12} | {'占用%':<6} | {'成本':<10} | {'估算盈亏'}"
         
-        # [Fix] 使用 print 而非 logger.info，避免日志前缀(timestamp)破坏表格对齐
-        # 注意：start_bot.sh 会将 stdout 重定向到 log/console_output.log，所以 print 依然会被记录
-        print(header)
-        print(table_header)
-        print(sep_line)
+        # 改回使用 logger.info 以确保日志文件中可见，与老版本保持一致
+        self.logger.info(header)
+        self.logger.info(table_header)
+        self.logger.info(sep_line)
         
         total_position_value = 0.0
         
@@ -300,7 +299,7 @@ class RiskManager:
             quota = 0.0
             allocation_str = "N/A"
             
-            if trader.initial_balance and trader.initial_balance > 0:
+            if hasattr(trader, 'initial_balance') and trader.initial_balance and trader.initial_balance > 0:
                 if trader.allocation <= 1.0:
                     quota = trader.initial_balance * trader.allocation
                     allocation_str = f"{trader.allocation*100:.0f}%"
@@ -329,6 +328,11 @@ class RiskManager:
                 pos = await trader.get_current_position()
                 if pos:
                     holding_amount = pos['size']
+                    # 对于合约，市值估算可能需要更精确，这里简化为 持仓数量 * 价格
+                    # 实际上合约价值 = 数量 * 合约面值 * 价格 (如果是币本位) 或者 数量 * 价格 (如果是U本位且单位是币)
+                    # OKX U本位合约 size 通常是 币的数量
+                    position_val = holding_amount * current_price
+                    total_position_value += position_val
             
             usage_pct = 0.0
             if quota > 0:
@@ -339,13 +343,26 @@ class RiskManager:
             
             pnl_est_str = "-"
             if entry_price > 0 and holding_amount > 0 and current_price > 0:
+                # 简单估算盈亏
                 raw_pnl = (current_price - entry_price) * holding_amount
+                # 如果是做空，盈亏反向
+                if hasattr(trader, 'position_side') and trader.position_side == 'short': 
+                     # 这里假设 DeepSeekTrader 有 position_side 属性或者我们需要从 get_current_position 获取
+                     # 实际上 get_current_position 返回了 side
+                     pass
+                
+                # 为了准确，我们重新获取一次 position 信息
+                if trader.trade_mode != 'cash':
+                     pos = await trader.get_current_position()
+                     if pos and pos['side'] == 'short':
+                         raw_pnl = (entry_price - current_price) * holding_amount
+
                 pnl_est_str = f"{raw_pnl:+.2f} U"
 
             row_str = f"{trader.symbol:<18} | {allocation_str:<8} | {quota:<12.2f} | {holding_amount:<10.4f} | {position_val:<12.2f} | {usage_pct:>5.1f}% | {entry_price_str:<10} | {pnl_est_str}"
-            print(row_str)
+            self.logger.info(row_str)
 
-        print(sep_line)
+        self.logger.info(sep_line)
         
         real_total_equity = current_usdt_equity + total_position_value
         

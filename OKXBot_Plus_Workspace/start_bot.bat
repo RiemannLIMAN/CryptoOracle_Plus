@@ -34,23 +34,7 @@ if %errorlevel% equ 0 (
     if /i not "%choice%"=="y" exit /b
 )
 
-:: 3. 启动机器人
-echo.
-echo 🚀 正在启动机器人主程序 (v3.0 Async Core)...
-echo.
-echo   ___  ____  _  _  ____  ____  __    __  ____   __    ___  __    ____ 
-echo  / __)(  _ \( \/ )(  _ \(_  _)/  \  /  \(  _ \ / _\  / __)(  )  (  __)
-echo ( (__  )   / )  /  ) __/  )( (  O )(  O ))   //    \( (__ / (_/\ ) _) 
-echo  \___)(__\_)(__/  (__)   (__) \__/  \__/(__\_)\_/\_/ \___)\____/(____)
-echo.
-echo   🐯 CryptoOracle AI Trading System ^| v3.1.0 Async Core
-echo   ==================================================================
-echo.
-echo 💡 提示: 请勿关闭此窗口，否则机器人将停止运行。
-echo 💡 提示: 按 Ctrl+C 可停止程序。
-echo.
-
-python src/OKXBot_Plus.py
+python -u src/OKXBot_Plus.py
 
 if %errorlevel% neq 0 (
     echo.

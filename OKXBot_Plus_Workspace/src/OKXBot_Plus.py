@@ -69,7 +69,8 @@ async def run_system_check(logger, exchange, agent, config):
         await agent.client.chat.completions.create(
             model="deepseek-chat",
             messages=[{"role": "user", "content": "ping"}],
-            max_tokens=5
+            max_tokens=5,
+            timeout=10
         )
         logger.info("✅ DeepSeek API 连接成功")
         
@@ -89,10 +90,11 @@ async def main():
 
     # 将启动脚本中的提示信息也记录到日志
     logger.info("=" * 60)
-    logger.info(f"💡 [实时日志] tail -f ../log/console_output.log")
+    logger.info(f"💡 [实时日志] tail -f log/trading_bot.log")
     logger.info(f"💡 [后台进程] ps -ef | grep OKXBot_Plus.py")
     logger.info(f"💡 [停止指令] kill -9 {os.getpid()}")
     logger.info("=" * 60)
+
     
     config = Config()
     if not config.data:
@@ -151,18 +153,17 @@ async def main():
     await asyncio.gather(*pre_warm_tasks, return_exceptions=True)
     logger.info("✅ 数据预热完成")
     
-    # 打印进程信息提示 (用户要求在资产盘点前显示)
-    logger.info("-" * 50)
-    logger.info(f"💡 [实时日志] tail -f log/console_output.log")
-    logger.info(f"💡 [后台进程] ps -ef | grep OKXBot_Plus.py (PID: {os.getpid()})")
-    logger.info(f"💡 [停止指令] kill -9 {os.getpid()}")
-    logger.info("-" * 50)
 
     # 初始化资产基准
     await risk_manager.initialize_baseline(start_equity)
     
     # 显示历史战绩
     risk_manager.display_pnl_history()
+    
+    # [新增] 打印分割线，明确初始化阶段结束
+    print("\n" + "=" * 50)
+    logger.info("🏁 初始化完成，进入主循环")
+    print("=" * 50 + "\n")
     
     # --- 进入主循环 ---
     timeframe = config['trading']['timeframe']
