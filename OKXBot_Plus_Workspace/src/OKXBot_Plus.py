@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.1.0 (Async Core)"
+SYSTEM_VERSION = "v3.1.1 (Async Core)"
 
 BANNER = r"""
   ___  ____  _  _  ____  ____  __    __  ____   __    ___  __    ____ 
