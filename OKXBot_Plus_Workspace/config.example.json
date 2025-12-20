@@ -1,0 +1,56 @@
+{
+  "exchanges": {
+    "okx": {
+      "options": {}
+    }
+  },
+  "models": {
+    "deepseek": {
+      "base_url": "https://api.deepseek.com",
+      "model": "deepseek-chat"
+    }
+  },
+  "trading": {
+    "market_type": "swap",      
+    "timeframe": "1m",
+    "test_mode": true,
+    
+    "proxy": "",
+    "max_slippage_percent": 1.0,
+    "min_confidence": "MEDIUM",
+
+    "strategy": {
+      "history_limit": 20,
+      "signal_limit": 30,
+      "dynamic_tp": true
+    },
+    "margin_mode": "cross",
+    "trade_mode": "cross",
+    "risk_control": {
+      "initial_balance_usdt": 100.0,
+      "max_profit_usdt": 0.0,
+      "max_loss_usdt": 0.0,
+      "max_profit_rate": 0.2,
+      "max_loss_rate": 0.1
+    }
+  },
+  "notification": {
+    "enabled": false
+  },
+  "symbols": [
+    {
+      "symbol": "SOL/USDT:USDT",
+      "amount": 0.1,
+      "allocation": 0.5,
+      "leverage": 2,
+      "trade_mode": "cross"    
+    },
+    {
+      "symbol": "ETH/USDT",
+      "amount": 0.1,
+      "allocation": 0.5,
+      "leverage": 1,
+      "trade_mode": "cash"      
+    }
+  ]
+}

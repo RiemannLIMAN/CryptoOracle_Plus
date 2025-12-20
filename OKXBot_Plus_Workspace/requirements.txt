@@ -1,0 +1,9 @@
+ccxt
+openai
+pandas
+aiohttp
+httpx
+requests
+emoji
+matplotlib
+python-dotenv
