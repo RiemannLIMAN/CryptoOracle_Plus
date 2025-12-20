@@ -120,7 +120,7 @@ class RiskManager:
             
             header = "\n" + "="*40 + f"\n📜 历史战绩回顾 (共 {len(df)} 条记录)\n" + "="*40
             self.logger.info(header)
-            print(header)
+            # print(header) # Duplicate print removed
             
             recent = df.tail(10)
             max_pnl = recent['pnl_usdt'].abs().max()
@@ -146,11 +146,14 @@ class RiskManager:
                 
                 line = f"{timestamp} | {pnl:>6.2f} U | {bar}"
                 self.logger.info(line)
-                print(line)
+                # print(line) # Duplicate print removed
             
             footer = "="*30 + "\n"
             self.logger.info(footer)
-            print(footer)
+            # print(footer) # Duplicate print removed
+            
+            # 更新最后显示时间，防止短时间内重复打印
+            self.last_chart_display_time = time.time()
         except Exception:
             pass
 
@@ -272,7 +275,8 @@ class RiskManager:
         sep_line = "-" * 115
         header = f"\n{sep_line}\n📊 资产初始化盘点 (Asset Initialization)\n{sep_line}"
         # 使用纯英文表头以确保对齐
-        table_header = f"{'Symbol':<18} | {'Alloc':<8} | {'Quota(U)':<12} | {'Hold':<10} | {'Value(U)':<12} | {'Use%':<6} | {'Cost':<10} | {'Est.PnL'}"
+        # User requested Chinese header to match old screenshot
+        table_header = f"{'交易对':<18} | {'分配比例':<8} | {'理论配额(U)':<12} | {'持仓数量':<10} | {'持仓市值(U)':<12} | {'占用%':<6} | {'成本':<10} | {'估算盈亏'}"
         
         self.logger.info(header)
         self.logger.info(table_header)

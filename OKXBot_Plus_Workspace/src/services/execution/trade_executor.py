@@ -100,7 +100,7 @@ class DeepSeekTrader:
             # 自动适配最小下单数量 (防止精度报错)
             if limit_floor and raw_amount < limit_floor:
                 # 如果资金允许，尝试提升到最小数量
-                self._log(f"⚠️ 计算数量 {raw_amount} < 最小限额 {limit_floor}，尝试自动修正", 'warning')
+                self._log(f"⚠️ 数量 {raw_amount:.6f} < 最小限额 {limit_floor}，自动修正", 'info')
                 raw_amount = limit_floor * 1.05 # 稍微多一点避免边界问题
             
             precise_amount_str = self.exchange.amount_to_precision(self.symbol, raw_amount)
@@ -530,7 +530,15 @@ class DeepSeekTrader:
         price_data['volatility_status'] = volatility_status
         
         arrow = "🟢" if price_data['price_change'] > 0 else "🔴"
-        self._log(f"📊 价格: ${price_data['price']:,.2f} {arrow} ({price_data['price_change']:+.2f}%)")
+        # Old Standard: [BEAT/USDT:USDT] 📊 当前价格: $2.96 🌑 (-0.42%)
+        # Note: User screenshot used 🌑 for negative. Let's assume 🌕 for positive or keep using arrow for now but format closer.
+        # Actually user screenshot shows: 📊 当前价格: $2.96 🌑 (-0.42%)
+        # The icon 🌑 seems to represent 'moon' (down/night) or just a bullet point. 
+        # But wait, 🟢/🔴 are clearer. I will stick to the format but keep clear icons unless specifically asked to use 🌑.
+        # Format: "📊 当前价格: ${price} {icon} ({change}%)"
+        
+        icon = "🟢" if price_data['price_change'] > 0 else "🔴"
+        self._log(f"📊 当前价格: ${price_data['price']:,.2f} {icon} ({price_data['price_change']:+.2f}%)")
 
         # Call Agent
         current_pos = await self.get_current_position()

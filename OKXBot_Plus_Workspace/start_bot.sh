@@ -15,19 +15,7 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-echo -e "${GREEN}🚀 正在准备启动 CryptoOracle 交易机器人 (v3.0 Async Core)...${NC}"
-echo -e "${GREEN}"
-cat << "EOF"
-  ___  ____  _  _  ____  ____  __    __  ____   __    ___  __    ____ 
- / __)(  _ \( \/ )(  _ \(_  _)/  \  /  \(  _ \ / _\  / __)(  )  (  __)
-( (__  )   / )  /  ) __/  )( (  O )(  O ))   //    \( (__ / (_/\ ) _) 
- \___)(__\_)(__/  (__)   (__) \__/  \__/(__\_)\_/\_/ \___)\____/(____)
-
-  🐯 CryptoOracle AI Trading System | v3.1.0 Async Core
-  ==================================================================
-EOF
-echo -e "${NC}"
-echo "📂 工作目录: $(pwd)"
+echo -e "${GREEN}🚀 正在准备启动 CryptoOracle 交易机器人...${NC}"
 
 # 2. 检查配置文件
 if [ ! -f "config.json" ]; then
@@ -77,7 +65,7 @@ for venv in $POSSIBLE_VENVS; do
 done
 
 if [ -n "$VENV_PATH" ]; then
-    echo -e "${GREEN}✅ 检测到虚拟环境: $VENV_PATH${NC}"
+    # echo -e "${GREEN}✅ 检测到虚拟环境: $VENV_PATH${NC}"
     # 如果是 venv，激活它
     if [ -f "$VENV_PATH/bin/activate" ]; then
         source "$VENV_PATH/bin/activate"
@@ -178,22 +166,19 @@ NEW_PID=$!
 # cp "$STARTUP_LOG" "$LATEST_LOG" 2>/dev/null
 
 # 7. 验证启动结果 (关键步骤)
-echo "⏳ 正在验证进程状态 (PID: $NEW_PID)，请等待 5 秒..."
+# echo "⏳ 正在验证进程状态 (PID: $NEW_PID)，请等待 5 秒..."
 sleep 5
 
 if ps -p $NEW_PID > /dev/null; then
     echo -e "${GREEN}✅ 启动成功！机器人正在后台运行。${NC}"
-    echo "--------------------------------------------------"
+    # echo "--------------------------------------------------"
     echo -e "🆔 进程 PID: ${GREEN}$NEW_PID${NC}"
     echo -e "📄 日志文件: ${GREEN}$STARTUP_LOG${NC}"
+    # echo "--------------------------------------------------"
+    echo "🔍 最近 100 行日志输出:"
     echo "--------------------------------------------------"
-    echo "🔍 最近 30 行日志输出:"
+    tail -n 100 "$STARTUP_LOG"
     echo "--------------------------------------------------"
-    tail -n 30 "$STARTUP_LOG"
-    echo "--------------------------------------------------"
-    echo -e "💡 提示: 使用 ${YELLOW}tail -f $STARTUP_LOG${NC} 查看实时日志"
-    echo -e "💡 提示: 使用 ${YELLOW}ps -ef | grep OKXBot_Plus.py${NC} 查看后台进程"
-    echo -e "💡 提示: 使用 ${YELLOW}kill $NEW_PID${NC} 停止机器人"
 else
     echo -e "${RED}❌ 启动失败！进程在启动后立即退出了。${NC}"
     echo "--------------------------------------------------"

@@ -30,8 +30,9 @@ BANNER = r"""
 
 async def run_system_check(logger, exchange, agent, config):
     """启动自检程序"""
-    print("\n" + "="*30)
-    logger.info("🛠️ 正在执行系统自检...")
+    print("\n" + "="*50)
+    logger.info("🚀 系统启动 (SYSTEM STARTUP)")
+    print("="*50)
     
     try:
         # 1. 检查 OKX 连接
@@ -149,6 +150,13 @@ async def main():
     pre_warm_tasks = [trader.get_ohlcv() for trader in traders]
     await asyncio.gather(*pre_warm_tasks, return_exceptions=True)
     logger.info("✅ 数据预热完成")
+    
+    # 打印进程信息提示 (用户要求在资产盘点前显示)
+    logger.info("-" * 50)
+    logger.info(f"💡 [实时日志] tail -f ../log/console_output.log")
+    logger.info(f"💡 [后台进程] ps -ef | grep OKXBot_Plus.py (PID: {os.getpid()})")
+    logger.info(f"💡 [停止指令] kill -9 {os.getpid()}")
+    logger.info("-" * 50)
 
     # 初始化资产基准
     await risk_manager.initialize_baseline(start_equity)
@@ -185,9 +193,9 @@ async def main():
             
             # 还原经典分割线样式
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            logger.info("▼" * 40)
+            logger.info("▼" * 70)
             logger.info(f"⏰ 批次执行开始: {current_time}")
-            logger.info("▲" * 40)
+            logger.info("▲" * 70)
             
             # 1. Risk Check
             await risk_manager.check()
@@ -216,7 +224,7 @@ if __name__ == "__main__":
         # 强制 Windows 终端使用 UTF-8 编码，防止中文乱码
         sys.stdout.reconfigure(encoding='utf-8')
     
-    print(f"🔥 正在启动 CryptoOracle 进程 (PID: {os.getpid()})...", flush=True)
+    # print(f"🔥 正在启动 CryptoOracle 进程 (PID: {os.getpid()})...", flush=True)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
