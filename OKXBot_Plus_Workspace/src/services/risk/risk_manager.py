@@ -279,9 +279,11 @@ class RiskManager:
         # User requested Chinese header to match old screenshot
         table_header = f"{'交易对':<18} | {'分配比例':<8} | {'理论配额(U)':<12} | {'持仓数量':<10} | {'持仓市值(U)':<12} | {'占用%':<6} | {'成本':<10} | {'估算盈亏'}"
         
-        self.logger.info(header)
-        self.logger.info(table_header)
-        self.logger.info(sep_line)
+        # [Fix] 使用 print 而非 logger.info，避免日志前缀(timestamp)破坏表格对齐
+        # 注意：start_bot.sh 会将 stdout 重定向到 log/console_output.log，所以 print 依然会被记录
+        print(header)
+        print(table_header)
+        print(sep_line)
         
         total_position_value = 0.0
         
@@ -341,9 +343,9 @@ class RiskManager:
                 pnl_est_str = f"{raw_pnl:+.2f} U"
 
             row_str = f"{trader.symbol:<18} | {allocation_str:<8} | {quota:<12.2f} | {holding_amount:<10.4f} | {position_val:<12.2f} | {usage_pct:>5.1f}% | {entry_price_str:<10} | {pnl_est_str}"
-            self.logger.info(row_str)
+            print(row_str)
 
-        self.logger.info(sep_line)
+        print(sep_line)
         
         real_total_equity = current_usdt_equity + total_position_value
         

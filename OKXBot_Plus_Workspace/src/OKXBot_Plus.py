@@ -153,7 +153,7 @@ async def main():
     
     # 打印进程信息提示 (用户要求在资产盘点前显示)
     logger.info("-" * 50)
-    logger.info(f"💡 [实时日志] tail -f ../log/console_output.log")
+    logger.info(f"💡 [实时日志] tail -f log/console_output.log")
     logger.info(f"💡 [后台进程] ps -ef | grep OKXBot_Plus.py (PID: {os.getpid()})")
     logger.info(f"💡 [停止指令] kill -9 {os.getpid()}")
     logger.info("-" * 50)
