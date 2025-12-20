@@ -332,7 +332,12 @@ class RiskManager:
                     # 实际上合约价值 = 数量 * 合约面值 * 价格 (如果是币本位) 或者 数量 * 价格 (如果是U本位且单位是币)
                     # OKX U本位合约 size 通常是 币的数量
                     position_val = holding_amount * current_price
-                    total_position_value += position_val
+                    # [Fix] 合约模式下，total_position_value 不应累加到 real_total_equity 中
+                    # 因为账户权益 (Equity) 已经包含了合约保证金和未实现盈亏
+                    # 所以我们只记录 position_val 用于展示，但不加到 total_position_value 中
+                    # total_position_value 变量在最后用于修正 current_usdt_equity
+                    # 只有 cash 模式下，现货价值才需要加回去
+                    # total_position_value += position_val  <-- Remove this for contract
             
             usage_pct = 0.0
             if quota > 0:

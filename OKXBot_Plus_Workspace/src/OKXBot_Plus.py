@@ -101,6 +101,11 @@ async def main():
         logger.error("配置文件加载失败，程序退出。")
         return
 
+    # [Fix] 注入 notification 配置到 trading 中，以便 Trader 能正确读取
+    # config.json 中 notification 是 root 级，但 Trader 期望在 common_config (trading) 中找到它
+    if 'notification' in config.data:
+        config['trading']['notification'] = config['notification']
+
     # DeepSeek Client (Async)
     deepseek_config = config['models']['deepseek']
     proxy = config['trading'].get('proxy', '')
