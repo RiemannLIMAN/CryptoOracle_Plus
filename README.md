@@ -170,10 +170,9 @@ CryptoOracle 是一个开放源代码项目，我们欢迎任何形式的贡献�
 如果您觉得本项目对您有帮助，或者您通过它获得了不错的收益，欢迎请作者喝一杯咖啡，这将激励我们持续更新与维护！
 
 
-<div align="center">
-  <img src="doc/images/wechat.png" width="300" alt="WeChat Pay" />
-  <img src="doc/images/alipay.png" width="300" alt="Alipay" />
-</div>
+![2dd46c41dffe02603ed23f57f70c8110](https://github.com/user-attachments/assets/3a70025a-d277-4081-8247-5aebcdeb92ff)
+![Uploading fa2d3630605e071351aab985f1d252cc.png…]()
+
 
 *   🦄 **OKX 全球邀请码**: `95572792`
 *   👉 **注册链接**: [点击这里注册 OKX (免翻墙)](https://www.okx.com/register?inviteCode=95572792)
