@@ -59,6 +59,21 @@ v3.0 版本采用了全新的 **AsyncIO 异步内核** 与 **组件化架构**�
 
 ---
 
+## 🆚 版本对比：v3.1 (Async) vs v2.1 (Classic)
+
+| 特性维度 | v2.1 (老版本) | v3.1 (当前版本) | 核心优势 |
+| :--- | :--- | :--- | :--- |
+| **🚀 核心架构** | **同步阻塞 (Sync)**<br>单线程串行轮询，币种越多延迟越高 | **异步并发 (AsyncIO)**<br>多协程并行处理，10个币种与1个币种耗时几乎相同 | **速度提升 10x+**<br>毫秒级响应市场变化 |
+| **⚡ 启动流程** | 简单启动，串行预热数据 | **智能自检 + 并发预热**<br>自动校准资金、测试API、瞬间拉取所有K线 | **启动即战斗**<br>数据更精准，状态更透明 |
+| **🧠 AI 决策** | 基础问答，简单指标参考 | **思维链 (CoT) + 动态人格**<br>根据 ADX 趋势强度自动切换(激进/避险/网格)人设 | **更懂人性**<br>大幅提高震荡市胜率 |
+| **🛡️ 风控体系** | 基础止盈止损 | **智能基准 + 微利拦截**<br>自动识别本金基准，拒绝无效交易(利润覆盖手续费) | **本金保护**<br>拒绝“白忙活” |
+| **📊 可视化** | 仅纯文本日志 | **经典文本 + 资金曲线图**<br>保留情怀界面的同时，自动生成 `.png` 盈亏走势图 | **复盘更直观**<br>数据可视化 |
+| **💎 稳定性** | 网络波动易卡死 | **自动降级 + 容错重试**<br>支持 `1s` 级高频监控，API 限流自动处理 | **7x24h 稳如泰山** |
+
+> **💡 总结**: v3.1 披着 v2.1 的经典外衣（情怀 UI），但内核已换装为**法拉利引擎**。它不仅更快，而且更聪明、更安全。
+
+---
+
 ### 6. 🛠️ 故障排查工具 (Diagnostic Tool)
 *   **一键诊断**: 内置 `test/test_connection.py`，可独立运行以测试 OKX API、DeepSeek API 及 Webhook 通知的连通性，无需启动主程序即可快速定位网络或配置问题。
 
@@ -155,9 +170,10 @@ CryptoOracle 是一个开放源代码项目，我们欢迎任何形式的贡献�
 ### ☕ 赞助支持 (Sponsorship)
 如果您觉得本项目对您有帮助，或者您通过它获得了不错的收益，欢迎请作者喝一杯咖啡，这将激励我们持续更新与维护！
 
+
 <div align="center">
-  <img src="https://raw.githubusercontent.com/LBQ007/Trae_Server/refs/heads/main/images/20250211153920.png" width="300" alt="WeChat Pay" />
-  <img src="https://raw.githubusercontent.com/LBQ007/Trae_Server/refs/heads/main/images/20250211153938.png" width="300" alt="Alipay" />
+  <img src="doc/images/wechat.png" width="300" alt="WeChat Pay" />
+  <img src="doc/images/alipay.png" width="300" alt="Alipay" />
 </div>
 
 *   🦄 **OKX 全球邀请码**: `95572792`
