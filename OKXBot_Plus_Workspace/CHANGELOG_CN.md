@@ -5,6 +5,23 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.1.1] - 2025-12-21 (Classic Features Restoration)
+### 🐛 遗漏功能修复 (Missing Features Fix)
+- **费率自动校准 (Periodic Fee Calibration)**: 
+  - 修复了 v3.0 重构时遗漏的**周期性费率更新**逻辑。
+  - 现已恢复为启动时更新，且每 **4小时** 自动重新获取 VIP 费率，确保微利拦截算法始终精准。
+- **测试模式参数 (Test Mode Params)**:
+  - 修复了 `get_account_balance` 中忽略 `test_mode` 的问题。
+  - 现在当 `test_mode: true` 时，会正确向交易所传递 `{'simulated': True}` 参数（针对支持模拟盘的交易所）。
+
+### 📝 文档与体验 (Docs & UX)
+- **版本对比表更新**: 
+  - 更新 `README.md`，修正了对老版本 v2.3 的描述，承认其已具备高级功能，将对比重点聚焦于**架构升级**与**异步内核**。
+- **UI 细节打磨**:
+  - 优化了 `start_bot.sh` 的启动日志，去除了冗余信息。
+  - 修复了 Windows 下日志双重打印的问题。
+  - 修复了 `README.md` 中图片显示路径错误的问题。
+
 ## [v3.1.0] - 2025-12-21 (Logic Refinement & Safety)
 ### 🧠 逻辑精修 (Logic Refinement)
 - **K线上下文黄金分割**: 

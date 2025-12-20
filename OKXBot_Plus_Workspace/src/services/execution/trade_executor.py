@@ -490,7 +490,11 @@ class DeepSeekTrader:
 
     async def get_account_balance(self):
         try:
-            balance = await self.exchange.fetch_balance()
+            params = {}
+            if self.test_mode:
+                params = {'simulated': True}
+                
+            balance = await self.exchange.fetch_balance(params)
             if 'USDT' in balance: return float(balance['USDT']['free'])
             # 统一账户
             if 'info' in balance and 'data' in balance['info']:
