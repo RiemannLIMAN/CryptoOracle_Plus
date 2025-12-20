@@ -169,9 +169,8 @@ CryptoOracle 是一个开放源代码项目，我们欢迎任何形式的贡献�
 ### ☕ 赞助支持 (Sponsorship)
 如果您觉得本项目对您有帮助，或者您通过它获得了不错的收益，欢迎请作者喝一杯咖啡，这将激励我们持续更新与维护！
 
-
-![2dd46c41dffe02603ed23f57f70c8110](https://github.com/user-attachments/assets/3a70025a-d277-4081-8247-5aebcdeb92ff)
-![Uploading fa2d3630605e071351aab985f1d252cc.png…]()
+<img width="400" height="511" alt="image" src="https://github.com/user-attachments/assets/d2a5d2b8-6137-456c-acbe-4ce5d4c3376a" />
+<img width="400" height="494" alt="image" src="https://github.com/user-attachments/assets/25b453f7-3b1a-4766-8019-b8a685d8a4b6" />
 
 
 *   🦄 **OKX 全球邀请码**: `95572792`
