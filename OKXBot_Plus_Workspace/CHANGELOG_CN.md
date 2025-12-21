@@ -5,18 +5,25 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
-## [v3.1.2] - 2025-12-21 (Trade Logic Perfection)
-### 🐛 逻辑修复 (Logic Fixes)
+## [v3.1.2] - 2025-12-21 (Async Core)
+### 🧠 逻辑精修 (Logic Refinement)
+- **动态 AI 上下文 (Dynamic AI Context)**:
+  - 投喂给 AI 的 K 线数量现在由 `config.json` 中的 `history_limit` 动态控制（此前硬编码为 30）。
+  - 增加了安全底线 (`max(10, history_limit)`)，确保 AI 始终有足够的上下文。
 - **非对称交易逻辑 (Asymmetric Trading Logic)**: 
   - 修复了 SELL 信号只平多单但不反手开空的逻辑缺失。
   - 现在的逻辑完全对称：SELL 信号 = 平多 + 开空（如果配置允许）。
 - **微利拦截优化 (Micro-Profit Filter)**: 
   - 改进了微利拦截逻辑。当 AI 信心为 `HIGH`（紧急）时，将**强制绕过**微利检查，允许微利甚至亏损逃顶。
+
+### ✨ 体验优化 (UX Improvements)
 - **通知补全 (Notification Completeness)**: 
   - 补全了“平多”和“平空”操作的通知。现在每一个交易动作（开/平）都会触发飞书报警。
 - **通知样式升级 (Notification Style)**:
   - 将飞书/Lark 通知升级为 **富文本卡片 (Post)** 格式。
   - 现在的通知带有清晰的标题（🤖 CryptoOracle 交易播报）和更好的排版，视觉体验大幅提升。
+- **视觉优化 (Visuals)**:
+  - 更新了启动 Banner 为 "ANSI Shadow" 风格。
 
 ## [v3.1.1] - 2025-12-21 (Stability & Fixes)
 ### 🐛 关键修复 (Critical Fixes)

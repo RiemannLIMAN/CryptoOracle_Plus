@@ -29,7 +29,7 @@ async def send_notification_async(webhook_url, message):
         header_color = "blue" # 默认蓝色 (通知)
         if "买入" in message or "BUY" in message or "🚀" in message:
             header_color = "green" # 买入绿色
-        elif "卖出" in message or "SELL" in message or "平仓" in message or "📉" in message:
+        elif "卖出" in message or "SELL" in message or "平" in message or "📉" in message or "Close" in message:
             header_color = "red"   # 卖出红色
         elif "止盈" in message or "🎉" in message:
             header_color = "red"   # 止盈也是红色 (喜庆/卖出)

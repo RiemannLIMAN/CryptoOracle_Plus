@@ -193,15 +193,15 @@ class DeepSeekTrader:
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
 
-            # 维护 100 根 K 线的历史记录
+            # 维护历史 K 线记录
             self.price_history = df.tail(100).to_dict('records')
-
+            
+            # 使用配置中的 history_limit 进行预热检查（虽然主要逻辑已改为直接使用 API 的 limit）
             if not self.price_history and len(df) > self.history_limit:
                 self._log(f"🔥 正在预热历史数据...")
-                # 这一段逻辑似乎有些冗余，因为上面已经更新了 self.price_history
-                # 但为了兼容可能的旧逻辑，我们保留它，或者考虑移除
                 pass
-
+            
+            # 计算指标
             df = self.calculate_indicators(df)
             current_data = df.iloc[-1]
             previous_data = df.iloc[-2] if len(df) > 1 else current_data
@@ -217,8 +217,8 @@ class DeepSeekTrader:
                 'adx': float(current_data['adx']) if pd.notna(current_data.get('adx')) else None,
             }
             
-            # [Add] 显式传递最小交易单位给 AI，避免 AI 建议低于最小限制的数量
-            min_limit_info = "0.01" # 默认值，实际上可以从 exchange.market(symbol) 获取
+            # 显式传递最小交易单位给 AI
+            min_limit_info = "0.01"
             try:
                 market = self.exchange.market(self.symbol)
                 min_amount = market.get('limits', {}).get('amount', {}).get('min')
@@ -227,6 +227,10 @@ class DeepSeekTrader:
             except:
                 pass
 
+            # [Modified] 动态使用配置文件中的 history_limit 截取 K 线数据投喂给 AI
+            # 确保至少有 10 条数据，防止过少
+            feed_limit = max(10, self.history_limit)
+            
             return {
                 'price': current_data['close'],
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -235,9 +239,10 @@ class DeepSeekTrader:
                 'volume': current_data['volume'],
                 'timeframe': self.timeframe,
                 'price_change': ((current_data['close'] - previous_data['close']) / previous_data['close']) * 100,
-                'kline_data': df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].tail(15).to_dict('records'),
+                # 这里改为使用 dynamic feed_limit
+                'kline_data': df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].tail(feed_limit).to_dict('records'),
                 'indicators': indicators,
-                'min_limit_info': min_limit_info # 将最小限制信息放入 context
+                'min_limit_info': min_limit_info
             }
         except Exception as e:
             self._log(f"获取K线数据失败: {e}", 'error')

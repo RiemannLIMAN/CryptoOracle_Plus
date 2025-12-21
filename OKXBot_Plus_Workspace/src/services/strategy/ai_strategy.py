@@ -32,7 +32,9 @@ class DeepSeekAgent:
         ind = price_data.get('indicators', {})
         min_limit_info = price_data.get('min_limit_info', '0.01')
         
-        kline_text = f"【最近15根{timeframe}K线数据】\n"
+        # [Modified] 动态获取 K 线数量，不再硬编码 30
+        kline_count = len(price_data.get('kline_data', []))
+        kline_text = f"【最近{kline_count}根{timeframe}K线数据】\n"
         for i, kline in enumerate(price_data['kline_data']):
             change = ((kline['close'] - kline['open']) / kline['open']) * 100
             trend = "阳线" if kline['close'] > kline['open'] else "阴线"
