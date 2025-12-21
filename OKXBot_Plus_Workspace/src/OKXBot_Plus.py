@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.1.4 (Log Rotation)"
+SYSTEM_VERSION = "v3.1.5 (Multi-Instance)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -215,9 +215,13 @@ async def main():
             results = await asyncio.gather(*tasks)
             
             # [Added] 结构化表格输出
-            print("\n" + "─" * 130)
-            print(f"{'SYMBOL':<16} | {'PRICE':<12} | {'24H%':<9} | {'ACTION':<8} | {'CONF':<8} | {'ANALYSIS SUMMARY'}")
-            print("─" * 130)
+            table_lines = []
+            # Header line with timestamp placeholder in logs
+            header = f"📊 MARKET SCAN | {len(results)} Symbols"
+            table_lines.append(header) 
+            table_lines.append("─" * 120)
+            table_lines.append(f"{'SYMBOL':<16} | {'PRICE':<12} | {'24H%':<9} | {'ACTION':<8} | {'CONF':<8} | {'ANALYSIS SUMMARY'}")
+            table_lines.append("─" * 120)
             
             for res in results:
                 if res:
@@ -251,15 +255,17 @@ async def main():
                     price_str = f"${res['price']:,.2f}"
                     
                     # 格式化打印
-                    # 注意：为了对齐，我们尽量使用定长字符串，但中文字符宽度是问题
-                    # 这里使用简单的制表符模拟
-                    print(f"{symbol_str:<16} | {price_str:<12} | {change_icon} {change_str:<6} | {signal_display:<8} | {conf_display:<8} | {reason_short}")
+                    table_lines.append(f"{symbol_str:<16} | {price_str:<12} | {change_icon} {change_str:<6} | {signal_display:<8} | {conf_display:<8} | {reason_short}")
             
-            print("─" * 130 + "\n")
+            table_lines.append("─" * 120)
+            
+            # 使用 logger 输出表格
+            # 通过 strip() 去掉可能导致首行空行的换行符
+            logger.info("\n".join(table_lines))
             
             elapsed = time.time() - start_ts
             sleep_time = max(0.01, interval - elapsed) # 允许毫秒级休眠
-            print(f"💤 本轮耗时 {elapsed:.4f}s, 休眠 {sleep_time:.4f}s...")
+            logger.info(f"💤 本轮耗时 {elapsed:.4f}s, 休眠 {sleep_time:.4f}s...")
             await asyncio.sleep(sleep_time)
             
     except KeyboardInterrupt:

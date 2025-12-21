@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.5] - 2025-12-21 (Multi-Instance)
+### 🛠️ Infrastructure
+- **Multi-Instance Support**:
+  - Updated `start_bot.sh` to use directory-based PID locking (`log/bot.pid`) instead of global process scanning.
+  - Allows running multiple bot instances on the same server (in different directories) without conflict.
+- **Log Formatting**:
+  - Improved log table formatting to fix empty header lines and alignment issues in `tail -f` view.
+
 ## [v3.1.4] - 2025-12-21 (Log Rotation)
 ### 🛠️ Maintenance
 - **Log Management**:

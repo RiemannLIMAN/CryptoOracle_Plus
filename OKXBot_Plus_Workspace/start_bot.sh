@@ -135,20 +135,38 @@ STARTUP_LOG="$LOG_DIR/console_output.log"
 
 # echo "📝 控制台输出将重定向至: $STARTUP_LOG"
 
-# 5. 检查是否已有实例运行
-# [v3.0] 进程名变更为 OKXBot_Plus.py
-EXISTING_PID=$(ps -ef | grep "OKXBot_Plus.py" | grep -v grep | awk '{print $2}')
-if [ -n "$EXISTING_PID" ]; then
-    echo -e "${YELLOW}⚠️ 警告: 检测到机器人已在运行 (PID: $EXISTING_PID)${NC}"
-    read -p "是否停止旧进程并重新启动? (y/n): " choice
-    if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
-        kill $EXISTING_PID
-        sleep 2
-        echo "✅ 旧进程已停止"
+# 5. 检查是否已有实例运行 (基于 PID 文件)
+# [v3.1.5] 仅检查当前目录下的 bot.pid，允许同一服务器多实例运行
+PID_FILE="log/bot.pid"
+
+if [ -f "$PID_FILE" ]; then
+    OLD_PID=$(cat "$PID_FILE")
+    # 检查 PID 是否仍存在
+    if ps -p "$OLD_PID" > /dev/null 2>&1; then
+        echo -e "${YELLOW}⚠️ 警告: 检测到当前目录已有实例在运行 (PID: $OLD_PID)${NC}"
+        echo -e "${YELLOW}   (如果这是另一个目录的实例，请忽略此警告)${NC}"
+        
+        read -p "是否停止旧进程并重新启动? (y/n): " choice
+        if [[ "$choice" == "y" || "$choice" == "Y" ]]; then
+            kill "$OLD_PID"
+            sleep 2
+            echo "✅ 旧进程已停止"
+        else
+            echo "操作已取消"
+            exit 0
+        fi
     else
-        echo "操作已取消"
-        exit 0
+        # PID 文件存在但进程不存在，清理残留
+        echo "🧹 清理残留的 PID 文件..."
+        rm "$PID_FILE"
     fi
+fi
+
+# 检查全局是否有其他实例 (仅作为友好提示，不强制阻塞)
+OTHER_PIDS=$(ps -ef | grep "OKXBot_Plus.py" | grep -v grep | awk '{print $2}')
+if [ -n "$OTHER_PIDS" ]; then
+    echo -e "${YELLOW}ℹ️ 提示: 服务器上还有其他 OKXBot 实例在运行 (PIDs: $OTHER_PIDS)${NC}"
+    echo -e "${YELLOW}   请确保不同的实例使用不同的 API Key 或配置，以免冲突。${NC}"
 fi
 
 # 6. 后台启动
@@ -161,6 +179,7 @@ echo -e "${GREEN}⚡ 正在启动后台进程...${NC}"
 nohup "$PYTHON_CMD" -u src/OKXBot_Plus.py > "$STARTUP_LOG" 2>&1 &
 
 NEW_PID=$!
+echo "$NEW_PID" > "$PID_FILE"
 
 # 更新 latest log 链接 (不再需要)
 # cp "$STARTUP_LOG" "$LATEST_LOG" 2>/dev/null
