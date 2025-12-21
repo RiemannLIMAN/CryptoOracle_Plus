@@ -496,26 +496,55 @@ class DeepSeekTrader:
                 # 开多/买入
                 await self.exchange.create_market_order(self.symbol, 'buy', trade_amount, params={'tdMode': self.trade_mode})
                 self._log(f"🚀 买入成功: {trade_amount}")
-                await self.send_notification(f"🚀 买入 {self.symbol} {trade_amount}\n理由: {signal_data['reason']}")
+                
+                # 构造买入通知
+                msg = f"🚀 **买入执行 (BUY)**\n"
+                msg += f"• 交易对: {self.symbol}\n"
+                msg += f"• 数量: {trade_amount}\n"
+                msg += f"• 价格: ${current_realtime_price:,.2f}\n"
+                msg += f"• 理由: {signal_data['reason']}\n"
+                msg += f"• 信心: {signal_data.get('confidence', 'N/A')}"
+                await self.send_notification(msg)
 
             elif signal_data['signal'] == 'SELL':
                 if current_position and current_position['side'] == 'long':
                     # 平多
                     await self.exchange.create_market_order(self.symbol, 'sell', current_position['size'], params={'reduceOnly': True})
                     self._log("🔄 平多仓成功")
-                    await self.send_notification(f"🔄 平多仓成功 {self.symbol}\n数量: {current_position['size']}\n理由: {signal_data['reason']}")
+                    
+                    # 构造平仓通知
+                    msg = f"🔄 **平多仓 (Close Long)**\n"
+                    msg += f"• 交易对: {self.symbol}\n"
+                    msg += f"• 数量: {current_position['size']}\n"
+                    msg += f"• 盈亏: {pnl_pct*100:+.2f}% (估算)\n" # pnl_pct 在上面计算过
+                    msg += f"• 理由: {signal_data['reason']}"
+                    await self.send_notification(msg)
+                    
                     await asyncio.sleep(1)
                 
                 if self.trade_mode == 'cash':
                     # 现货卖出
                     await self.exchange.create_market_order(self.symbol, 'sell', trade_amount)
                     self._log(f"📉 卖出成功: {trade_amount}")
-                    await self.send_notification(f"📉 卖出 {self.symbol} {trade_amount}\n理由: {signal_data['reason']}")
+                    
+                    msg = f"📉 **现货卖出 (SELL)**\n"
+                    msg += f"• 交易对: {self.symbol}\n"
+                    msg += f"• 数量: {trade_amount}\n"
+                    msg += f"• 价格: ${current_realtime_price:,.2f}\n"
+                    msg += f"• 理由: {signal_data['reason']}"
+                    await self.send_notification(msg)
                 else:
                     # 开空
                     await self.exchange.create_market_order(self.symbol, 'sell', trade_amount, params={'tdMode': self.trade_mode})
                     self._log(f"📉 开空成功: {trade_amount}")
-                    await self.send_notification(f"📉 开空 {self.symbol} {trade_amount}\n理由: {signal_data['reason']}")
+                    
+                    msg = f"📉 **开空执行 (Short)**\n"
+                    msg += f"• 交易对: {self.symbol}\n"
+                    msg += f"• 数量: {trade_amount}\n"
+                    msg += f"• 价格: ${current_realtime_price:,.2f}\n"
+                    msg += f"• 理由: {signal_data['reason']}\n"
+                    msg += f"• 信心: {signal_data.get('confidence', 'N/A')}"
+                    await self.send_notification(msg)
 
         except Exception as e:
             msg = str(e)
