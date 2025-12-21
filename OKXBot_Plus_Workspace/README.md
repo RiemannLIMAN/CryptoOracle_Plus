@@ -130,8 +130,24 @@ OKXBot_Plus_Workspace/
 ### 1. 环境准备
 确保已安装 Python 3.10+。
 
+#### 创建虚拟环境 (推荐)
+为了避免依赖冲突，建议使用虚拟环境运行机器人。
+
+**Linux/Mac:**
 ```bash
-# 安装依赖
+python3 -m venv okx_ds
+source okx_ds/bin/activate
+```
+
+**Windows:**
+```powershell
+python -m venv okx_ds
+.\okx_ds\Scripts\activate
+```
+
+#### 安装依赖
+```bash
+# 在激活的虚拟环境中运行
 pip install -r requirements.txt
 ```
 
