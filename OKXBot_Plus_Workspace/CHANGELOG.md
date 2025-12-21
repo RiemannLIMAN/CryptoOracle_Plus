@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Refined the micro-profit filter logic. It now **bypasses** the filter if AI confidence is `HIGH`, allowing emergency exits even with small profits.
 - **Notification Completeness**: 
   - Added missing notifications for "Close Long" and "Close Short" actions. Now every trade action triggers a Lark/Webhook alert.
+- **Notification Style**:
+  - Upgraded Lark/Feishu notifications to use **Rich Text Cards (Post)**. Now alerts come with a clear title and better layout.
 
 ## [v3.1.1] - 2025-12-21 (Stability & Fixes)
 ### 🐛 Critical Fixes

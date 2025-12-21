@@ -18,10 +18,21 @@ async def send_notification_async(webhook_url, message):
 
     # 简单启发式识别
     if "feishu" in webhook_url or "lark" in webhook_url:
-        # 飞书/Lark 格式
+        # 飞书/Lark 格式 - 使用富文本 (post) 卡片以获得更好看的排版
         payload = {
-            "msg_type": "text",
-            "content": {"text": message}
+            "msg_type": "post",
+            "content": {
+                "post": {
+                    "zh_cn": {
+                        "title": "🤖 CryptoOracle 交易播报",
+                        "content": [
+                            [
+                                {"tag": "text", "text": message}
+                            ]
+                        ]
+                    }
+                }
+            }
         }
     elif "dingtalk" in webhook_url:
         # 钉钉 格式

@@ -30,6 +30,7 @@ class DeepSeekAgent:
 
     def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate):
         ind = price_data.get('indicators', {})
+        min_limit_info = price_data.get('min_limit_info', '0.01')
         
         kline_text = f"【最近15根{timeframe}K线数据】\n"
         for i, kline in enumerate(price_data['kline_data']):
@@ -62,6 +63,7 @@ ADX (14): {adx_str} (趋势强度)"""
         周期: {timeframe}
         当前价格: ${price_data['price']:,.2f}
         阶段涨跌: {price_data['price_change']:+.2f}%
+        最小交易单位: {min_limit_info}
         
         # 账户状态
         当前持仓: {position_text}
@@ -92,7 +94,7 @@ ADX (14): {adx_str} (趋势强度)"""
             "stop_loss": 止损价格(数字，必须设置),
             "take_profit": 止盈价格(数字，建议R/R > 1.1),
             "confidence": "HIGH" | "MEDIUM" | "LOW",
-            "amount": 建议交易数量(数字)
+            "amount": 建议交易数量(数字，必须大于 {min_limit_info}，如果信号强烈，建议 {max_buy*0.5:.4f} 左右)
         }}
         """
 

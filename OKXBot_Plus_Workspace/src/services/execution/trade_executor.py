@@ -216,6 +216,16 @@ class DeepSeekTrader:
                 'bb_middle': float(current_data['sma_20']) if pd.notna(current_data.get('sma_20')) else None,
                 'adx': float(current_data['adx']) if pd.notna(current_data.get('adx')) else None,
             }
+            
+            # [Add] 显式传递最小交易单位给 AI，避免 AI 建议低于最小限制的数量
+            min_limit_info = "0.01" # 默认值，实际上可以从 exchange.market(symbol) 获取
+            try:
+                market = self.exchange.market(self.symbol)
+                min_amount = market.get('limits', {}).get('amount', {}).get('min')
+                if min_amount:
+                    min_limit_info = str(min_amount)
+            except:
+                pass
 
             return {
                 'price': current_data['close'],
@@ -226,7 +236,8 @@ class DeepSeekTrader:
                 'timeframe': self.timeframe,
                 'price_change': ((current_data['close'] - previous_data['close']) / previous_data['close']) * 100,
                 'kline_data': df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].tail(15).to_dict('records'),
-                'indicators': indicators
+                'indicators': indicators,
+                'min_limit_info': min_limit_info # 将最小限制信息放入 context
             }
         except Exception as e:
             self._log(f"获取K线数据失败: {e}", 'error')
