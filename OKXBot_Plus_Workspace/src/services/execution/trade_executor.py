@@ -361,8 +361,10 @@ class DeepSeekTrader:
         except Exception:
             pass
 
-        # 3. 卖出微利风控
-        if signal_data['signal'] == 'SELL' and current_position:
+        # 3. 卖出微利风控 (仅针对平仓/减仓场景)
+        # 如果 AI 信心为 HIGH，则认为是紧急离场，跳过此检查
+        is_high_confidence = signal_data.get('confidence', '').upper() == 'HIGH'
+        if signal_data['signal'] == 'SELL' and current_position and not is_high_confidence:
             pnl_pct = 0
             entry = current_position['entry_price']
             if entry > 0:
@@ -371,9 +373,16 @@ class DeepSeekTrader:
                 else:
                     pnl_pct = (entry - current_realtime_price) / entry
             
+            # 最小利润阈值: 双倍手续费 + 0.05% 滑点保护
             min_profit_threshold = (self.taker_fee_rate * 2) + 0.0005
+            
+            # 只有当处于微利状态 (0 < 收益 < 阈值) 时才拦截
+            # 亏损状态(pnl < 0) 不拦截 (止损)
+            # 暴利状态(pnl > 阈值) 不拦截 (止盈)
             if 0 <= pnl_pct < min_profit_threshold:
-                self._log(f"🛑 拦截微利平仓: 浮盈 {pnl_pct*100:.3f}% < {min_profit_threshold*100:.3f}% (手续费覆盖线)", 'warning')
+                self._log(f"🛑 拦截微利平仓: 浮盈 {pnl_pct*100:.3f}% < {min_profit_threshold*100:.3f}% (AI信心非HIGH)", 'warning')
+                # 除非 AI 明确说是止损 (虽然 pnl>=0 但可能 AI 判定即将暴跌?) 
+                # 这里简单起见，既然是微利，就继续持有
                 return
 
         # 4. 资金三方取小 & 最小数量适配
@@ -404,6 +413,13 @@ class DeepSeekTrader:
             trade_amount = min(ai_suggest, config_amt, max_trade_limit)
         
         # 如果是平仓(SELL现有持仓)，则直接用持仓量，不受配额限制
+        # [Fix] 逻辑调整：
+        # 1. 如果是现货 SELL，那就是卖出所有持仓 (Close All Spot)
+        # 2. 如果是合约 SELL 且持有 Long，这里只标记 is_closing 用于跳过"最小开仓限制"检查
+        #    但具体的 trade_amount 我们依然保留用于潜在的"反手开空" (如果策略允许)
+        #    不过为了防止计算的 trade_amount (基于当前余额) 过小，
+        #    我们暂且保持 trade_amount 为 calculated_amount，只在 Close Long 时使用 pos['size']
+        
         is_closing = False
         if signal_data['signal'] == 'SELL':
             if self.trade_mode == 'cash':
@@ -411,9 +427,11 @@ class DeepSeekTrader:
                 is_closing = True
                 trade_amount = max_trade_limit # All out
             elif current_position and current_position['side'] == 'long':
-                # 合约平多
+                # 合约平多 (标记一下，用于后续可能的跳过检查，虽然下面代码其实没用到 is_closing 跳过)
                 is_closing = True
-                trade_amount = current_position['size']
+                # 注意：这里不再强制 trade_amount = pos['size']
+                # 因为我们要用 trade_amount 去开空 (如果有 else 逻辑)
+                # 平多的数量直接取 current_position['size'] 即可
         
         if not is_closing:
              # 开仓检查最小数量
@@ -461,6 +479,7 @@ class DeepSeekTrader:
                     # 平空
                     await self.exchange.create_market_order(self.symbol, 'buy', current_position['size'], params={'reduceOnly': True})
                     self._log("🔄 平空仓成功")
+                    await self.send_notification(f"🔄 平空仓成功 {self.symbol}\n数量: {current_position['size']}\n理由: {signal_data['reason']}")
                     await asyncio.sleep(1)
                 
                 # 开多/买入
@@ -473,8 +492,10 @@ class DeepSeekTrader:
                     # 平多
                     await self.exchange.create_market_order(self.symbol, 'sell', current_position['size'], params={'reduceOnly': True})
                     self._log("🔄 平多仓成功")
+                    await self.send_notification(f"🔄 平多仓成功 {self.symbol}\n数量: {current_position['size']}\n理由: {signal_data['reason']}")
                     await asyncio.sleep(1)
-                elif self.trade_mode == 'cash':
+                
+                if self.trade_mode == 'cash':
                     # 现货卖出
                     await self.exchange.create_market_order(self.symbol, 'sell', trade_amount)
                     self._log(f"📉 卖出成功: {trade_amount}")

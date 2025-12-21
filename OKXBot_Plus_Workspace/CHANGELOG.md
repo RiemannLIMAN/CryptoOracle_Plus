@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.2] - 2025-12-21 (Trade Logic Perfection)
+### 🐛 Logic Fixes
+- **Asymmetric Trading Logic**: 
+  - Fixed a logic gap where SELL signals would only close long positions but fail to open short positions (reverse trade).
+  - Now fully symmetric: SELL signal = Close Long + Open Short (if configured).
+- **Micro-Profit Filter**: 
+  - Refined the micro-profit filter logic. It now **bypasses** the filter if AI confidence is `HIGH`, allowing emergency exits even with small profits.
+- **Notification Completeness**: 
+  - Added missing notifications for "Close Long" and "Close Short" actions. Now every trade action triggers a Lark/Webhook alert.
+
 ## [v3.1.1] - 2025-12-21 (Stability & Fixes)
 ### 🐛 Critical Fixes
 - **Network Stability**: 
