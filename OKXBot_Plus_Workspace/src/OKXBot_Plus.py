@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.1.2 (Async Core)"
+SYSTEM_VERSION = "v3.1.4 (Log Rotation)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -199,18 +199,63 @@ async def main():
         while True:
             start_ts = time.time()
             
-            # 还原经典分割线样式
+            # 还原经典分割线样式 (Modified to single line for cleaner look)
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            logger.info("▼" * 70)
+            # logger.info("▼" * 70) 
+            logger.info(f"─" * 60) # 使用单横线代替倒三角，更简洁
             logger.info(f"⏰ 批次执行开始: {current_time}")
-            logger.info("▲" * 70)
+            # logger.info("▲" * 70)
+            logger.info(f"─" * 60)
             
             # 1. Risk Check
             await risk_manager.check()
             
             # 2. Parallel Execution
             tasks = [trader.run() for trader in traders]
-            await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks)
+            
+            # [Added] 结构化表格输出
+            print("\n" + "─" * 130)
+            print(f"{'SYMBOL':<16} | {'PRICE':<12} | {'24H%':<9} | {'ACTION':<8} | {'CONF':<8} | {'ANALYSIS SUMMARY'}")
+            print("─" * 130)
+            
+            for res in results:
+                if res:
+                    # 颜色与图标装饰
+                    symbol_str = res['symbol'].split(':')[0] # 简化显示，去掉 :USDT
+                    
+                    # 价格变动颜色
+                    change_val = res['change']
+                    change_icon = "🟢" if change_val > 0 else "🔴"
+                    change_str = f"{change_val:+.2f}%"
+                    
+                    # 信号颜色与图标
+                    signal = res['signal']
+                    sig_icon = "✋"
+                    if signal == 'BUY': sig_icon = "🚀"
+                    elif signal == 'SELL': sig_icon = "📉"
+                    
+                    signal_display = f"{sig_icon} {signal}"
+                    
+                    # 信心显示
+                    conf = res['confidence']
+                    conf_display = conf
+                    if conf == 'HIGH': conf_display = "🔥🔥 HIGH"
+                    elif conf == 'MEDIUM': conf_display = "⚡ MED"
+                    elif conf == 'LOW': conf_display = "💤 LOW"
+
+                    # 理由截断与清洗
+                    reason = res['reason'].replace('\n', ' ')
+                    reason_short = (reason[:55] + '...') if len(reason) > 55 else reason
+                    
+                    price_str = f"${res['price']:,.2f}"
+                    
+                    # 格式化打印
+                    # 注意：为了对齐，我们尽量使用定长字符串，但中文字符宽度是问题
+                    # 这里使用简单的制表符模拟
+                    print(f"{symbol_str:<16} | {price_str:<12} | {change_icon} {change_str:<6} | {signal_display:<8} | {conf_display:<8} | {reason_short}")
+            
+            print("─" * 130 + "\n")
             
             elapsed = time.time() - start_ts
             sleep_time = max(0.01, interval - elapsed) # 允许毫秒级休眠

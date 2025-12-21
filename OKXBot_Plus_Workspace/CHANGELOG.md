@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.4] - 2025-12-21 (Log Rotation)
+### 🛠️ Maintenance
+- **Log Management**:
+  - Reverted log filename to fixed `trading_bot.log` to support standard `RotatingFileHandler`.
+  - Updated startup banner instructions to reflect the fixed filename.
+
+## [v3.1.3] - 2025-12-21 (Adaptive Risk)
+### 🧠 Logic Refinement
+- **Smart Confidence Waiver**:
+  - **Stop-Loss Priority**: If a SELL signal is generated while holding a position (Stop Loss / Take Profit), the system now **overrides** the `min_confidence` filter. Even if AI confidence is `LOW`, the trade will execute to prevent deep drawdowns.
+  - **Trend Following**: If a SELL signal is generated with keywords like "downtrend", "bearish", or "falling" in the reason, the system allows `LOW` confidence entry to avoid missing strong trend reversals.
+- **Accurate Short Selling Capital**:
+  - Fixed a potential issue where "Reverse Opening" (Close Long -> Open Short) might fail due to insufficient available balance calculation before the long position was closed. (Note: Logic enhanced, pending full implementation of `expected_balance` calculation).
+
+### ✨ UX Improvements
+- **Dashboard Table View**:
+  - Replaced the cluttered scrolling logs with a clean, **structured table dashboard** for monitoring multiple symbols (50+).
+  - Features real-time price updates, 24h change icons (🟢/🔴), and concise AI reasoning summaries in a single glance.
+- **Visuals**:
+  - Updated system banner to reflect v3.1.3.
+
 ## [v3.1.2] - 2025-12-21 (Async Core)
 ### 🧠 Logic Refinement
 - **Dynamic AI Context**: 

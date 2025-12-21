@@ -5,6 +5,27 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.1.4] - 2025-12-21 (Log Rotation)
+### 🛠️ 维护 (Maintenance)
+- **日志管理 (Log Management)**:
+  - 将日志文件名还原为固定的 `trading_bot.log`，以支持 `RotatingFileHandler` 的自动轮转功能。
+  - 更新了启动 Banner 中的日志查看提示信息。
+
+## [v3.1.3] - 2025-12-21 (Adaptive Risk)
+### 🧠 逻辑精修 (Logic Refinement)
+- **智能信心豁免 (Smart Confidence Waiver)**:
+  - **止损优先**: 如果在持有仓位（止损/止盈）时触发 SELL 信号，系统现在会**强制覆盖** `min_confidence` 过滤器。即使 AI 信心为 `LOW`，也会果断执行，防止深套。
+  - **趋势跟随**: 如果 SELL 信号的理由中包含 "下跌"、"趋势"、"空头" 等关键词，系统允许以 `LOW` 信心开空，避免错过明确的趋势反转。
+- **做空资金修正**:
+  - 修复了“反手开空”（平多 -> 开空）时可能因平仓资金未及时计入可用余额而导致开空失败的问题。（注：逻辑已增强，完整余额预估待实装）。
+
+### ✨ 体验优化 (UX Improvements)
+- **仪表盘表格视图 (Dashboard Table View)**:
+  - 将原本杂乱的滚动日志重构为清爽的 **结构化表格仪表盘**，完美适配多币种（50+）监控场景。
+  - 支持实时价格刷新、24小时涨跌幅图标 (🟢/🔴) 以及精简的 AI 决策理由摘要，一眼掌握全局动态。
+- **视觉优化**:
+  - 更新了系统 Banner 以显示 v3.1.3 版本号。
+
 ## [v3.1.2] - 2025-12-21 (Async Core)
 ### 🧠 逻辑精修 (Logic Refinement)
 - **动态 AI 上下文 (Dynamic AI Context)**:

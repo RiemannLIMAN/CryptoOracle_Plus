@@ -20,7 +20,7 @@ class DeepSeekAgent:
 
     def _get_role_prompt(self, volatility_status):
         if volatility_status == "HIGH_TREND":
-            return "你是一位激进的趋势跟踪交易员。当前市场处于【单边剧烈波动】，ADX显示趋势极强。请紧咬趋势，果断追涨杀跌，不要轻易猜顶猜底。"
+            return "你是一位激进的趋势跟踪交易员。当前市场处于【单边剧烈波动】，ADX显示趋势极强。请紧咬趋势，果断追涨杀跌，不要轻易猜顶猜底。对于做空机会，即使信心只有MEDIUM也请果断出手。"
         elif volatility_status == "HIGH_CHOPPY":
             return "你是一位冷静的避险交易员。当前市场处于【剧烈震荡】，波动大但无明显方向。请极度谨慎，优先选择观望，或在布林带极端位置做超短线反转。"
         elif volatility_status == "LOW":
@@ -120,7 +120,7 @@ ADX (14): {adx_str} (趋势强度)"""
                 symbol, timeframe, price_data, balance, position_text, role_prompt, default_amount, taker_fee_rate
             )
 
-            self.logger.info(f"[{symbol}] ⏳ 请求 DeepSeek (Async)...")
+            # self.logger.info(f"[{symbol}] ⏳ 请求 DeepSeek (Async)...")
             
             req_start = time.time()
             
@@ -135,7 +135,7 @@ ADX (14): {adx_str} (趋势强度)"""
             )
             
             req_time = time.time() - req_start
-            self.logger.info(f"[{symbol}] ✅ DeepSeek 响应完成 (耗时: {req_time:.2f}s)")
+            # self.logger.info(f"[{symbol}] ✅ DeepSeek 响应完成 (耗时: {req_time:.2f}s)")
 
             result = response.choices[0].message.content
             result = result.replace('```json', '').replace('```', '').strip()

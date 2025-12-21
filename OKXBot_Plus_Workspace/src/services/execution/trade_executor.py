@@ -350,6 +350,32 @@ class DeepSeekTrader:
         current_conf_val = confidence_levels.get(signal_data.get('confidence', 'LOW').upper(), 1)
         min_conf_val = confidence_levels.get(self.min_confidence.upper(), 2)
         
+        # [Fix] 如果是 SELL 信号（开空或平仓），且处于单边下跌趋势 (HIGH_TREND)，则放宽信心要求
+        # 允许 LOW 信心执行，防止踏空暴跌
+        is_strong_downtrend = False
+        try:
+            volatility_status = signal_data.get('volatility_status', 'NORMAL')
+            # 如果 AI 没返回 volatility_status，我们可以尝试从 price_data 里拿（如果传进来的话）
+            # 或者更直接地：如果 AI 建议 SELL 并且理由包含 "下跌趋势"、"空头" 等关键词
+            reason_lower = signal_data.get('reason', '').lower()
+            if "下跌" in reason_lower or "趋势" in reason_lower or "空头" in reason_lower or "downtrend" in reason_lower:
+                 is_strong_downtrend = True
+        except:
+            pass
+
+        # 逻辑优化：
+        # 1. 场景A: 持仓状态下的 SELL (止损/平仓) -> 始终允许 LOW 信心
+        # 2. 场景B: 强趋势下的 SELL (开空) -> 允许 LOW 信心 (防止踏空)
+        if signal_data['signal'] == 'SELL':
+             if current_position:
+                 if current_conf_val < min_conf_val:
+                     self._log(f"⚠️ 信心豁免(止损): 持仓状态下的 SELL，忽略信心阈值")
+                     current_conf_val = max(current_conf_val, 2) # 强制提权到 MEDIUM
+             elif is_strong_downtrend:
+                 if current_conf_val < min_conf_val:
+                     self._log(f"⚠️ 信心豁免(趋势): 检测到下跌趋势描述，允许低信心开空")
+                     current_conf_val = max(current_conf_val, 2) # 强制提权到 MEDIUM
+        
         if current_conf_val < min_conf_val:
             self._log(f"✋ 信心不足: {signal_data.get('confidence')} < {self.min_confidence}, 强制观望")
             signal_data['signal'] = 'HOLD'
@@ -585,15 +611,15 @@ class DeepSeekTrader:
             self._log(f"平仓失败: {e}", 'error')
 
     async def run(self):
-        """Async 单次运行"""
-        self._log(f"🚀 开始分析...")
+        """Async 单次运行 - 返回结果给调用者进行统一打印"""
+        # self._log(f"🚀 开始分析...")
         
         if not hasattr(self, 'last_fee_update_time'):
             await self._update_fee_rate()
             self.last_fee_update_time = time.time()
         
         price_data = await self.get_ohlcv()
-        if not price_data: return
+        if not price_data: return None
 
         await self._update_amount_auto(price_data['price'])
         
@@ -603,16 +629,9 @@ class DeepSeekTrader:
         volatility_status = self.get_market_volatility(price_data['kline_data'], adx_val)
         price_data['volatility_status'] = volatility_status
         
-        arrow = "🟢" if price_data['price_change'] > 0 else "🔴"
-        # Old Standard: [BEAT/USDT:USDT] 📊 当前价格: $2.96 🌑 (-0.42%)
-        # Note: User screenshot used 🌑 for negative. Let's assume 🌕 for positive or keep using arrow for now but format closer.
-        # Actually user screenshot shows: 📊 当前价格: $2.96 🌑 (-0.42%)
-        # The icon 🌑 seems to represent 'moon' (down/night) or just a bullet point. 
-        # But wait, 🟢/🔴 are clearer. I will stick to the format but keep clear icons unless specifically asked to use 🌑.
-        # Format: "📊 当前价格: ${price} {icon} ({change}%)"
-        
-        icon = "🟢" if price_data['price_change'] > 0 else "🔴"
-        self._log(f"📊 当前价格: ${price_data['price']:,.2f} {icon} ({price_data['price_change']:+.2f}%)")
+        # [Log Cleanup] 这里的日志移交给上层统一打印
+        # icon = "🟢" if price_data['price_change'] > 0 else "🔴"
+        # self._log(f"📊 当前价格: ${price_data['price']:,.2f} {icon} ({price_data['price_change']:+.2f}%)")
 
         # Call Agent
         current_pos = await self.get_current_position()
@@ -629,16 +648,27 @@ class DeepSeekTrader:
         )
         
         if signal_data:
-            # 打印 AI 思考结果，让用户能看到
+            # [Log Cleanup] 这里的日志移交给上层统一打印
             reason = signal_data.get('reason', '无理由')
             signal = signal_data.get('signal', 'UNKNOWN')
             confidence = signal_data.get('confidence', 'LOW')
             
-            icon = "🤔"
-            if signal == 'BUY': icon = "🟢"
-            elif signal == 'SELL': icon = "🔴"
-            elif signal == 'HOLD': icon = "✋"
+            # icon = "🤔"
+            # if signal == 'BUY': icon = "🟢"
+            # elif signal == 'SELL': icon = "🔴"
+            # elif signal == 'HOLD': icon = "✋"
             
-            self._log(f"{icon} AI决策: {signal} ({confidence}) | 理由: {reason}")
+            # self._log(f"{icon} AI决策: {signal} ({confidence}) | 理由: {reason}")
             
             await self.execute_trade(signal_data)
+
+            # 返回结构化结果给上层打印表格
+            return {
+                'symbol': self.symbol,
+                'price': price_data['price'],
+                'change': price_data['price_change'],
+                'signal': signal,
+                'confidence': confidence,
+                'reason': reason
+            }
+        return None
