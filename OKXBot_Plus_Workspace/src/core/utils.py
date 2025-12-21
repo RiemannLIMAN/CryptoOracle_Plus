@@ -18,20 +18,60 @@ async def send_notification_async(webhook_url, message):
 
     # 简单启发式识别
     if "feishu" in webhook_url or "lark" in webhook_url:
-        # 飞书/Lark 格式 - 使用富文本 (post) 卡片以获得更好看的排版
+        # 飞书/Lark 格式 - 使用互动卡片 (interactive)
+        # 支持 Markdown 渲染，颜色高亮，更加美观
+        
+        # 预处理消息，简单的 markdown 转换
+        # 将 "🚀" 等 emoji 开头的行加粗，模拟标题效果
+        # 这里的 message 是一整段文本，我们需要稍微拆分一下或者直接用 markdown 组件
+        
+        # 确定卡片头部的颜色 (基于消息内容)
+        header_color = "blue" # 默认蓝色 (通知)
+        if "买入" in message or "BUY" in message or "🚀" in message:
+            header_color = "green" # 买入绿色
+        elif "卖出" in message or "SELL" in message or "平仓" in message or "📉" in message:
+            header_color = "red"   # 卖出红色
+        elif "止盈" in message or "🎉" in message:
+            header_color = "red"   # 止盈也是红色 (喜庆/卖出)
+        elif "止损" in message or "😭" in message or "🚑" in message:
+            header_color = "grey"  # 止损灰色/黄色 (警示)
+        elif "警告" in message or "⚠️" in message:
+            header_color = "orange" # 警告橙色
+            
         payload = {
-            "msg_type": "post",
-            "content": {
-                "post": {
-                    "zh_cn": {
-                        "title": "🤖 CryptoOracle 交易播报",
-                        "content": [
-                            [
-                                {"tag": "text", "text": message}
-                            ]
+            "msg_type": "interactive",
+            "card": {
+                "config": {
+                    "wide_screen_mode": True
+                },
+                "header": {
+                    "title": {
+                        "tag": "plain_text",
+                        "content": "🤖 CryptoOracle 交易播报"
+                    },
+                    "template": header_color
+                },
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": message
+                        }
+                    },
+                    {
+                        "tag": "hr"
+                    },
+                    {
+                        "tag": "note",
+                        "elements": [
+                            {
+                                "tag": "plain_text",
+                                "content": f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                            }
                         ]
                     }
-                }
+                ]
             }
         }
     elif "dingtalk" in webhook_url:
