@@ -5,6 +5,13 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.1.10] - 2025-12-22 (Startup Anomaly Check)
+### 💰 资金管理
+- **启动 PnL 异常检测 (Startup Anomaly Check)**:
+  - 增加了一个兜底机制：在机器人启动后第一次计算 PnL 时，如果发现 PnL 异常偏高（>10U 且 >10% 本金），系统会将其判定为“未初始化的闲置资金”（例如机器人离线期间的充值）。
+  - 系统会自动将这部分差额加入 `deposit_offset`，强制将初始 PnL 修正为接近 0。
+  - **解决痛点**: 彻底修复了在“锁定本金模式”下，如果账户内有大量闲置资金，机器人一启动就会误判为“瞬间暴利”并立即触发止盈停机的问题。
+
 ## [v3.1.9] - 2025-12-22 (Deposit Offset)
 ### 💰 资金管理精修
 - **充值抵扣机制 (Deposit Offset)**:

@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.1.9 (Deposit Offset)"
+SYSTEM_VERSION = "v3.1.10 (Startup Anomaly Check)"
 
 BANNER = r"""
    _____                  __           ____                  __   

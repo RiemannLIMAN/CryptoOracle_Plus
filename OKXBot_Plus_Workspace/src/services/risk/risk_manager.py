@@ -49,6 +49,7 @@ class RiskManager:
             os.makedirs(self.chart_dir)
         self.chart_path = os.path.join(self.chart_dir, f"pnl_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
         self.last_chart_display_time = 0
+        self.is_initialized = False # [Fix] 强制初始化标记，确保每次重启都重新校准 offset
 
     def load_state(self):
         if os.path.exists(self.state_file):
@@ -194,7 +195,8 @@ class RiskManager:
             if total_equity <= 0:
                 return
 
-            if self.smart_baseline is None:
+            # [Fix] 每次重启强制进入初始化流程，重新计算 offset，而不是仅依赖 baseline 是否为空
+            if not self.is_initialized:
                 await self.initialize_baseline(total_equity)
             
             current_total_value = total_equity
@@ -237,8 +239,20 @@ class RiskManager:
             adjusted_equity = current_total_value - self.deposit_offset
             raw_pnl = adjusted_equity - self.smart_baseline
             
-            # 初始化 last_pnl (如果不存在)
+            # [Fix] 首次运行 PnL 异常检测 (Startup Anomaly Check)
+            # 如果这是本次启动后第一次计算 PnL，且 PnL 巨大 (说明 initialize_baseline 可能漏掉了 offset)
+            # 我们直接将其视为 Offset，而不是盈利
             if not hasattr(self, 'last_known_pnl'):
+                # 首次计算
+                if raw_pnl > max(10.0, self.smart_baseline * 0.1):
+                    self._log(f"⚠️ 检测到首次 PnL 异常偏高 (+{raw_pnl:.2f} U)，判定为未初始化的闲置资金/充值")
+                    self.deposit_offset += raw_pnl
+                    self._log(f"🔄 自动修正抵扣额: {self.deposit_offset:.2f} U")
+                    self.save_state()
+                    # 重新计算
+                    adjusted_equity = current_total_value - self.deposit_offset
+                    raw_pnl = adjusted_equity - self.smart_baseline
+                
                 self.last_known_pnl = raw_pnl
             
             pnl_delta = raw_pnl - self.last_known_pnl
@@ -435,3 +449,4 @@ class RiskManager:
                 self.smart_baseline = real_total_equity
         
         self.save_state()
+        self.is_initialized = True # [Fix] 标记初始化完成
