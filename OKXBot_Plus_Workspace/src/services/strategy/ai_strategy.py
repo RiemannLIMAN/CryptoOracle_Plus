@@ -94,6 +94,7 @@ ADX (14): {adx_str} (趋势强度)"""
         {{
             "signal": "BUY" | "SELL" | "HOLD",
             "reason": "核心逻辑(50字内，使用专业术语，言简意赅但逻辑完整)",
+            "summary": "看板摘要(20字内，完整表达核心观点，无需刻意缩写)",
             "stop_loss": 止损价格(数字，必须设置),
             "take_profit": 止盈价格(数字，建议R/R > 1.1),
             "confidence": "HIGH" | "MEDIUM" | "LOW",

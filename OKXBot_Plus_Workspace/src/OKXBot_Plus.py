@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.1.11 (Execution Transparency)"
+SYSTEM_VERSION = "v3.1.13 (Execution Status UI Fix)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -265,14 +265,16 @@ async def main():
                     
                     exec_display = f"{status_icon} {display_status}"
 
-                    # 理由截断与清洗
-                    reason = res['reason'].replace('\n', ' ')
-                    reason_short = (reason[:40] + '...') if len(reason) > 40 else reason
+                    # 优先使用 summary (短摘要)，如果没有则使用 reason (截断)
+                    summary_text = res.get('summary', '')
+                    if not summary_text or len(summary_text) == 0:
+                        reason = res['reason'].replace('\n', ' ')
+                        summary_text = (reason[:40] + '...') if len(reason) > 40 else reason
                     
                     price_str = f"${res['price']:,.2f}"
                     
                     # 格式化打印
-                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {reason_short}")
+                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
             
             table_lines.append("─" * 130)
             

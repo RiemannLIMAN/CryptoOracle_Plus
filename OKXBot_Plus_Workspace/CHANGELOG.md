@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.13] - 2025-12-22 (Execution Status UI Fix)
+### 🐛 Bug Fixes
+- **Dashboard UI**: Fixed an issue where the `EXECUTION` column in the console dashboard always showed `N/A`. The trade execution result is now correctly propagated to the UI table.
+
+## [v3.1.12] - 2025-12-22 (Market Order Fix & Safety Pre-check)
+### 🐛 Bug Fixes
+- **Market Order Limits**: Fixed `Code 51202` error where market orders for low-value coins (e.g., PEPE) exceeded exchange quantity limits. The bot now auto-truncates orders to `limits.market.max`.
+
+### 🛡️ Safety & Debug
+- **Order Pre-check**: Added a "🔍 Order Pre-check" log that details estimated value, contract size, and quantity before execution.
+- **Safety Intercept**: Implemented a failsafe that blocks orders if the estimated value is abnormally high (>5x config), preventing unit conversion errors.
+
+### ✨ UX Improvements
+- **Expanded Summary**: Relaxed the "Analysis Summary" limit from 8 to 20 chars, allowing AI to express more complete logic (e.g., "RSI oversold bounce with MACD crossover").
+
 ## [v3.1.11] - 2025-12-22 (Execution Transparency)
 ### ✨ UX Improvements
 - **Execution Status Table**:

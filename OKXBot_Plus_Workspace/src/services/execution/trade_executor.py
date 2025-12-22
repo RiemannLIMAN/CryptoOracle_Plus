@@ -538,8 +538,49 @@ class DeepSeekTrader:
                            self._log(f"🚫 余额不足最小金额 {min_cost}U", 'warning')
                            await self._send_diagnostic_report(trade_amount, min_cost, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, f"余额不足最小金额 (需 {min_cost}U)")
                            return "SKIPPED_MIN", f"金额 < {min_cost}U"
+
+                 # [Fix] 超出最大下单数量限制 (Code 51202)
+                 # 优先检查 limits.market.max (OKX 市价单专属限制)，其次检查 limits.amount.max
+                 max_market_amount = market.get('limits', {}).get('market', {}).get('max')
+                 max_amount = market.get('limits', {}).get('amount', {}).get('max')
+                 effective_max = max_market_amount if max_market_amount else max_amount
+                 
+                 if effective_max and trade_amount > effective_max:
+                      self._log(f"⚠️ 数量 {trade_amount} > 市场最大限制 {effective_max}，自动截断")
+                      trade_amount = effective_max
+
              except Exception:
                  pass
+
+        # [Debug] 详细记录下单参数，排查 "Exceeds maximum" 问题
+        contract_size = 1.0
+        try:
+            market = self.exchange.market(self.symbol)
+            contract_size = float(market.get('contractSize', 1.0))
+            if contract_size <= 0: contract_size = 1.0
+            
+            # 估算下单价值
+            est_value = trade_amount * current_realtime_price
+            
+            log_msg = f"🔍 下单预检: {self.symbol} | 模式: {self.trade_mode} | "
+            log_msg += f"数量(Coins): {trade_amount} | 价格: {current_realtime_price} | "
+            log_msg += f"估算价值: {est_value:.2f} U | ContractSize: {contract_size}"
+            
+            if self.trade_mode != 'cash':
+                num_contracts = trade_amount / contract_size
+                log_msg += f" | 换算张数: {num_contracts:.4f}"
+                
+                # [Safety Check] 如果估算价值远超配额 (例如 > 2倍)，说明可能单位搞错了 (Coins vs Contracts)
+                # 只有当张数 > 10 且 价值异常大时才拦截，防止误判
+                if est_value > (config_amt * 5) and est_value > 100:
+                    self._log(log_msg, 'warning')
+                    self._log(f"🛑 异常拦截: 估算价值 {est_value:.2f}U 远超配置 {config_amt}U，可能是合约单位换算错误", 'error')
+                    return "SKIPPED_SAFETY", f"单位异常 Val:{est_value:.0f}U"
+            
+            self._log(log_msg)
+            
+        except Exception as e:
+            self._log(f"预检异常: {e}")
 
 
         # 精度处理
@@ -702,7 +743,18 @@ class DeepSeekTrader:
             
             # self._log(f"{icon} AI决策: {signal} ({confidence}) | 理由: {reason}")
             
-            await self.execute_trade(signal_data)
+            exec_status, exec_msg = "UNKNOWN", ""
+            try:
+                result = await self.execute_trade(signal_data)
+                if isinstance(result, tuple) and len(result) == 2:
+                    exec_status, exec_msg = result
+                elif result is None:
+                    # execute_trade might return None if it just returned without value in some paths (legacy)
+                    # But we covered all paths now
+                    pass
+            except Exception as e:
+                exec_status = "ERROR"
+                exec_msg = str(e)
 
             # 返回结构化结果给上层打印表格
             return {
@@ -711,6 +763,9 @@ class DeepSeekTrader:
                 'change': price_data['price_change'],
                 'signal': signal,
                 'confidence': confidence,
-                'reason': reason
+                'reason': reason,
+                'summary': signal_data.get('summary', ''),
+                'status': exec_status,
+                'status_msg': exec_msg
             }
         return None
