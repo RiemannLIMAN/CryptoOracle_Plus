@@ -5,6 +5,13 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.1.6] - 2025-12-22 (High-Frequency Logic)
+### 🧠 逻辑精修 (Logic Refinement)
+- **激进交易模式 (Aggressive Trading)**:
+  - **提示词优化**: 更新了 DeepSeek 的系统 Prompt，明确加入“鼓励频繁交易”的指令。在盈亏比合理的前提下，AI 将更倾向于捕捉短线波段，减少无效观望 (HOLD)。
+- **Bug 修复**:
+  - **关键修复**: 修复了 `execute_trade` 中的 `UnboundLocalError` 变量未定义错误。该错误曾导致在执行止损或反手开空（信心豁免逻辑）时程序崩溃。
+
 ## [v3.1.5] - 2025-12-21 (Multi-Instance)
 ### 🛠️ 基础设施 (Infrastructure)
 - **多实例支持 (Multi-Instance Support)**:

@@ -279,6 +279,7 @@ class DeepSeekTrader:
                     ranges.append((high - low) / low * 100)
             avg_volatility = sum(ranges) / len(ranges)
             is_trending = False
+            # [Reverted] 恢复默认趋势判断阈值，保持稳健
             if adx_value is not None and adx_value > 25:
                 is_trending = True
             if avg_volatility > 0.5:
@@ -345,6 +346,9 @@ class DeepSeekTrader:
     async def execute_trade(self, signal_data):
         """执行交易 (Async - Enhanced Logic)"""
         
+        # [Moved Up] 提前获取持仓信息，供信心过滤逻辑使用
+        current_position = await self.get_current_position()
+
         # 1. 信心过滤
         confidence_levels = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
         current_conf_val = confidence_levels.get(signal_data.get('confidence', 'LOW').upper(), 1)
@@ -367,7 +371,7 @@ class DeepSeekTrader:
         # 1. 场景A: 持仓状态下的 SELL (止损/平仓) -> 始终允许 LOW 信心
         # 2. 场景B: 强趋势下的 SELL (开空) -> 允许 LOW 信心 (防止踏空)
         if signal_data['signal'] == 'SELL':
-             if current_position:
+             if current_position and current_position['side'] == 'long':
                  if current_conf_val < min_conf_val:
                      self._log(f"⚠️ 信心豁免(止损): 持仓状态下的 SELL，忽略信心阈值")
                      current_conf_val = max(current_conf_val, 2) # 强制提权到 MEDIUM
@@ -387,7 +391,7 @@ class DeepSeekTrader:
             self._log(f"🧪 测试模式: {signal_data['signal']} {signal_data['amount']} (不执行)")
             return
 
-        current_position = await self.get_current_position()
+        # current_position = await self.get_current_position() # [Removed] Moved up
         
         # 2. 价格滑点检查
         ticker = await self.exchange.fetch_ticker(self.symbol)
