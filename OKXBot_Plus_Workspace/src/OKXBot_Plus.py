@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.1.10 (Startup Anomaly Check)"
+SYSTEM_VERSION = "v3.1.11 (Execution Transparency)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -219,9 +219,9 @@ async def main():
             # Header line with timestamp placeholder in logs
             header = f"📊 MARKET SCAN | {len(results)} Symbols"
             table_lines.append(header) 
-            table_lines.append("─" * 120)
-            table_lines.append(f"{'SYMBOL':<16} | {'PRICE':<12} | {'24H%':<9} | {'ACTION':<8} | {'CONF':<8} | {'ANALYSIS SUMMARY'}")
-            table_lines.append("─" * 120)
+            table_lines.append("─" * 130)
+            table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
+            table_lines.append("─" * 130)
             
             for res in results:
                 if res:
@@ -248,16 +248,33 @@ async def main():
                     elif conf == 'MEDIUM': conf_display = "⚡ MED"
                     elif conf == 'LOW': conf_display = "💤 LOW"
 
+                    # 执行状态显示 [New]
+                    exec_status = res.get('status', 'N/A')
+                    exec_msg = res.get('status_msg', '')
+                    
+                    status_icon = "❓"
+                    if exec_status == 'EXECUTED': status_icon = "✅"
+                    elif exec_status == 'HOLD': status_icon = "⏸️"
+                    elif 'SKIPPED' in exec_status: status_icon = "🚫"
+                    elif exec_status == 'FAILED': status_icon = "❌"
+                    elif exec_status == 'TEST_MODE': status_icon = "🧪"
+                    
+                    # 简化状态显示，去掉冗余前缀
+                    display_status = exec_status.replace('SKIPPED_', '')
+                    if display_status == 'EXECUTED': display_status = 'DONE'
+                    
+                    exec_display = f"{status_icon} {display_status}"
+
                     # 理由截断与清洗
                     reason = res['reason'].replace('\n', ' ')
-                    reason_short = (reason[:55] + '...') if len(reason) > 55 else reason
+                    reason_short = (reason[:40] + '...') if len(reason) > 40 else reason
                     
                     price_str = f"${res['price']:,.2f}"
                     
                     # 格式化打印
-                    table_lines.append(f"{symbol_str:<16} | {price_str:<12} | {change_icon} {change_str:<6} | {signal_display:<8} | {conf_display:<8} | {reason_short}")
+                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {reason_short}")
             
-            table_lines.append("─" * 120)
+            table_lines.append("─" * 130)
             
             # 使用 logger 输出表格
             # 通过 strip() 去掉可能导致首行空行的换行符

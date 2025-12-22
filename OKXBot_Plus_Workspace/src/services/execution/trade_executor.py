@@ -383,16 +383,15 @@ class DeepSeekTrader:
         if current_conf_val < min_conf_val:
             self._log(f"✋ 信心不足: {signal_data.get('confidence')} < {self.min_confidence}, 强制观望")
             signal_data['signal'] = 'HOLD'
+            return "SKIPPED_CONF", f"信心不足 {signal_data.get('confidence')}"
 
         if signal_data['signal'] == 'HOLD':
-            return
+            return "HOLD", "AI建议观望"
 
         if self.test_mode:
             self._log(f"🧪 测试模式: {signal_data['signal']} {signal_data['amount']} (不执行)")
-            return
+            return "TEST_MODE", f"模拟执行 {signal_data['signal']}"
 
-        # current_position = await self.get_current_position() # [Removed] Moved up
-        
         # 2. 价格滑点检查
         ticker = await self.exchange.fetch_ticker(self.symbol)
         current_realtime_price = ticker['last']
@@ -403,7 +402,7 @@ class DeepSeekTrader:
             if price_gap_percent > self.max_slippage:
                 self._log(f"⚠️ 价格波动过大: 偏差 {price_gap_percent:.2f}% > {self.max_slippage}%，取消交易", 'warning')
                 await self.send_notification(f"⚠️ 交易取消: 价格滑点保护\n偏差 {price_gap_percent:.2f}%")
-                return
+                return "SKIPPED_SLIPPAGE", f"滑点 {price_gap_percent:.2f}%"
         except Exception:
             pass
 
@@ -427,9 +426,7 @@ class DeepSeekTrader:
             # 暴利状态(pnl > 阈值) 不拦截 (止盈)
             if 0 <= pnl_pct < min_profit_threshold:
                 self._log(f"🛑 拦截微利平仓: 浮盈 {pnl_pct*100:.3f}% < {min_profit_threshold*100:.3f}% (AI信心非HIGH)", 'warning')
-                # 除非 AI 明确说是止损 (虽然 pnl>=0 但可能 AI 判定即将暴跌?) 
-                # 这里简单起见，既然是微利，就继续持有
-                return
+                return "SKIPPED_PROFIT", f"微利拦截 {pnl_pct*100:.2f}%"
 
         # 4. 资金三方取小 & 最小数量适配
         ai_suggest = signal_data['amount']
@@ -450,13 +447,9 @@ class DeepSeekTrader:
             allocation_usdt_limit = self.allocation
             
         # 扣除当前持仓占用的保证金（粗略估算），防止重复占用配额
-        # 注意：这里简化处理，假设当前持仓就是占用了这么多配额
-        # 如果是加仓场景，剩余可用配额 = 总配额 - 当前持仓价值/杠杆
         used_quota = 0
         if current_position:
-            # 持仓价值 / 杠杆 = 占用保证金
-            # 也可以直接用持仓名义价值 current_position['size'] * current_realtime_price
-            # 这里我们保守一点，控制的是"总投入本金"
+             # 持仓价值 / 杠杆 = 占用保证金
              used_quota = (current_position['size'] * current_realtime_price) / self.leverage
         
         remaining_quota = max(0, allocation_usdt_limit - used_quota)
@@ -511,26 +504,13 @@ class DeepSeekTrader:
             # 🦊 稳健模式: 严格受配额限制
             trade_amount = min(ai_suggest, config_amt, max_trade_limit)
         
-        # 如果是平仓(SELL现有持仓)，则直接用持仓量，不受配额限制
-        # [Fix] 逻辑调整：
-        # 1. 如果是现货 SELL，那就是卖出所有持仓 (Close All Spot)
-        # 2. 如果是合约 SELL 且持有 Long，这里只标记 is_closing 用于跳过"最小开仓限制"检查
-        #    但具体的 trade_amount 我们依然保留用于潜在的"反手开空" (如果策略允许)
-        #    不过为了防止计算的 trade_amount (基于当前余额) 过小，
-        #    我们暂且保持 trade_amount 为 calculated_amount，只在 Close Long 时使用 pos['size']
-        
         is_closing = False
         if signal_data['signal'] == 'SELL':
             if self.trade_mode == 'cash':
-                # 现货卖出就是平仓
                 is_closing = True
                 trade_amount = max_trade_limit # All out
             elif current_position and current_position['side'] == 'long':
-                # 合约平多 (标记一下，用于后续可能的跳过检查，虽然下面代码其实没用到 is_closing 跳过)
                 is_closing = True
-                # 注意：这里不再强制 trade_amount = pos['size']
-                # 因为我们要用 trade_amount 去开空 (如果有 else 逻辑)
-                # 平多的数量直接取 current_position['size'] 即可
         
         if not is_closing:
              # 开仓检查最小数量
@@ -546,7 +526,7 @@ class DeepSeekTrader:
                      else:
                          self._log(f"🚫 余额不足最小单位 {min_amount}", 'warning')
                          await self._send_diagnostic_report(trade_amount, min_amount, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, "余额不足以购买最小单位")
-                         return
+                         return "SKIPPED_MIN", f"少于最小限额 {min_amount}"
 
                  if min_cost and (trade_amount * current_realtime_price) < min_cost:
                       # 尝试提升
@@ -557,7 +537,7 @@ class DeepSeekTrader:
                       else:
                            self._log(f"🚫 余额不足最小金额 {min_cost}U", 'warning')
                            await self._send_diagnostic_report(trade_amount, min_cost, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, f"余额不足最小金额 (需 {min_cost}U)")
-                           return
+                           return "SKIPPED_MIN", f"金额 < {min_cost}U"
              except Exception:
                  pass
 
@@ -569,7 +549,8 @@ class DeepSeekTrader:
         except:
             pass
             
-        if trade_amount <= 0: return
+        if trade_amount <= 0:
+             return "SKIPPED_ZERO", "计算数量为0"
 
         # 5. 执行
         try:
@@ -585,7 +566,6 @@ class DeepSeekTrader:
                 await self.exchange.create_market_order(self.symbol, 'buy', trade_amount, params={'tdMode': self.trade_mode})
                 self._log(f"🚀 买入成功: {trade_amount}")
                 
-                # 构造买入通知
                 msg = f"🚀 **买入执行 (BUY)**\n"
                 msg += f"• 交易对: {self.symbol}\n"
                 msg += f"• 数量: {trade_amount}\n"
@@ -593,6 +573,7 @@ class DeepSeekTrader:
                 msg += f"• 理由: {signal_data['reason']}\n"
                 msg += f"• 信心: {signal_data.get('confidence', 'N/A')}"
                 await self.send_notification(msg)
+                return "EXECUTED", f"买入 {trade_amount}"
 
             elif signal_data['signal'] == 'SELL':
                 if current_position and current_position['side'] == 'long':
@@ -600,14 +581,12 @@ class DeepSeekTrader:
                     await self.exchange.create_market_order(self.symbol, 'sell', current_position['size'], params={'reduceOnly': True})
                     self._log("🔄 平多仓成功")
                     
-                    # 构造平仓通知
                     msg = f"🔄 **平多仓 (Close Long)**\n"
                     msg += f"• 交易对: {self.symbol}\n"
                     msg += f"• 数量: {current_position['size']}\n"
-                    msg += f"• 盈亏: {pnl_pct*100:+.2f}% (估算)\n" # pnl_pct 在上面计算过
+                    msg += f"• 盈亏: {pnl_pct*100:+.2f}% (估算)\n"
                     msg += f"• 理由: {signal_data['reason']}"
                     await self.send_notification(msg)
-                    
                     await asyncio.sleep(1)
                 
                 if self.trade_mode == 'cash':
@@ -621,6 +600,7 @@ class DeepSeekTrader:
                     msg += f"• 价格: ${current_realtime_price:,.2f}\n"
                     msg += f"• 理由: {signal_data['reason']}"
                     await self.send_notification(msg)
+                    return "EXECUTED", f"卖出 {trade_amount}"
                 else:
                     # 开空
                     await self.exchange.create_market_order(self.symbol, 'sell', trade_amount, params={'tdMode': self.trade_mode})
@@ -633,13 +613,18 @@ class DeepSeekTrader:
                     msg += f"• 理由: {signal_data['reason']}\n"
                     msg += f"• 信心: {signal_data.get('confidence', 'N/A')}"
                     await self.send_notification(msg)
+                    return "EXECUTED", f"开空 {trade_amount}"
 
         except Exception as e:
             msg = str(e)
             if "51008" in msg or "Insufficient" in msg:
                 self._log("❌ 保证金不足 (Code 51008)", 'error')
+                return "FAILED", "保证金不足"
             else:
                 self._log(f"下单失败: {e}", 'error')
+                return "FAILED", f"API错误: {str(e)[:20]}"
+
+        return "SKIPPED", "逻辑未覆盖"
 
     async def get_account_balance(self):
         try:
