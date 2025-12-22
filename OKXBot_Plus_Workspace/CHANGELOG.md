@@ -5,12 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.7] - 2025-12-22 (Smart Fund Sharing)
+### 💰 Fund Management
+- **Smart Fund Sharing (Elastic Quota)**:
+  - Implemented a dual-mode fund management system:
+    - **Standard Mode (LOW/MED)**: Strictly enforces `allocation` quotas (e.g., 50%) per symbol to ensure risk isolation.
+    - **Aggressive Mode (HIGH)**: Allows the bot to **borrow idle funds** from the global account pool (up to 90% of total balance) when AI confidence is HIGH.
+  - **Fix**: Resolved critical issue in Cross-Margin mode where multiple bots would compete for the same total balance, leading to over-leveraging.
+
+### 🎨 UX & Notifications
+- **Enhanced Color Coding**:
+  - **Profit Take (🎉)**: Changed to **Carmine/Magenta** for distinct celebration visibility.
+  - **Warning (⚠️)**: Changed to **Yellow** for better alert visibility.
+  - **Failure (❌)**: Explicit **Red** for errors.
+
 ## [v3.1.6] - 2025-12-22 (High-Frequency Logic)
 ### 🧠 Logic Refinement
 - **Aggressive Trading Mode**:
   - **Prompt Engineering**: Updated DeepSeek system prompt to explicitly encourage "Frequent Trading" when risk-reward ratio is favorable, reducing "HOLD" bias.
 - **Bug Fix**:
   - **Critical Fix**: Resolved `UnboundLocalError: current_position` in trade executor. This bug previously caused crashes when executing "Smart Confidence Waiver" logic for STOP-LOSS or trend reversals.
+
+### 💰 Fund Management (Smart Fund Sharing)
+- **Elastic Quota System**:
+  - **Standard Mode (LOW/MED Confidence)**: Strictly adheres to the configured `allocation` (e.g., 50%) for each pair. Prevents fund contention and isolates risks.
+  - **Aggressive Mode (HIGH Confidence)**: Allows the bot to **break the quota limit** and utilize up to **90%** of the total account idle balance. This enables the bot to seize high-certainty opportunities with maximum capital efficiency while keeping a 10% safety buffer.
+  - **Fix**: Resolved an issue where cross-margin mode would incorrectly calculate `max_trade_limit` using the entire account balance, causing over-leveraging or fund contention between multiple bots.
+
+### 🎨 UX & Notifications
+- **Color-Coded Alerts**:
+  - **Profit Take (🎉)**: Now uses **Carmine/Magenta** to distinguish from generic sells.
+  - **Warning (⚠️)**: Changed to **Yellow** for better visibility.
+  - **Failure (❌)**: Explicit **Red** for critical errors.
 
 ## [v3.1.5] - 2025-12-21 (Multi-Instance)
 ### 🛠️ Infrastructure

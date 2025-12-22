@@ -437,25 +437,73 @@ class DeepSeekTrader:
         
         # 获取余额
         balance = await self.get_account_balance()
+        
+        # [Fix] 计算基于配额的硬性资金上限 (USDT)
+        # self.allocation 如果 <= 1 (如 0.5)，则是比例；如果 > 1，则是固定金额
+        # self.initial_balance 是初始本金
+        allocation_usdt_limit = 0
+        if self.allocation <= 1.0:
+            # 如果配置了初始本金，按本金比例计算；否则按当前余额比例
+            base_capital = self.initial_balance if self.initial_balance > 0 else balance
+            allocation_usdt_limit = base_capital * self.allocation
+        else:
+            allocation_usdt_limit = self.allocation
+            
+        # 扣除当前持仓占用的保证金（粗略估算），防止重复占用配额
+        # 注意：这里简化处理，假设当前持仓就是占用了这么多配额
+        # 如果是加仓场景，剩余可用配额 = 总配额 - 当前持仓价值/杠杆
+        used_quota = 0
+        if current_position:
+            # 持仓价值 / 杠杆 = 占用保证金
+            # 也可以直接用持仓名义价值 current_position['size'] * current_realtime_price
+            # 这里我们保守一点，控制的是"总投入本金"
+             used_quota = (current_position['size'] * current_realtime_price) / self.leverage
+        
+        remaining_quota = max(0, allocation_usdt_limit - used_quota)
+        
+        # 将剩余配额转换为币的数量
+        quota_token_amount = (remaining_quota * self.leverage * 0.99) / current_realtime_price
+
         max_trade_limit = 0
         if signal_data['signal'] == 'BUY':
              if self.trade_mode == 'cash':
-                 max_trade_limit = (balance * 0.99) / current_realtime_price
+                 # 现货: 取 (余额, 配额) 的较小值
+                 available_usdt = min(balance, remaining_quota)
+                 max_trade_limit = (available_usdt * 0.99) / current_realtime_price
              else:
-                 max_trade_limit = (balance * self.leverage * 0.99) / current_realtime_price
+                 # 合约: 取 (余额, 配额) 的较小值作为保证金
+                 available_margin = min(balance, remaining_quota)
+                 max_trade_limit = (available_margin * self.leverage * 0.99) / current_realtime_price
         elif signal_data['signal'] == 'SELL':
              if self.trade_mode == 'cash':
                  max_trade_limit = await self.get_spot_balance()
              else:
-                 # 开空能力
-                 max_trade_limit = (balance * self.leverage * 0.99) / current_realtime_price
+                 # 开空能力: 同理，受配额限制
+                 available_margin = min(balance, remaining_quota)
+                 max_trade_limit = (available_margin * self.leverage * 0.99) / current_realtime_price
 
         # 决策最终数量
-        # [High Confidence Override]
+        # [High Confidence Override] -> 弹性配额逻辑
         if signal_data.get('confidence', '').upper() == 'HIGH':
-            trade_amount = min(ai_suggest, max_trade_limit)
-            self._log(f"🦁 激进模式 (信心高): 忽略配置限制 {config_amt}，跟随 AI 建议 {ai_suggest}")
+            # 🦁 激进模式: 允许突破单币种配额，调用账户闲置资金
+            # 限制：最多使用账户余额的 90% (保留 10% 作为安全垫/其他币种救急)
+            # 注意：这里的 max_trade_limit 之前已经被 allocation 限制过了，我们需要重新计算一个"全局上限"
+            
+            global_max_usdt = balance * 0.90
+            global_max_token = 0
+            if self.trade_mode == 'cash':
+                 global_max_token = global_max_usdt / current_realtime_price
+            else:
+                 global_max_token = (global_max_usdt * self.leverage) / current_realtime_price
+            
+            trade_amount = min(ai_suggest, global_max_token)
+            
+            # 检查是否真的突破了配额
+            current_quota_token = max_trade_limit # 上面计算的 max_trade_limit 是受配额限制的
+            if trade_amount > current_quota_token:
+                 self._log(f"🦁 激进模式 (信心高): 突破配额限制，调用闲置资金。下单: {trade_amount:.4f}")
         else:
+            # 🦊 稳健模式: 严格受配额限制
             trade_amount = min(ai_suggest, config_amt, max_trade_limit)
         
         # 如果是平仓(SELL现有持仓)，则直接用持仓量，不受配额限制
