@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.1.9] - 2025-12-22 (Deposit Offset)
+### 💰 资金管理精修
+- **充值抵扣机制 (Deposit Offset)**:
+  - 改进了“锁定本金模式”的实现逻辑。机器人现在不再单纯锁定基准，而是维护一个 `deposit_offset` 来追踪外部充值或闲置资金。
+  - **启动时**: 如果 `实际权益 > 配置本金`，多出的差额自动记为 `deposit_offset`。盈亏计算公式调整为 `(实际权益 - 抵扣额) - 基准本金`。
+  - **运行时**: 检测到充值时，自动增加 `deposit_offset`。
+  - **效果**: 即使账户内有大量闲置资金，启动时盈亏也能正确归零（或显示真实交易盈亏），彻底解决了因闲置资金被误算为盈利而触发“自动止盈”的问题。
+
 ## [v3.1.8] - 2025-12-22 (Fixed Capital & Auto-Deposit)
 ### 💰 资金管理
 - **锁定本金模式 (Fixed Capital Mode)**:

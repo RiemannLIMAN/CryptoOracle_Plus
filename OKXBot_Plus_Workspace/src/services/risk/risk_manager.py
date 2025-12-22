@@ -27,6 +27,7 @@ class RiskManager:
         self.max_loss_pct = risk_config.get('max_loss_rate')
         
         self.smart_baseline = None
+        self.deposit_offset = 0.0 # [New] 充值/闲置资金抵扣额
         
         # 获取项目根目录 (src/services/risk -> src/services -> src -> root)
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -55,14 +56,18 @@ class RiskManager:
                 with open(self.state_file, 'r', encoding='utf-8') as f:
                     state = json.load(f)
                     self.smart_baseline = state.get('smart_baseline')
-                    if self.smart_baseline:
-                        print(f"🔄 已恢复历史基准资金: {self.smart_baseline:.2f} U")
+                self.deposit_offset = state.get('deposit_offset', 0.0) # 恢复 offset
+                if self.smart_baseline:
+                    print(f"🔄 已恢复历史基准资金: {self.smart_baseline:.2f} U (闲置抵扣: {self.deposit_offset:.2f} U)")
             except Exception as e:
                 print(f"⚠️ 加载状态失败: {e}")
 
     def save_state(self):
         try:
-            state = {'smart_baseline': self.smart_baseline}
+            state = {
+                'smart_baseline': self.smart_baseline,
+                'deposit_offset': self.deposit_offset
+            }
             with open(self.state_file, 'w', encoding='utf-8') as f:
                 json.dump(state, f)
         except Exception as e:
@@ -226,9 +231,11 @@ class RiskManager:
 
             # [Auto-Deposit Detection] 充值自动识别逻辑
             # 如果计算出的 PnL 比上一次瞬间增加了太多 (例如 > 20% 本金 或 > 50U)，且不是因为暴涨
-            # 则认为是充值，自动上调 baseline 以抵消影响
+            # 则认为是充值，自动上调 deposit_offset 以抵消影响
             
-            raw_pnl = current_total_value - self.smart_baseline
+            # PnL = (Total - Offset) - Baseline
+            adjusted_equity = current_total_value - self.deposit_offset
+            raw_pnl = adjusted_equity - self.smart_baseline
             
             # 初始化 last_pnl (如果不存在)
             if not hasattr(self, 'last_known_pnl'):
@@ -242,20 +249,21 @@ class RiskManager:
             
             if pnl_delta > threshold_val:
                 self._log(f"💸 检测到资金瞬间增加 (+{pnl_delta:.2f} U)，判定为外部充值")
-                # 调整基准，吃掉这部分增量，保持 PnL 不变
-                old_baseline = self.smart_baseline
-                self.smart_baseline += pnl_delta
-                self._log(f"🔄 自动上调基准: {old_baseline:.2f} -> {self.smart_baseline:.2f} (维持 PnL 连续)")
+                # 调整 offset，吃掉这部分增量，保持 PnL 不变
+                # New_Offset = Old_Offset + Delta
+                self.deposit_offset += pnl_delta
+                self._log(f"🔄 自动增加抵扣额: {self.deposit_offset:.2f} U (维持 PnL 连续)")
                 self.save_state()
                 # 重新计算 PnL
-                raw_pnl = current_total_value - self.smart_baseline
+                adjusted_equity = current_total_value - self.deposit_offset
+                raw_pnl = adjusted_equity - self.smart_baseline
 
             self.last_known_pnl = raw_pnl # 更新记录
             
             current_pnl = raw_pnl
             pnl_percent = (current_pnl / self.smart_baseline) * 100
 
-            self._log(f"💰 账户监控: 基准 {self.smart_baseline:.2f} U | 当前总值 {current_total_value:.2f} U | 盈亏 {current_pnl:+.2f} U ({pnl_percent:+.2f}%)")
+            self._log(f"💰 账户监控: 基准 {self.smart_baseline:.2f} U | 当前总值 {current_total_value:.2f} U (抵扣 {self.deposit_offset:.2f}) | 盈亏 {current_pnl:+.2f} U ({pnl_percent:+.2f}%)")
             self.record_pnl_to_csv(current_total_value, current_pnl, pnl_percent)
             
             if time.time() - self.last_chart_display_time > 3600:
@@ -406,13 +414,21 @@ class RiskManager:
             
             if real_total_equity < self.initial_balance * 0.9:
                 self.smart_baseline = real_total_equity
+                self.deposit_offset = 0.0 # 缩水了，清空抵扣
                 self._log(f"⚠️ 资产缩水校准: 配置 {self.initial_balance} -> 实际 {real_total_equity:.2f} (缩水 >10%)")
             else:
                 # 即使实际权益远大于配置，也坚持使用配置值，实现"专款专用"
                 self.smart_baseline = self.initial_balance
                 if real_total_equity > self.initial_balance * 1.1:
-                    self._log(f"🔒 锁定本金模式: 忽略额外资金 {real_total_equity - self.initial_balance:.2f} U，仅管理 {self.smart_baseline:.2f} U")
+                    # 初始化 offset: 实际权益 - 配置本金
+                    # 如果之前没有 offset 或者 需要重新计算
+                    # 这里为了防止重启时重复计算，我们只在 smart_baseline 是 None 时，或者 offset 为 0 时初始化
+                    # 或者，如果 offset + baseline != real_total_equity (偏差很大)，也校准一下？
+                    # 简化逻辑：每次启动如果处于锁定模式，直接把多出来的部分算作 offset
+                    self.deposit_offset = real_total_equity - self.initial_balance
+                    self._log(f"🔒 锁定本金模式: 忽略额外资金 {self.deposit_offset:.2f} U，仅管理 {self.smart_baseline:.2f} U")
                 else:
+                    self.deposit_offset = 0.0
                     self._log(f"✅ 初始本金确认: {self.smart_baseline:.2f} U")
         else:
             if not self.smart_baseline:

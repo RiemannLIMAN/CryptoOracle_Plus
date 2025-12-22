@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.9] - 2025-12-22 (Deposit Offset)
+### 💰 Fund Management Refinement
+- **Deposit Offset Mechanism**:
+  - Improved "Fixed Capital Mode" logic. Instead of adjusting the baseline, the bot now maintains a `deposit_offset` to track external deposits or idle funds.
+  - **Startup**: If `Actual_Equity > Configured_Capital`, the difference is automatically recorded as `deposit_offset`. PnL is calculated as `(Actual - Offset) - Baseline`.
+  - **Runtime**: When a deposit is detected, the `deposit_offset` increases automatically.
+  - **Benefit**: This ensures that PnL always starts at 0 (or actual trading PnL) even if the account has significant idle funds, preventing false "Take Profit" triggers on startup.
+
 ## [v3.1.8] - 2025-12-22 (Fixed Capital & Auto-Deposit)
 ### 💰 Fund Management
 - **Fixed Capital Mode**:
