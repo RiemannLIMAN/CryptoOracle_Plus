@@ -224,7 +224,35 @@ class RiskManager:
             if not self.smart_baseline or self.smart_baseline <= 0:
                 return
 
-            current_pnl = current_total_value - self.smart_baseline
+            # [Auto-Deposit Detection] 充值自动识别逻辑
+            # 如果计算出的 PnL 比上一次瞬间增加了太多 (例如 > 20% 本金 或 > 50U)，且不是因为暴涨
+            # 则认为是充值，自动上调 baseline 以抵消影响
+            
+            raw_pnl = current_total_value - self.smart_baseline
+            
+            # 初始化 last_pnl (如果不存在)
+            if not hasattr(self, 'last_known_pnl'):
+                self.last_known_pnl = raw_pnl
+            
+            pnl_delta = raw_pnl - self.last_known_pnl
+            
+            # 阈值: 瞬间增长 > 10 U 且 > 5% 本金 (防止正常大波动误判)
+            # 正常交易很难在 10秒内(check间隔) 赚这么多
+            threshold_val = max(10.0, self.smart_baseline * 0.05)
+            
+            if pnl_delta > threshold_val:
+                self._log(f"💸 检测到资金瞬间增加 (+{pnl_delta:.2f} U)，判定为外部充值")
+                # 调整基准，吃掉这部分增量，保持 PnL 不变
+                old_baseline = self.smart_baseline
+                self.smart_baseline += pnl_delta
+                self._log(f"🔄 自动上调基准: {old_baseline:.2f} -> {self.smart_baseline:.2f} (维持 PnL 连续)")
+                self.save_state()
+                # 重新计算 PnL
+                raw_pnl = current_total_value - self.smart_baseline
+
+            self.last_known_pnl = raw_pnl # 更新记录
+            
+            current_pnl = raw_pnl
             pnl_percent = (current_pnl / self.smart_baseline) * 100
 
             self._log(f"💰 账户监控: 基准 {self.smart_baseline:.2f} U | 当前总值 {current_total_value:.2f} U | 盈亏 {current_pnl:+.2f} U ({pnl_percent:+.2f}%)")
@@ -372,17 +400,20 @@ class RiskManager:
         real_total_equity = current_usdt_equity + total_position_value
         
         if self.initial_balance and self.initial_balance > 0:
-            gap_percent = abs(real_total_equity - self.initial_balance) / self.initial_balance * 100
-            if gap_percent > 10.0:
+            # [Logic Change] 固定本金模式
+            # 如果 实际权益 > 初始配置 (说明有额外充值)，则强制维持 初始配置 作为基准
+            # 只有当 实际权益 < 初始配置 * 0.9 (说明亏损严重或提现)，才向下校准
+            
+            if real_total_equity < self.initial_balance * 0.9:
                 self.smart_baseline = real_total_equity
-                self._log(f"⚠️ 初始本金校准: 配置 {self.initial_balance} vs 实际总值 {real_total_equity:.2f}")
-                self._log(f"🔄 已校准盈亏计算基准为: {self.smart_baseline:.2f} U")
+                self._log(f"⚠️ 资产缩水校准: 配置 {self.initial_balance} -> 实际 {real_total_equity:.2f} (缩水 >10%)")
             else:
-                if not self.smart_baseline:
-                    self.smart_baseline = self.initial_balance
-                    self._log(f"✅ 初始本金校准通过: {self.smart_baseline:.2f} U")
+                # 即使实际权益远大于配置，也坚持使用配置值，实现"专款专用"
+                self.smart_baseline = self.initial_balance
+                if real_total_equity > self.initial_balance * 1.1:
+                    self._log(f"🔒 锁定本金模式: 忽略额外资金 {real_total_equity - self.initial_balance:.2f} U，仅管理 {self.smart_baseline:.2f} U")
                 else:
-                     self._log(f"✅ 延续历史基准: {self.smart_baseline:.2f} U")
+                    self._log(f"✅ 初始本金确认: {self.smart_baseline:.2f} U")
         else:
             if not self.smart_baseline:
                 self.smart_baseline = real_total_equity

@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.1.8] - 2025-12-22 (Fixed Capital & Auto-Deposit)
+### 💰 资金管理
+- **锁定本金模式 (Fixed Capital Mode)**:
+  - 实现了对 `config.json` 中 `initial_balance` 的严格遵循。
+  - 当实际权益 > 配置本金（例如有额外闲置资金）时，机器人将**强制锁定基准**为配置值，不再自动向上校准。这确保了盈亏计算仅基于用户授权的资金部分。
+- **自动充值识别 (Auto-Deposit Detection)**:
+  - 增加了对资金瞬间暴涨（充值 > 10U 且 > 5%）的智能识别。
+  - 系统会自动**上调基准 (Smart Baseline)** 以抵消充值带来的账面增量，保持 PnL 曲线连续，防止因充值导致的“虚假止盈”误触。
+- **激进模式优化**:
+  - 在 HIGH 信心模式下，全局资金池上限现在受限于 `min(实际余额, 配置本金)`。即使在激进模式下，机器人也绝不会动用未授权的闲置资金。
+
 ## [v3.1.7] - 2025-12-22 (Smart Fund Sharing)
 ### 💰 资金管理
 - **智能资金共享 (弹性配额)**:

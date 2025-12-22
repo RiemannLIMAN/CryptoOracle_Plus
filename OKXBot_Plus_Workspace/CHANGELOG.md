@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.8] - 2025-12-22 (Fixed Capital & Auto-Deposit)
+### 💰 Fund Management
+- **Fixed Capital Mode**:
+  - Implemented logic to strictly respect the `initial_balance` configured in `config.json`.
+  - If actual equity > configured balance (e.g., due to extra deposits), the bot now **locks the baseline** to the configured amount instead of auto-calibrating upwards. This ensures PnL is calculated based on the "authorized capital" only.
+- **Auto-Deposit Detection**:
+  - Added smart detection for sudden equity spikes (Deposit > 10U & > 5%).
+  - The bot automatically **adjusts the baseline upwards** to offset the deposit amount, keeping the PnL curve continuous and preventing false "Take Profit" triggers.
+- **Aggressive Mode Refinement**:
+  - In HIGH confidence mode, the "Global Fund Pool" is now capped by `min(Actual_Balance, Configured_Capital)`. The bot will never touch unauthorized idle funds even in aggressive mode.
+
 ## [v3.1.7] - 2025-12-22 (Smart Fund Sharing)
 ### 💰 Fund Management
 - **Smart Fund Sharing (Elastic Quota)**:

@@ -487,9 +487,14 @@ class DeepSeekTrader:
         if signal_data.get('confidence', '').upper() == 'HIGH':
             # 🦁 激进模式: 允许突破单币种配额，调用账户闲置资金
             # 限制：最多使用账户余额的 90% (保留 10% 作为安全垫/其他币种救急)
-            # 注意：这里的 max_trade_limit 之前已经被 allocation 限制过了，我们需要重新计算一个"全局上限"
+            # [Logic Change] 必须同时受限于 initial_balance (如果配置了)
+            # 即: Global Limit = min(Real_Balance, Configured_Balance) * 0.9
             
-            global_max_usdt = balance * 0.90
+            effective_balance = balance
+            if self.initial_balance > 0:
+                 effective_balance = min(balance, self.initial_balance)
+            
+            global_max_usdt = effective_balance * 0.90
             global_max_token = 0
             if self.trade_mode == 'cash':
                  global_max_token = global_max_usdt / current_realtime_price
