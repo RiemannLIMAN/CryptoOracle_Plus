@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.15] - 2025-12-23 (Notification UI Overhaul)
+### 🎨 UX & Notifications
+- **Lark/Feishu Cards Overhaul**:
+  - **Dynamic Titles**: Removed generic titles. Now uses dynamic titles like `🚀 Buy Executed | ETH/USDT` or `⚠️ Diagnostic Report` with color-coded headers (Green/Red/Orange/Blue).
+  - **Markdown Optimization**:
+    - **Diagnostic Reports**: Refactored into clean Markdown with collapsible "Deep Analysis" blocks and bold key metrics (Quantity, Min Limit).
+    - **Trade Alerts**: Compact key-value format for Quantity, Price, and Confidence, with reasoning highlighted in blockquotes.
+- **Financial Transparency**:
+  - **Trade Details**: Added `Amount (U)` (Estimated Value) and `Balance (U)` (Post-trade Available) to every trade notification.
+  - **Startup**: Added `Equity` display to the startup notification card.
+
 ## [v3.1.14] - 2025-12-23 (Capital Backflow Fix)
 ### 💰 Fund Management
 - **Capital Backflow Detection**:

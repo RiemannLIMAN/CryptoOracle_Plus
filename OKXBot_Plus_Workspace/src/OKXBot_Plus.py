@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.1.14 (Capital Backflow Fix)"
+SYSTEM_VERSION = "v3.1.15 (Notification UI Overhaul)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -149,9 +149,11 @@ async def main():
     if config['trading'].get('notification', {}).get('enabled', False):
         logger.info("📨 发送启动通知...")
         await risk_manager.send_notification(
-            f"🚀 机器人已启动 ({SYSTEM_VERSION})\n"
-            f"模式: {'测试模式' if config['trading']['test_mode'] else '实盘模式'}\n"
-            f"监控: {len(traders)} 个币种"
+            f"**版本**: {SYSTEM_VERSION}\n"
+            f"**模式**: {'🧪 测试模式' if config['trading']['test_mode'] else '🔥 实盘模式'}\n"
+            f"**权益**: `{start_equity:.2f} U`\n"
+            f"**监控**: `{len(traders)}` 个币种",
+            title="🚀 机器人启动成功"
         )
 
     # 预热数据

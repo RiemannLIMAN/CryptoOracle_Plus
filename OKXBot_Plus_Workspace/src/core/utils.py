@@ -6,7 +6,7 @@ from datetime import datetime
 
 import sys # Ensure sys is imported
 
-async def send_notification_async(webhook_url, message):
+async def send_notification_async(webhook_url, message, title=None):
     """
     异步发送通知，自动识别飞书与钉钉
     """
@@ -19,19 +19,14 @@ async def send_notification_async(webhook_url, message):
     # 简单启发式识别
     if "feishu" in webhook_url or "lark" in webhook_url:
         # 飞书/Lark 格式 - 使用互动卡片 (interactive)
-        # 支持 Markdown 渲染，颜色高亮，更加美观
-        
-        # 预处理消息，简单的 markdown 转换
-        # 将 "🚀" 等 emoji 开头的行加粗，模拟标题效果
-        # 这里的 message 是一整段文本，我们需要稍微拆分一下或者直接用 markdown 组件
         
         # 确定卡片头部的颜色 (基于消息内容)
-        # 优先级: 诊断/失败/警告 > 止盈/止损 > 买入/卖出
-        header_color = "blue" # 默认蓝色 (通知)
+        header_color = "blue" # 默认蓝色
+        card_title = title if title else "🤖 CryptoOracle 消息"
         
-        if "诊断报告" in message:
-            header_color = "yellow" # 诊断报告 -> 黄色
-        elif "失败" in message or "Failed" in message:
+        if "诊断报告" in message or "诊断报告" in str(title):
+            header_color = "orange" # 诊断 -> 橙色
+        elif "失败" in message or "Failed" in message or "❌" in str(title):
             header_color = "red"    # 失败 -> 红色
         elif "警告" in message or "⚠️" in message:
             header_color = "yellow" # 警告 -> 黄色
@@ -41,10 +36,11 @@ async def send_notification_async(webhook_url, message):
             header_color = "grey"   # 止损 -> 灰色
         elif "买入" in message or "BUY" in message or "🚀" in message:
             header_color = "green"  # 买入 -> 绿色
-        elif "卖出" in message or "SELL" in message or "平" in message or "📉" in message or "Close" in message:
+        elif "卖出" in message or "SELL" in message or "📉" in message:
             header_color = "red"    # 卖出 -> 红色
+        elif "启动" in message:
+            header_color = "blue"
 
-            
         payload = {
             "msg_type": "interactive",
             "card": {
@@ -54,7 +50,7 @@ async def send_notification_async(webhook_url, message):
                 "header": {
                     "title": {
                         "tag": "plain_text",
-                        "content": "🤖 CryptoOracle 交易播报"
+                        "content": card_title
                     },
                     "template": header_color
                 },
@@ -74,7 +70,7 @@ async def send_notification_async(webhook_url, message):
                         "elements": [
                             {
                                 "tag": "plain_text",
-                                "content": f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                                "content": f"Time: {datetime.now().strftime('%H:%M:%S')}"
                             }
                         ]
                     }

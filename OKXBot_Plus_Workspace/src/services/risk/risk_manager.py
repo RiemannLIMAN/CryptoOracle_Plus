@@ -80,14 +80,15 @@ class RiskManager:
         elif level == 'error':
             self.logger.error(f"[RISK_MGR] {msg}")
 
-    async def send_notification(self, message):
+    async def send_notification(self, message, title=None):
         """发送通知 (Async)"""
         if not self.notification_config.get('enabled', False):
             return
         webhook_url = self.notification_config.get('webhook_url')
         
-        full_msg = f"🛡️ CryptoOracle 风控通知\n--------------------\n{message}"
-        await send_notification_async(webhook_url, full_msg)
+        # 移除旧的 wrapper
+        final_title = title if title else "🛡️ 风控通知"
+        await send_notification_async(webhook_url, message, title=final_title)
 
     def record_pnl_to_csv(self, total_equity, current_pnl, pnl_percent):
         file_exists = os.path.isfile(self.csv_file)
@@ -352,7 +353,10 @@ class RiskManager:
             if should_take_profit:
                 self._log(f"🎉🎉🎉 {tp_trigger_msg}")
                 await self.close_all_traders()
-                await self.send_notification(f"🎉 止盈退出\n{tp_trigger_msg}\n当前权益: {total_equity:.2f} U")
+                await self.send_notification(
+                    f"**{tp_trigger_msg}**\n当前权益: `{total_equity:.2f} U`",
+                    title="🎉 止盈达成"
+                )
                 import sys
                 sys.exit(0)
 
@@ -369,7 +373,10 @@ class RiskManager:
             if should_stop_loss:
                 self._log(f"😭😭😭 {sl_trigger_msg}")
                 await self.close_all_traders()
-                await self.send_notification(f"🚑 止损退出\n{sl_trigger_msg}\n当前权益: {total_equity:.2f} U")
+                await self.send_notification(
+                    f"**{sl_trigger_msg}**\n当前权益: `{total_equity:.2f} U`",
+                    title="🚑 止损警报"
+                )
                 import sys
                 sys.exit(0)
 

@@ -55,13 +55,16 @@ class DeepSeekTrader:
         elif level == 'warning':
             self.logger.warning(f"[{self.symbol}] {msg}")
 
-    async def send_notification(self, message):
+    async def send_notification(self, message, title=None):
         if not self.notification_config.get('enabled', False):
             return
         webhook_url = self.notification_config.get('webhook_url')
         
-        full_msg = f"🤖 CryptoOracle 通知 [{self.symbol}]\n--------------------\n{message}"
-        await send_notification_async(webhook_url, full_msg)
+        # 移除旧的 wrapper，直接发送干净的消息
+        # title 默认加上 Symbol
+        final_title = title if title else f"🤖 通知 | {self.symbol}"
+        
+        await send_notification_async(webhook_url, message, title=final_title)
 
     async def _update_amount_auto(self, current_price):
         if self.config_amount != 'auto' and isinstance(self.config_amount, (int, float)) and self.config_amount > 0:
@@ -401,7 +404,10 @@ class DeepSeekTrader:
             price_gap_percent = abs(current_realtime_price - analysis_price) / analysis_price * 100
             if price_gap_percent > self.max_slippage:
                 self._log(f"⚠️ 价格波动过大: 偏差 {price_gap_percent:.2f}% > {self.max_slippage}%，取消交易", 'warning')
-                await self.send_notification(f"⚠️ 交易取消: 价格滑点保护\n偏差 {price_gap_percent:.2f}%")
+                await self.send_notification(
+                    f"**价格滑点保护**\n当前偏差: `{price_gap_percent:.2f}%` (阈值: `{self.max_slippage}%`)", 
+                    title=f"⚠️ 交易取消 | {self.symbol}"
+                )
                 return "SKIPPED_SLIPPAGE", f"滑点 {price_gap_percent:.2f}%"
         except Exception:
             pass
@@ -635,25 +641,33 @@ class DeepSeekTrader:
                     await self.exchange.create_market_order(self.symbol, 'sell', trade_amount)
                     self._log(f"📉 卖出成功: {trade_amount}")
                     
-                    msg = f"📉 **现货卖出 (SELL)**\n"
-                    msg += f"• 交易对: {self.symbol}\n"
-                    msg += f"• 数量: {trade_amount}\n"
-                    msg += f"• 价格: ${current_realtime_price:,.2f}\n"
-                    msg += f"• 理由: {signal_data['reason']}"
-                    await self.send_notification(msg)
+                    post_balance = await self.get_account_balance()
+                    est_revenue = trade_amount * current_realtime_price
+                    
+                    msg = f"**数量**: `{trade_amount}`\n"
+                    msg += f"**价格**: `${current_realtime_price:,.2f}`\n"
+                    msg += f"**金额**: `{est_revenue:.2f} U`\n"
+                    msg += f"**余额**: `{post_balance:.2f} U` (Avail)\n"
+                    msg += f"> **理由**: {signal_data['reason']}"
+                    
+                    await self.send_notification(msg, title=f"📉 现货卖出 | {self.symbol}")
                     return "EXECUTED", f"卖出 {trade_amount}"
                 else:
                     # 开空
                     await self.exchange.create_market_order(self.symbol, 'sell', trade_amount, params={'tdMode': self.trade_mode})
                     self._log(f"📉 开空成功: {trade_amount}")
                     
-                    msg = f"📉 **开空执行 (Short)**\n"
-                    msg += f"• 交易对: {self.symbol}\n"
-                    msg += f"• 数量: {trade_amount}\n"
-                    msg += f"• 价格: ${current_realtime_price:,.2f}\n"
-                    msg += f"• 理由: {signal_data['reason']}\n"
-                    msg += f"• 信心: {signal_data.get('confidence', 'N/A')}"
-                    await self.send_notification(msg)
+                    post_balance = await self.get_account_balance()
+                    est_cost = trade_amount * current_realtime_price
+                    
+                    msg = f"**数量**: `{trade_amount}`\n"
+                    msg += f"**价格**: `${current_realtime_price:,.2f}`\n"
+                    msg += f"**金额**: `{est_cost:.2f} U`\n"
+                    msg += f"**余额**: `{post_balance:.2f} U` (Avail)\n"
+                    msg += f"**信心**: `{signal_data.get('confidence', 'N/A')}`\n"
+                    msg += f"> **理由**: {signal_data['reason']}"
+                    
+                    await self.send_notification(msg, title=f"📉 开空执行 | {self.symbol}")
                     return "EXECUTED", f"开空 {trade_amount}"
 
         except Exception as e:
