@@ -606,12 +606,19 @@ class DeepSeekTrader:
                     # 平空
                     await self.exchange.create_market_order(self.symbol, 'buy', current_position['size'], params={'reduceOnly': True})
                     self._log("🔄 平空仓成功")
-                    await self.send_notification(f"🔄 平空仓成功 {self.symbol}\n数量: {current_position['size']}\n理由: {signal_data['reason']}")
+                    
+                    unit_str = "张 (Cont)" if self.trade_mode != 'cash' else f"{self.symbol.split('/')[0]}"
+                    await self.send_notification(
+                        f"**数量**: `{current_position['size']} {unit_str}`\n> **理由**: {signal_data['reason']}",
+                        title=f"🔄 平空仓成功 | {self.symbol}"
+                    )
                     await asyncio.sleep(1)
                 
                 # 开多/买入
                 await self.exchange.create_market_order(self.symbol, 'buy', trade_amount, params={'tdMode': self.trade_mode})
-                self._log(f"🚀 买入成功: {trade_amount}")
+                
+                unit_str = "张 (Cont)" if self.trade_mode != 'cash' else f"{self.symbol.split('/')[0]}"
+                self._log(f"🚀 买入成功: {trade_amount} {unit_str}")
                 
                 msg = f"🚀 **买入执行 (BUY)**\n"
                 msg += f"• 交易对: {self.symbol}\n"
