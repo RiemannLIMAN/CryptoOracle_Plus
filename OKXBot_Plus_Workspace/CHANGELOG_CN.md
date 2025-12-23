@@ -5,6 +5,51 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.1.15] - 2025-12-23 (Notification UI Overhaul)
+### 🎨 体验优化 & 通知升级 (UX & Notifications)
+- **飞书/Lark 卡片重构**:
+  - **动态标题**: 移除了通用的标题，改用动态彩色标题（如 `🚀 Buy Executed | ETH/USDT` 或 `⚠️ Diagnostic Report`），并根据消息类型自动匹配颜色（绿/红/橙/蓝）。
+  - **Markdown 排版优化**:
+    - **诊断报告**: 重构为精简的 Markdown 格式，关键指标（数量、最小限制）加粗显示，深度分析部分使用引用块折叠。
+    - **交易通知**: 采用紧凑的键值对格式展示数量、价格和信心，AI 理由使用引用块突出显示。
+- **资金透明度 (Financial Transparency)**:
+  - **交易详情**: 每笔交易通知新增 `金额 (U)` (估算价值) 和 `余额 (U)` (交易后可用余额) 字段。
+  - **启动通知**: 启动卡片中新增 `权益 (Equity)` 显示，方便确认初始资金状态。
+
+## [v3.1.14] - 2025-12-23 (Capital Backflow Fix)
+### 💰 资金管理 (Fund Management)
+- **资金回流检测 (Capital Backflow Detection)**:
+  - **问题**: 此前，如果用户卖出原有资产（内部划转），USDT 的瞬间增加会被误判为“外部充值”，从而增加 `deposit_offset`。这会导致释放的资金被锁定，无法被机器人使用（因为 `Adjusted_Equity` 保持不变）。
+  - **修复**: 实现了智能回流检测。如果 `当前权益 < 配置本金` 且 `Deposit_Offset > 0`，系统会自动**减少 Offset**，允许资金回流到可交易池中。
+  - **收益**: 确保卖出资产后，购买力能正确恢复到配置的 `initial_balance` 上限。
+
+## [v3.1.13] - 2025-12-22 (Execution Status UI Fix)
+### 🐛 Bug 修复 (Bug Fixes)
+- **看板 UI**: 修复了控制台看板中 `EXECUTION` 列始终显示 `N/A` 的问题。现在交易执行结果能正确传递并显示在 UI 表格中。
+
+## [v3.1.12] - 2025-12-22 (Market Order Fix & Safety Pre-check)
+### 🐛 Bug 修复 (Bug Fixes)
+- **市价单限制**: 修复了 `Code 51202` 错误，即针对低价币（如 PEPE）的市价单数量超过交易所限制的问题。机器人现在会自动将订单截断至 `limits.market.max`。
+
+### 🛡️ 安全与调试 (Safety & Debug)
+- **下单预检**: 新增 "🔍 下单预检" 日志，详细记录执行前的估算价值、合约张数和数量。
+- **安全拦截**: 实施了熔断机制，如果估算价值异常高（>5倍配置），则拦截订单，防止单位换算错误。
+
+### ✨ 体验优化 (UX Improvements)
+- **摘要扩展**: 将 "Analysis Summary" 的长度限制从 8 字符放宽至 20 字符，允许 AI 表达更完整的逻辑（例如 "RSI oversold bounce with MACD crossover"）。
+
+## [v3.1.11] - 2025-12-22 (Execution Transparency)
+### ✨ 体验优化 (UX Improvements)
+- **执行状态表**:
+  - 在控制台看板中新增了专属的 `EXECUTION` 列。
+  - 明确显示交易被跳过的**原因**:
+    - `🚫 QUOTA`: 资金配额不足 (固定本金模式)。
+    - `🚫 MIN`: 数量低于交易所最小限制。
+    - `⏸️ WAIT`: AI 信心不足 (HOLD)。
+    - `🚫 PROFIT`: 触发微利拦截 (跳过平仓)。
+    - `✅ DONE`: 交易执行成功。
+- **收益**: 消除了“静默失败”带来的困惑，让用户知道机器人是在过滤无效交易而非不工作。
+
 ## [v3.1.10] - 2025-12-22 (Startup Anomaly Check)
 ### 💰 资金管理
 - **启动 PnL 异常检测 (Startup Anomaly Check)**:
