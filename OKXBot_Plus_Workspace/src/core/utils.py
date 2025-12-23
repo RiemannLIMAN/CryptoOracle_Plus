@@ -26,21 +26,23 @@ async def send_notification_async(webhook_url, message):
         # 这里的 message 是一整段文本，我们需要稍微拆分一下或者直接用 markdown 组件
         
         # 确定卡片头部的颜色 (基于消息内容)
+        # 优先级: 诊断/失败/警告 > 止盈/止损 > 买入/卖出
         header_color = "blue" # 默认蓝色 (通知)
-        if "买入" in message or "BUY" in message or "🚀" in message:
-            header_color = "green" # 买入绿色
-        elif "卖出" in message or "SELL" in message or "平" in message or "📉" in message or "Close" in message:
-            header_color = "red"   # 卖出/做空/平仓 -> 红色 (符合跌势/离场)
-        elif "止盈" in message or "🎉" in message:
-            header_color = "carmine" # 止盈 -> 洋红 (喜庆/独特，区别于普通卖出和失败)
-        elif "止损" in message or "😭" in message or "🚑" in message:
-
-            header_color = "grey"  # 止损灰色/黄色 (警示)
-        elif "警告" in message or "⚠️" in message:
-            header_color = "yellow" # 警告改为黄色，视觉更醒目
-
+        
+        if "诊断报告" in message:
+            header_color = "yellow" # 诊断报告 -> 黄色
         elif "失败" in message or "Failed" in message:
-            header_color = "red" # 失败通常需要红色警示
+            header_color = "red"    # 失败 -> 红色
+        elif "警告" in message or "⚠️" in message:
+            header_color = "yellow" # 警告 -> 黄色
+        elif "止盈" in message or "🎉" in message:
+            header_color = "carmine" # 止盈 -> 洋红
+        elif "止损" in message or "😭" in message or "🚑" in message:
+            header_color = "grey"   # 止损 -> 灰色
+        elif "买入" in message or "BUY" in message or "🚀" in message:
+            header_color = "green"  # 买入 -> 绿色
+        elif "卖出" in message or "SELL" in message or "平" in message or "📉" in message or "Close" in message:
+            header_color = "red"    # 卖出 -> 红色
 
             
         payload = {

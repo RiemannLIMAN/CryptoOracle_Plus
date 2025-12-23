@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.14] - 2025-12-23 (Capital Backflow Fix)
+### 💰 Fund Management
+- **Capital Backflow Detection**:
+  - **Problem**: Previously, if a user sold existing assets (Internal Transfer), the sudden increase in USDT was misinterpreted as an "External Deposit", increasing the `deposit_offset`. This "locked" the released funds, preventing the bot from using them (as `Adjusted_Equity` remained unchanged).
+  - **Fix**: Implemented smart backflow detection. If `Adjusted_Equity < Initial_Balance` AND `Deposit_Offset > 0`, the system automatically **decreases the offset** to allow funds to flow back into the tradable pool.
+  - **Benefit**: Ensures that selling assets correctly restores purchasing power up to the configured `initial_balance` limit.
+
 ## [v3.1.13] - 2025-12-22 (Execution Status UI Fix)
 ### 🐛 Bug Fixes
 - **Dashboard UI**: Fixed an issue where the `EXECUTION` column in the console dashboard always showed `N/A`. The trade execution result is now correctly propagated to the UI table.
