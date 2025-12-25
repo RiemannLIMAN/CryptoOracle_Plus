@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.16] - 2025-12-24 (Configurable Aggressive Mode & Unit Display)
+### ✨ UX Improvements
+- **Aggressive Mode Toggle**:
+  - Added `enable_aggressive_mode` to config (default true).
+  - Users can now choose whether to allow AI to override allocation limits on HIGH confidence. If set to `false`, the bot strictly adheres to the `allocation` budget.
+- **Unit Display**:
+  - Logs and notifications now explicitly show trading units: `张 (Cont)` for contracts and coin names (e.g., `ETH`) for spot, eliminating ambiguity.
+
 ## [v3.1.15] - 2025-12-23 (Notification UI Overhaul)
 ### 🎨 UX & Notifications
 - **Lark/Feishu Cards Overhaul**:

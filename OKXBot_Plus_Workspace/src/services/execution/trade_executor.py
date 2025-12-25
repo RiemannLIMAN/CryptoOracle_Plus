@@ -20,6 +20,7 @@ class DeepSeekTrader:
         self.test_mode = common_config['test_mode']
         self.max_slippage = common_config.get('max_slippage_percent', 1.0)
         self.min_confidence = common_config.get('min_confidence', 'MEDIUM')
+        self.enable_aggressive_mode = common_config.get('enable_aggressive_mode', True)
         
         strategy_config = common_config.get('strategy', {})
         self.history_limit = strategy_config.get('history_limit', 20)

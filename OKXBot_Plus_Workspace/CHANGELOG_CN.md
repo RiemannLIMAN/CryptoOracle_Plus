@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.1.16] - 2025-12-24 (Configurable Aggressive Mode & Unit Display)
+### ✨ 体验优化 (UX Improvements)
+- **激进模式开关**:
+  - 新增配置项 `enable_aggressive_mode` (默认 true)。
+  - 用户现在可以选择是否允许 AI 在高信心 (HIGH) 时突破配额限制。设置为 `false` 时，机器人将严格遵守 `allocation` 设定的资金上限，不再动用闲置资金。
+- **单位显示优化**:
+  - 日志和通知中明确区分交易单位。合约交易显示 `张 (Cont)`，现货交易显示币种名称（如 `ETH`），消除了对“数量”含义的歧义。
+
 ## [v3.1.15] - 2025-12-23 (Notification UI Overhaul)
 ### 🎨 体验优化 & 通知升级 (UX & Notifications)
 - **飞书/Lark 卡片重构**:
