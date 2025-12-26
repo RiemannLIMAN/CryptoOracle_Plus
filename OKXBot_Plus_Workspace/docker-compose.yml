@@ -3,7 +3,7 @@ version: '3.8'
 services:
   crypto_oracle:
     build: .
-    image: crypto_oracle:v3.1
+    image: crypto_oracle:v3.2.0
     container_name: crypto_oracle_bot
     restart: unless-stopped
     volumes:
