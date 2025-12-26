@@ -89,7 +89,8 @@ async def send_notification_async(webhook_url, message, title=None):
 
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(webhook_url, json=payload, headers=headers, timeout=5) as response:
+            # [Fix] 添加 ssl=False 以解决 Windows/Mac 下 "certificate verify failed" 报错
+            async with session.post(webhook_url, json=payload, headers=headers, timeout=5, ssl=False) as response:
                 if response.status != 200:
                     logging.getLogger("crypto_oracle").warning(f"Notification failed HTTP {response.status}: {await response.text()}")
     except Exception as e:
