@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2025-12-26
+
+### ✨ 新增功能
+- **激进模式开关**: 在 `config.json` 中新增 `enable_aggressive_mode`，控制是否允许 AI 在高信心下突破配额。
+- **日志优化**: 
+  - 切换为按启动时间戳命名日志文件 (`trading_bot_Timestamp.log`)。
+  - 新增自动清理逻辑，仅保留最近 30 个日志文件。
+- **单位明确**: 交易通知和日志中明确标注“张 (Cont)”或币种，避免歧义。
+
+### 🐛 修复
+- **资金回流**: 修复了卖出后资金未正确释放回闲置池的问题。
+- **打包清理**: 移除了复杂的 PyInstaller 打包流程，回归纯源码轻量化部署。
+
+### 🗑️ 移除
+- 移除了 `build_tools/` 及相关打包脚本，简化项目结构。
+
 ## [v3.1.16] - 2025-12-24 (Configurable Aggressive Mode & Unit Display)
 ### ✨ UX Improvements
 - **Aggressive Mode Toggle**:
