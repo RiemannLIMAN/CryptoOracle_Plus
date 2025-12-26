@@ -25,8 +25,8 @@ chmod +x "$APP_NAME"
 mkdir -p "$LOG_DIR"
 
 echo "🚀 Starting $APP_NAME..."
-echo "📝 Logging to $LOG_DIR/trading_bot.log"
-echo "💡 Use 'tail -f $LOG_DIR/trading_bot.log' to monitor."
+echo "📝 Logging to $LOG_DIR/trading_bot_*.log (New timestamped file)"
+echo "💡 Use 'tail -f $LOG_DIR/trading_bot_*.log' to monitor."
 
 # Run in background
 nohup ./$APP_NAME > /dev/null 2>&1 &

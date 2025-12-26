@@ -26,7 +26,7 @@ BANNER = r"""
 \___/_/   \__, / .___/ \__/\____/   \____/_/   \__,_/\___/_/\___/ 
          /____/_/                                                 
   
-  🤖 CryptoOracle AI Trading System | """ + SYSTEM_VERSION + r"""
+  🤖 CryptoOracle Plus AI Trading System | """ + SYSTEM_VERSION + r"""
   ==================================================================
 """
 
@@ -92,7 +92,7 @@ async def main():
 
     # 将启动脚本中的提示信息也记录到日志
     logger.info("=" * 60)
-    logger.info(f"💡 [实时日志] tail -f log/trading_bot.log")
+    logger.info(f"💡 [实时日志] tail -f log/trading_bot_*.log")
     logger.info(f"💡 [后台进程] ps -ef | grep OKXBot_Plus.py")
     logger.info(f"💡 [停止指令] kill -9 {os.getpid()}")
     logger.info("=" * 60)

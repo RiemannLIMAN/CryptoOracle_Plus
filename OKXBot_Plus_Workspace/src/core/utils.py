@@ -118,14 +118,24 @@ def setup_logger(name="crypto_oracle"):
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
-    # [优化] 使用固定文件名，以便 RotatingFileHandler 能正常工作（文件过大时自动轮转，而不是每次重启都生成新文件）
-    log_filename = os.path.join(log_dir, "trading_bot.log")
+    # [Modified] 使用时间戳命名日志文件，每次启动生成新文件
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filename = os.path.join(log_dir, f"trading_bot_{timestamp}.log")
+    
+    # 清理旧日志 (保留最近 30 个文件)
+    try:
+        log_files = sorted([os.path.join(log_dir, f) for f in os.listdir(log_dir) if f.startswith("trading_bot_") and f.endswith(".log")])
+        while len(log_files) > 30:
+            os.remove(log_files.pop(0)) # 删除最旧的
+    except Exception:
+        pass
 
     # 强制输出到 stdout，确保控制台可见
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     
-    file_handler = RotatingFileHandler(log_filename, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
+    # 既然是每次独立文件，就不需要 RotatingFileHandler 了，直接用 FileHandler
+    file_handler = logging.FileHandler(log_filename, encoding='utf-8')
     file_handler.setLevel(logging.INFO)
 
     logging.basicConfig(
