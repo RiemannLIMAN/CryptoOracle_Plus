@@ -621,13 +621,20 @@ class DeepSeekTrader:
                 unit_str = "张 (Cont)" if self.trade_mode != 'cash' else f"{self.symbol.split('/')[0]}"
                 self._log(f"🚀 买入成功: {trade_amount} {unit_str}")
                 
+                # [Fix] 获取最新余额和估算花费
+                post_balance = await self.get_account_balance()
+                est_cost = trade_amount * current_realtime_price
+
                 msg = f"🚀 **买入执行 (BUY)**\n"
                 msg += f"• 交易对: {self.symbol}\n"
-                msg += f"• 数量: {trade_amount}\n"
-                msg += f"• 价格: ${current_realtime_price:,.2f}\n"
-                msg += f"• 理由: {signal_data['reason']}\n"
-                msg += f"• 信心: {signal_data.get('confidence', 'N/A')}"
-                await self.send_notification(msg)
+                msg += f"• 数量: `{trade_amount} {unit_str}`\n"
+                msg += f"• 价格: `${current_realtime_price:,.2f}`\n"
+                msg += f"• 金额: `{est_cost:.2f} U`\n"
+                msg += f"• 余额: `{post_balance:.2f} U` (Avail)\n"
+                msg += f"• 信心: `{signal_data.get('confidence', 'N/A')}`\n"
+                msg += f"> **理由**: {signal_data['reason']}"
+                
+                await self.send_notification(msg, title=f"🚀 买入执行 | {self.symbol}")
                 return "EXECUTED", f"买入 {trade_amount}"
 
             elif signal_data['signal'] == 'SELL':
