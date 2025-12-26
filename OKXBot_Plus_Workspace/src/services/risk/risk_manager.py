@@ -505,10 +505,28 @@ class RiskManager:
                     self._log(f"🔒 锁定本金模式: 忽略额外资金 {self.deposit_offset:.2f} U，仅管理 {self.smart_baseline:.2f} U")
                 else:
                     self.deposit_offset = 0.0
-                    self._log(f"✅ 初始本金确认: {self.smart_baseline:.2f} U")
+                    self._log(f"✅ 初始本金确认: {self.smart_baseline:.2f} U (资金固定模式)")
         else:
             if not self.smart_baseline:
                 self.smart_baseline = real_total_equity
         
         self.save_state()
         self.is_initialized = True # [Fix] 标记初始化完成
+
+        # [Display] 明确显示运行模式状态
+        mode_logs = []
+        
+        # 1. 资金模式
+        if self.initial_balance and self.initial_balance > 0:
+            mode_logs.append(f"🔒 资金固定模式: ON (限额 {self.initial_balance} U)")
+        else:
+            mode_logs.append("🌊 资金自动模式: ON (跟随账户余额)")
+            
+        # 2. 激进模式
+        # 注意: config.json 中 enable_aggressive_mode 默认为 true
+        if self.config.get('enable_aggressive_mode', True):
+            mode_logs.append("🦁 激进模式: ON (允许高信心重仓)")
+        else:
+            mode_logs.append("🛡️ 激进模式: OFF (严格遵守配额)")
+            
+        self._log(f"⚙️ 系统模式: {' | '.join(mode_logs)}")

@@ -647,12 +647,14 @@ class DeepSeekTrader:
                 if self.trade_mode == 'cash':
                     # 现货卖出
                     await self.exchange.create_market_order(self.symbol, 'sell', trade_amount)
-                    self._log(f"📉 卖出成功: {trade_amount}")
+                    
+                    unit_str = f"{self.symbol.split('/')[0]}"
+                    self._log(f"📉 卖出成功: {trade_amount} {unit_str}")
                     
                     post_balance = await self.get_account_balance()
                     est_revenue = trade_amount * current_realtime_price
                     
-                    msg = f"**数量**: `{trade_amount}`\n"
+                    msg = f"**数量**: `{trade_amount} {unit_str}`\n"
                     msg += f"**价格**: `${current_realtime_price:,.2f}`\n"
                     msg += f"**金额**: `{est_revenue:.2f} U`\n"
                     msg += f"**余额**: `{post_balance:.2f} U` (Avail)\n"
@@ -663,12 +665,14 @@ class DeepSeekTrader:
                 else:
                     # 开空
                     await self.exchange.create_market_order(self.symbol, 'sell', trade_amount, params={'tdMode': self.trade_mode})
-                    self._log(f"📉 开空成功: {trade_amount}")
+                    
+                    unit_str = "张 (Cont)"
+                    self._log(f"📉 开空成功: {trade_amount} {unit_str}")
                     
                     post_balance = await self.get_account_balance()
                     est_cost = trade_amount * current_realtime_price
                     
-                    msg = f"**数量**: `{trade_amount}`\n"
+                    msg = f"**数量**: `{trade_amount} {unit_str}`\n"
                     msg += f"**价格**: `${current_realtime_price:,.2f}`\n"
                     msg += f"**金额**: `{est_cost:.2f} U`\n"
                     msg += f"**余额**: `{post_balance:.2f} U` (Avail)\n"
