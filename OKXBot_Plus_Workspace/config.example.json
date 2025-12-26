@@ -13,6 +13,7 @@
   "trading": {
     "market_type": "swap",      
     "timeframe": "1m",
+    "loop_interval": 15,
     "test_mode": true,
     
     "proxy": "",
@@ -21,7 +22,7 @@
     "enable_aggressive_mode": true,
 
     "strategy": {
-      "history_limit": 20,
+      "history_limit": 50,
       "signal_limit": 30,
       "dynamic_tp": true
     },
@@ -32,7 +33,7 @@
       "max_profit_usdt": 0.0,
       "max_loss_usdt": 0.0,
       "max_profit_rate": 0.2,
-      "max_loss_rate": 0.1
+      "max_loss_rate": 0.15
     }
   },
   "notification": {
@@ -41,7 +42,7 @@
   "symbols": [
     {
       "symbol": "SOL/USDT:USDT",
-      "amount": 0.1,
+      "amount": "auto",
       "allocation": 0.5,
       "leverage": 2,
       "trade_mode": "cross"    
