@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [3.2.6] - 2025-12-27
+
+### 🐛 修复
+- **风控市值计算修复**:
+  - 修复了 `RiskManager` 在初始化盘点和 PnL 估算时，未考虑合约面值 (`contractSize`) 的问题。
+  - **问题**: 对于 `ContractSize > 1` 的币种，资产盘点表中的“持仓市值”和“估算盈亏”此前被严重低估（少算了 Size 倍）。
+  - **修复**: 全面引入 `contract_size` 因子，确保在任何地方计算合约价值时都乘以面值。
+
 ## [3.2.5] - 2025-12-27
 
 ### 🐛 修复

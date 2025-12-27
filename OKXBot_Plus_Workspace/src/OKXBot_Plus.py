@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.2.5 (Fix Unit Conversion)"
+SYSTEM_VERSION = "v3.2.6 (Fix Risk Calculation)"
 
 BANNER = r"""
    _____                  __           ____                  __   

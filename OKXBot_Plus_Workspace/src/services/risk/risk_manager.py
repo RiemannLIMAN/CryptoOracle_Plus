@@ -452,7 +452,9 @@ class RiskManager:
                     # 对于合约，市值估算可能需要更精确，这里简化为 持仓数量 * 价格
                     # 实际上合约价值 = 数量 * 合约面值 * 价格 (如果是币本位) 或者 数量 * 价格 (如果是U本位且单位是币)
                     # OKX U本位合约 size 通常是 币的数量
-                    position_val = holding_amount * current_price
+                    # [Fix] 引入 contract_size 修正市值计算
+                    c_size = pos.get('contract_size', 1.0)
+                    position_val = holding_amount * c_size * current_price
                     # [Fix] 合约模式下，total_position_value 不应累加到 real_total_equity 中
                     # 因为账户权益 (Equity) 已经包含了合约保证金和未实现盈亏
                     # 所以我们只记录 position_val 用于展示，但不加到 total_position_value 中
@@ -470,7 +472,14 @@ class RiskManager:
             pnl_est_str = "-"
             if entry_price > 0 and holding_amount > 0 and current_price > 0:
                 # 简单估算盈亏
-                raw_pnl = (current_price - entry_price) * holding_amount
+                # [Fix] PnL Calculation also needs contract_size
+                c_size = 1.0
+                if trader.trade_mode != 'cash':
+                    pos_tmp = await trader.get_current_position()
+                    if pos_tmp:
+                        c_size = pos_tmp.get('contract_size', 1.0)
+
+                raw_pnl = (current_price - entry_price) * holding_amount * c_size
                 # 如果是做空，盈亏反向
                 if hasattr(trader, 'position_side') and trader.position_side == 'short': 
                      # 这里假设 DeepSeekTrader 有 position_side 属性或者我们需要从 get_current_position 获取
@@ -481,7 +490,7 @@ class RiskManager:
                 if trader.trade_mode != 'cash':
                      pos = await trader.get_current_position()
                      if pos and pos['side'] == 'short':
-                         raw_pnl = (entry_price - current_price) * holding_amount
+                         raw_pnl = (entry_price - current_price) * holding_amount * c_size
 
                 pnl_est_str = f"{raw_pnl:+.2f} U"
 

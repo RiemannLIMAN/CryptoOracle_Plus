@@ -264,13 +264,25 @@ class DeepSeekTrader:
     async def get_current_position(self):
         try:
             positions = await self.exchange.fetch_positions([self.symbol])
+            
+            # [Fix] 获取 ContractSize 以便后续计算准确的持仓价值
+            contract_size = 1.0
+            if self.trade_mode != 'cash':
+                try:
+                    market = self.exchange.market(self.symbol)
+                    contract_size = float(market.get('contractSize', 1.0))
+                    if contract_size <= 0: contract_size = 1.0
+                except:
+                    pass
+
             for pos in positions:
                 if pos['symbol'] == self.symbol:
                     contracts = float(pos['contracts']) if pos['contracts'] else 0
                     if contracts > 0:
                         return {
                             'side': pos['side'],
-                            'size': contracts,
+                            'size': contracts, # 张数
+                            'contract_size': contract_size, # 单张大小
                             'entry_price': float(pos['entryPrice']) if pos['entryPrice'] else 0,
                             'unrealized_pnl': float(pos['unrealizedPnl']) if pos['unrealizedPnl'] else 0,
                             'leverage': float(pos['leverage']) if pos['leverage'] else self.leverage,
@@ -468,7 +480,9 @@ class DeepSeekTrader:
         used_quota = 0
         if current_position:
              # 持仓价值 / 杠杆 = 占用保证金
-             used_quota = (current_position['size'] * current_realtime_price) / self.leverage
+             # [Fix] 必须考虑 contract_size
+             c_size = current_position.get('contract_size', 1.0)
+             used_quota = (current_position['size'] * c_size * current_realtime_price) / self.leverage
         
         remaining_quota = max(0, allocation_usdt_limit - used_quota)
         
