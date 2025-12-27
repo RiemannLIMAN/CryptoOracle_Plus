@@ -484,13 +484,16 @@ class DeepSeekTrader:
         if hasattr(self, 'last_trade_time') and self.last_trade_time:
             time_since_last = time.time() - self.last_trade_time
             
-            # 绝对冷却: 无论信心多高，必须等待 15s (防止程序错误连续下单)
-            if time_since_last < 15:
-                 self._log(f"⏳ 绝对冷却中: 距上次交易仅 {time_since_last:.0f}s < 15s", 'warning')
-                 return "SKIPPED_COOL", f"冷却中 {time_since_last:.0f}s"
+            # [Relaxed] 绝对冷却: 从 15s 降至 3s
+            # 仅用于防止程序逻辑错误导致的毫秒级连发，不影响 HIGH 信心下的瞬时交易
+            if time_since_last < 3:
+                 self._log(f"⏳ 绝对冷却中: 距上次交易仅 {time_since_last:.1f}s < 3s", 'warning')
+                 return "SKIPPED_COOL", f"冷却中 {time_since_last:.1f}s"
             
-            # 普通冷却: 如果信心不足 HIGH，需等待 60s
-            cooldown = 60 
+            # [Relaxed] 普通冷却: 从 60s 降至 30s
+            # 如果信心不足 HIGH，需等待 30s (原 60s)
+            # 如果是 HIGH 信心，则仅受 3s 绝对冷却限制，实现准实时交易
+            cooldown = 30
             if time_since_last < cooldown and not is_high_confidence:
                  self._log(f"⏳ 交易冷却中: 距上次交易仅 {time_since_last:.0f}s < {cooldown}s (非HIGH)", 'warning')
                  return "SKIPPED_COOL", f"冷却中 {time_since_last:.0f}s"

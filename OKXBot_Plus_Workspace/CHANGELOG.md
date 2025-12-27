@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.8] - 2025-12-27
+
+### ⚡ Realtime Trading Optimization
+- **Relaxed Cooldown Mechanism**:
+  - Significantly reduced cooldown periods to improve trade responsiveness, especially for HIGH confidence signals.
+  - **Tier 1 (Absolute)**: Reduced from `15s` to **`3s`**. Now serves only as a technical debounce to prevent API spamming.
+  - **Tier 2 (Normal)**: Reduced from `60s` to **`30s`**. Keeps moderate protection against churn for non-HIGH signals.
+  - **Impact**: **HIGH** confidence trades are now effectively **real-time** (only 3s delay), ensuring the bot won't miss fast-moving market opportunities.
+
 ## [3.3.7] - 2025-12-27
 
 ### 🐛 Bug Fixes
