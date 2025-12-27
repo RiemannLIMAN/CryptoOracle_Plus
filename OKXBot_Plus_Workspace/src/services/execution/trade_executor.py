@@ -496,12 +496,20 @@ class DeepSeekTrader:
         # [Added] 频繁交易风控: 开仓冷却
         # 如果最近一笔交易是在 N 分钟内，且当前信号不是 HIGH 信心，则拦截
         # 防止 AI 在短时间内反复横跳 (Whipsaw)
-        # 需依赖 self.last_trade_time (需在 execute_trade 成功后更新)
+        # [Logic Refined] 即便是 HIGH 信心，如果间隔极短 (如 < 30s)，也可能是 AI 抽风
+        # 所以我们设置一个 "绝对冷却期" (15s) 和 "普通冷却期" (60s)
         if hasattr(self, 'last_trade_time') and self.last_trade_time:
             time_since_last = time.time() - self.last_trade_time
-            cooldown = 60 # 默认 60秒 冷却
+            
+            # 绝对冷却: 无论信心多高，必须等待 15s (防止程序错误连续下单)
+            if time_since_last < 15:
+                 self._log(f"⏳ 绝对冷却中: 距上次交易仅 {time_since_last:.0f}s < 15s", 'warning')
+                 return "SKIPPED_COOL", f"冷却中 {time_since_last:.0f}s"
+            
+            # 普通冷却: 如果信心不足 HIGH，需等待 60s
+            cooldown = 60 
             if time_since_last < cooldown and not is_high_confidence:
-                 self._log(f"⏳ 交易冷却中: 距上次交易仅 {time_since_last:.0f}s < {cooldown}s", 'warning')
+                 self._log(f"⏳ 交易冷却中: 距上次交易仅 {time_since_last:.0f}s < {cooldown}s (非HIGH)", 'warning')
                  return "SKIPPED_COOL", f"冷却中 {time_since_last:.0f}s"
 
 
