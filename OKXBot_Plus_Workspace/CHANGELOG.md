@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.1] - 2025-12-27
+
+### ✨ New Features
+- **Auto-Safety Allocation**:
+  - Implemented automatic capital protection for `allocation: 1.0` (100% quota) when `amount: "auto"`.
+  - The system now forcefully caps single trade size to **60% of the quota**, reserving 40% as a safety buffer for fees and drawdowns.
+  - This prevents "Capital Deadlock" where a full-port trade leaves no funds for adjustments or stop-loss.
+
+### 📚 Documentation
+- **Troubleshooting Guide**:
+  - Added "Capital Deadlock" section to `TRADING_AND_RISK_MANUAL.md`.
+  - Added "False Stop-Loss Trigger" section explaining how to reset `risk_state.json`.
+- **Config Templates**:
+  - Updated `config.example.json` with optimized default values (`history_limit: 30`, `signal_limit: 10`, `loop_interval: 5`) for high-volatility scenarios.
+
 ## [3.2.0] - 2025-12-26
 
 ### ✨ New Features

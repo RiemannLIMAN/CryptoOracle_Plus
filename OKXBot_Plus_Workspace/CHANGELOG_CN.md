@@ -5,6 +5,21 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [3.2.1] - 2025-12-27
+
+### ✨ 新增功能
+- **自动安全配额 (Auto-Safety Allocation)**:
+  - 针对 `allocation: 1.0` (100% 全仓) 且 `amount: "auto"` 的配置，实施了自动资金保护机制。
+  - 系统现在会强制将单笔交易规模限制在 **配额的 60%**，强制保留 40% 作为手续费和回撤的安全垫。
+  - 这有效防止了“资金死锁”问题，即全仓梭哈后没有剩余资金进行补仓或支付手续费。
+
+### 📚 文档更新
+- **故障排查指南**:
+  - 在 `TRADING_AND_RISK_MANUAL.md` 中新增了 "资金死锁 (Capital Deadlock)" 章节。
+  - 新增 "虚假熔断 (False Stop-Loss Trigger)" 章节，解释如何通过重置 `risk_state.json` 解决问题。
+- **配置模板**:
+  - 更新了 `config.example.json`，针对高波动行情优化了默认参数 (`history_limit: 30`, `signal_limit: 10`, `loop_interval: 5`)。
+
 ## [3.2.0] - 2025-12-26
 
 ### ✨ 新增功能
