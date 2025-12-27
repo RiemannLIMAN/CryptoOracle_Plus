@@ -5,6 +5,66 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.4] - 2025-12-27
+
+### 🛡️ Risk Management
+- **Strict Confidence Enforcement**:
+  - Removed the "Confidence Exemption" logic for SELL signals (including stop-loss and trend reversals).
+  - **Context**: Previously, the system allowed `LOW` confidence SELL signals to execute to prevent "missing out" or "delayed stop-loss". However, this caused the AI to panic-sell frequently in choppy markets, leading to significant capital churn (losses).
+  - **New Logic**: Now, ALL trades (open or close) must strictly meet the configured `min_confidence` (default: MEDIUM). If AI confidence is `LOW`, the bot will force `HOLD`, preventing panic selling.
+
+## [3.3.3] - 2025-12-27
+
+### 🐛 Bug Fixes
+- **F-String Format Fix**:
+  - Fixed `Invalid format specifier` error in `ai_strategy.py`.
+  - **Issue**: Python f-strings tried to parse the `{}` inside the JSON template within the prompt.
+  - **Fix**: Escaped JSON braces using double braces `{{ }}`.
+- **Safety Formatting**:
+  - Added `safe_fmt` helper to prevent crashes when formatting missing indicator data (`None` or `'N/A'`).
+
+## [3.3.2] - 2025-12-27
+
+### 🧠 Prompt Engineering
+- **Reasoning Enforcement**:
+  - Updated AI output specification to mandate explicit R/R (Risk/Reward) calculation in the `reason` field (e.g., "Target 2.1 (R/R=1.5)").
+  - This forces the model to mathematically validate the trade before signaling, reducing "micro-profit churn".
+  - Increased default recommended R/R from `> 1.1` to `> 1.2`.
+
+## [3.3.1] - 2025-12-27
+
+### 🧠 Smart Cooldown
+- **Graded Cooldown Mechanism**:
+  - Split cooldown logic into two tiers:
+  - **Tier 1 (Absolute)**: **15s** wait for ALL trades (even HIGH confidence) to prevent program glitches or AI spasms.
+  - **Tier 2 (Normal)**: **60s** wait for non-HIGH confidence trades to filter low-quality frequent signals.
+
+## [3.3.0] - 2025-12-27
+
+### 🛡️ Anti-Churn
+- **Enhanced Micro-Profit Filter**:
+  - Added dynamic profit thresholds based on ADX volatility.
+  - **Choppy Protection**: In low ADX markets, the system demands higher profit margins to close, preventing churn.
+- **Cooldown Mechanism**:
+  - Added a **60s** cooldown for new positions.
+  - Prevents "Whipsaw" trading where AI flips direction too quickly.
+
+## [3.2.9] - 2025-12-27
+
+### 🧠 AI Tuning
+- **De-Biasing**:
+  - Fixed AI bias towards "Shorting" in High Trend mode.
+  - Prompt is now neutral, encouraging "Trend Following" regardless of direction.
+- **Long Logic Boost**:
+  - Explicitly added "Long Signal" criteria (Bottom Fractal, Breakout) to the prompt.
+
+## [3.2.8] - 2025-12-27
+
+### ⚡ Performance
+- **Smart Polling**:
+  - Replaced the fixed `sleep(2)` logic for margin release with a `200ms` smart polling mechanism.
+  - **Effect**: Drastically reduced flip-trade latency from ~2.5s to ~0.3s.
+
 ## [3.2.4] - 2025-12-27
 
 ### 🐛 Fixes
