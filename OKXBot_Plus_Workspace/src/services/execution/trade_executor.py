@@ -817,20 +817,20 @@ class DeepSeekTrader:
                     
                     msg = f"🔄 **平多仓 (Close Long)**\n"
                     msg += f"• 交易对: {self.symbol}\n"
-                msg += f"• 数量: {current_position['size']}\n"
-                # [Fix] 变量 pnl_pct 未定义，如果是非HIGH信心的平仓，上面会定义 pnl_pct，
-                # 但如果是HIGH信心的紧急平仓，会跳过上面的 if 块，导致 pnl_pct 未初始化
-                # 这里重新计算一下，确保变量存在
-                pnl_pct_display = 0.0
-                if current_position.get('entry_price', 0) > 0:
-                    entry = current_position['entry_price']
-                    if current_position['side'] == 'long':
-                        pnl_pct_display = (current_realtime_price - entry) / entry
-                    else:
-                        pnl_pct_display = (entry - current_realtime_price) / entry
-                
-                msg += f"• 盈亏: {pnl_pct_display*100:+.2f}% (估算)\n"
-                msg += f"• 理由: {signal_data['reason']}"
+                    msg += f"• 数量: {current_position['size']}\n"
+                    # [Fix] 变量 pnl_pct 未定义，如果是非HIGH信心的平仓，上面会定义 pnl_pct，
+                    # 但如果是HIGH信心的紧急平仓，会跳过上面的 if 块，导致 pnl_pct 未初始化
+                    # 这里重新计算一下，确保变量存在
+                    pnl_pct_display = 0.0
+                    if current_position.get('entry_price', 0) > 0:
+                        entry = current_position['entry_price']
+                        if current_position['side'] == 'long':
+                            pnl_pct_display = (current_realtime_price - entry) / entry
+                        else:
+                            pnl_pct_display = (entry - current_realtime_price) / entry
+                    
+                    msg += f"• 盈亏: {pnl_pct_display*100:+.2f}% (估算)\n"
+                    msg += f"• 理由: {signal_data['reason']}"
                     await self.send_notification(msg)
                     
                     # [Smart Wait]

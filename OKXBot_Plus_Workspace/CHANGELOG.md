@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.7] - 2025-12-27
+
+### 🐛 Bug Fixes
+- **Indentation Fix**:
+  - Corrected indentation inconsistency in `trade_executor.py` for the "Close Long" logic block.
+  - **Issue**: The previous hotfix introduced mixed indentation (16 vs 20 spaces), which is a syntax error in Python.
+  - **Fix**: Standardized indentation to 20 spaces.
+
 ## [3.3.6] - 2025-12-27
 
 ### 🐛 Bug Fixes

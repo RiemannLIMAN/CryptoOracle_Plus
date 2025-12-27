@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [3.3.7] - 2025-12-27
+
+### 🐛 Bug 修复
+- **代码缩进修复 (IndentationError)**:
+  - 修复了 `trade_executor.py` 中平多仓逻辑块的缩进错误。
+  - **问题**: 在上一次修复变量作用域时，意外导致了 `msg` 构建代码块的缩进不一致（混合使用了 16 和 20 个空格），这会导致 Python 解释器报错或逻辑执行异常。
+  - **修复**: 统一将该代码块调整为标准的 20 个空格缩进，确保代码结构正确。
+
 ## [3.3.6] - 2025-12-27
 
 ### 🐛 Bug 修复
