@@ -628,11 +628,45 @@ class DeepSeekTrader:
         if trade_amount <= 0:
              return "SKIPPED_ZERO", "计算数量为0"
 
+        # [Unit Conversion Fix] 合约模式下，将币数转换为张数 (Contracts)
+        # 必须在下单前进行，否则会因数量放大 ContractSize 倍而导致保证金不足 (Code 51008)
+        final_order_amount = trade_amount
+        contract_size = 1.0
+        
+        if self.trade_mode != 'cash':
+            try:
+                market = self.exchange.market(self.symbol)
+                contract_size = float(market.get('contractSize', 1.0))
+                if contract_size <= 0: contract_size = 1.0
+                
+                # 转换为张数 (向下取整，保证不超额)
+                # OKX 合约通常要求整数张
+                num_contracts = int(trade_amount / contract_size)
+                
+                if num_contracts < 1:
+                    # 如果算出来连一张都买不起，但之前的金额检查通过了，说明是单位问题
+                    # 尝试至少买1张 (如果资金允许)
+                    # 但为了安全，这里先拦截
+                    self._log(f"⚠️ 数量 {trade_amount:.4f} 币不足 1 张合约 (Sz:{contract_size})", 'warning')
+                    return "SKIPPED_MIN", "不足1张合约"
+                
+                final_order_amount = float(num_contracts)
+                
+                # 记录转换日志
+                self._log(f"🔄 单位换算: {trade_amount:.4f} 币 -> {final_order_amount} 张 (Sz:{contract_size})")
+                
+                # 更新 trade_amount 为实际成交的币数，以便后续日志计算金额准确
+                trade_amount = final_order_amount * contract_size
+                
+            except Exception as e:
+                self._log(f"单位换算失败: {e}", 'error')
+                return "FAILED", "单位换算失败"
+
         # 5. 执行
         try:
             if signal_data['signal'] == 'BUY':
                 if current_position and current_position['side'] == 'short':
-                    # 平空
+                    # 平空 (使用持仓自带的 size，已经是张数)
                     await self.exchange.create_market_order(self.symbol, 'buy', current_position['size'], params={'reduceOnly': True})
                     self._log("🔄 平空仓成功")
                     
@@ -643,19 +677,19 @@ class DeepSeekTrader:
                     )
                     await asyncio.sleep(1)
                 
-                # 开多/买入
-                await self.exchange.create_market_order(self.symbol, 'buy', trade_amount, params={'tdMode': self.trade_mode})
+                # 开多/买入 (使用转换后的 final_order_amount)
+                await self.exchange.create_market_order(self.symbol, 'buy', final_order_amount, params={'tdMode': self.trade_mode})
                 
                 unit_str = "张 (Cont)" if self.trade_mode != 'cash' else f"{self.symbol.split('/')[0]}"
-                self._log(f"🚀 买入成功: {trade_amount} {unit_str}")
+                self._log(f"🚀 买入成功: {final_order_amount} {unit_str} (= {trade_amount} Coins)")
                 
                 # [Fix] 获取最新余额和估算花费
                 post_balance = await self.get_account_balance()
-                est_cost = trade_amount * current_realtime_price
+                est_cost = trade_amount * current_realtime_price # trade_amount 已更新为实际币数
 
                 msg = f"🚀 **买入执行 (BUY)**\n"
                 msg += f"• 交易对: {self.symbol}\n"
-                msg += f"• 数量: `{trade_amount} {unit_str}`\n"
+                msg += f"• 数量: `{final_order_amount} {unit_str}`\n"
                 msg += f"• 价格: `${current_realtime_price:,.2f}`\n"
                 msg += f"• 金额: `{est_cost:.2f} U`\n"
                 msg += f"• 余额: `{post_balance:.2f} U` (Avail)\n"
@@ -663,11 +697,11 @@ class DeepSeekTrader:
                 msg += f"> **理由**: {signal_data['reason']}"
                 
                 await self.send_notification(msg, title=f"🚀 买入执行 | {self.symbol}")
-                return "EXECUTED", f"买入 {trade_amount}"
+                return "EXECUTED", f"买入 {final_order_amount}{unit_str}"
 
             elif signal_data['signal'] == 'SELL':
                 if current_position and current_position['side'] == 'long':
-                    # 平多
+                    # 平多 (使用持仓自带的 size，已经是张数)
                     await self.exchange.create_market_order(self.symbol, 'sell', current_position['size'], params={'reduceOnly': True})
                     self._log("🔄 平多仓成功")
                     
@@ -681,33 +715,33 @@ class DeepSeekTrader:
                 
                 if self.trade_mode == 'cash':
                     # 现货卖出
-                    await self.exchange.create_market_order(self.symbol, 'sell', trade_amount)
+                    await self.exchange.create_market_order(self.symbol, 'sell', final_order_amount)
                     
                     unit_str = f"{self.symbol.split('/')[0]}"
-                    self._log(f"📉 卖出成功: {trade_amount} {unit_str}")
+                    self._log(f"📉 卖出成功: {final_order_amount} {unit_str}")
                     
                     post_balance = await self.get_account_balance()
                     est_revenue = trade_amount * current_realtime_price
                     
-                    msg = f"**数量**: `{trade_amount} {unit_str}`\n"
+                    msg = f"**数量**: `{final_order_amount} {unit_str}`\n"
                     msg += f"**价格**: `${current_realtime_price:,.2f}`\n"
                     msg += f"**金额**: `{est_revenue:.2f} U`\n"
                     msg += f"**余额**: `{post_balance:.2f} U` (Avail)\n"
                     msg += f"> **理由**: {signal_data['reason']}"
                     
                     await self.send_notification(msg, title=f"📉 现货卖出 | {self.symbol}")
-                    return "EXECUTED", f"卖出 {trade_amount}"
+                    return "EXECUTED", f"卖出 {final_order_amount}"
                 else:
-                    # 开空
-                    await self.exchange.create_market_order(self.symbol, 'sell', trade_amount, params={'tdMode': self.trade_mode})
+                    # 开空 (使用转换后的 final_order_amount)
+                    await self.exchange.create_market_order(self.symbol, 'sell', final_order_amount, params={'tdMode': self.trade_mode})
                     
                     unit_str = "张 (Cont)"
-                    self._log(f"📉 开空成功: {trade_amount} {unit_str}")
+                    self._log(f"📉 开空成功: {final_order_amount} {unit_str} (= {trade_amount} Coins)")
                     
                     post_balance = await self.get_account_balance()
                     est_cost = trade_amount * current_realtime_price
                     
-                    msg = f"**数量**: `{trade_amount} {unit_str}`\n"
+                    msg = f"**数量**: `{final_order_amount} {unit_str}`\n"
                     msg += f"**价格**: `${current_realtime_price:,.2f}`\n"
                     msg += f"**金额**: `{est_cost:.2f} U`\n"
                     msg += f"**余额**: `{post_balance:.2f} U` (Avail)\n"
@@ -715,7 +749,7 @@ class DeepSeekTrader:
                     msg += f"> **理由**: {signal_data['reason']}"
                     
                     await self.send_notification(msg, title=f"📉 开空执行 | {self.symbol}")
-                    return "EXECUTED", f"开空 {trade_amount}"
+                    return "EXECUTED", f"开空 {final_order_amount}{unit_str}"
 
         except Exception as e:
             msg = str(e)
