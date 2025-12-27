@@ -33,7 +33,9 @@
       "max_profit_usdt": 0.0,
       "max_loss_usdt": 0.0,
       "max_profit_rate": 0.2,
-      "max_loss_rate": 0.15
+      "max_loss_rate": 0.15,
+      "trailing_stop_activation": 0.05,
+      "trailing_stop_callback": 0.01
     }
   },
   "notification": {

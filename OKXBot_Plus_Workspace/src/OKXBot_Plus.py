@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.3.8 (Realtime Optimized)"
+SYSTEM_VERSION = "v3.3.13 (Dual-Watchdog)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -189,105 +189,125 @@ async def main():
     elif 'ms' in timeframe: interval = int(timeframe.replace('ms', '')) / 1000
     elif 's' in timeframe: interval = int(timeframe.replace('s', ''))
     
-    # [强制覆盖] 如果是 1m，尝试读取 loop_interval 配置，默认 15s
-    if timeframe == '1m':
-        custom_interval = config['trading'].get('loop_interval', 15)
-        logger.info(f"⚡ [极速模式 Pro] 配置为 1m，强制轮询间隔为 {custom_interval}s")
-        interval = custom_interval
+    # [通用覆盖] 如果配置了 loop_interval，则优先使用它，不再局限于 1m
+    # 这允许用户设置 timeframe="5m" (AI看大周期) 但 interval=60 (每分钟检查一次信号)
+    custom_interval = config['trading'].get('loop_interval')
+    if custom_interval and isinstance(custom_interval, (int, float)) and custom_interval > 0:
+         logger.info(f"⚡ [自定义轮询] 使用配置的 loop_interval: {custom_interval}s (原 timeframe: {timeframe})")
+         interval = custom_interval
+    elif timeframe == '1m':
+        # 旧的 1m 默认逻辑 (如果没有显式配置 loop_interval，默认 30s)
+        logger.info(f"⚡ [极速模式 Pro] 配置为 1m，默认轮询间隔为 30s")
+        interval = 30
 
     logger.info(f"⏰ 轮询间隔: {interval}秒")
     
+    # [Watchdog] 独立的安全监控线程
+    # 每 5秒 快速检查一次止损，不进行 AI 分析
+    # 这解决了 "长轮询周期" 带来的 "止损不及时" 问题
+    safety_interval = 5.0
+    last_strategy_run = 0.0
+    last_safety_run = 0.0
+    
     try:
         while True:
-            start_ts = time.time()
+            current_ts = time.time()
             
-            # 还原经典分割线样式 (Modified to single line for cleaner look)
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            # logger.info("▼" * 70) 
-            logger.info(f"─" * 60) # 使用单横线代替倒三角，更简洁
-            logger.info(f"⏰ 批次执行开始: {current_time}")
-            # logger.info("▲" * 70)
-            logger.info(f"─" * 60)
+            # --- 1. 高频安全监控 (每5秒) ---
+            if current_ts - last_safety_run >= safety_interval:
+                # 仅在策略未运行时运行安全检查，避免冲突
+                # (虽然 asyncio 是单线程的，但这里是逻辑上的分时复用)
+                
+                # 遍历所有 trader 进行快速检查
+                safety_tasks = [trader.run_safety_check() for trader in traders]
+                safety_results = await asyncio.gather(*safety_tasks, return_exceptions=True)
+                
+                # 如果有触发止损/止盈，打印日志
+                triggered_sl = False
+                for res in safety_results:
+                    if isinstance(res, dict):
+                        if res.get('type') == 'STOP_LOSS':
+                            triggered_sl = True
+                            logger.warning(f"🚨 [WATCHDOG] 触发硬止损: {res['symbol']} (PnL {res['pnl']*100:.2f}%)")
+                        elif res.get('type') == 'TAKE_PROFIT':
+                            triggered_sl = True
+                            logger.info(f"💰 [WATCHDOG] 触发硬止盈: {res['symbol']} (PnL {res['pnl']*100:.2f}%)")
+                
+                last_safety_run = current_ts
             
-            # 1. Risk Check
-            await risk_manager.check()
-            
-            # 2. Parallel Execution
-            tasks = [trader.run() for trader in traders]
-            results = await asyncio.gather(*tasks)
-            
-            # [Added] 结构化表格输出
-            table_lines = []
-            # Header line with timestamp placeholder in logs
-            header = f"📊 MARKET SCAN | {len(results)} Symbols"
-            table_lines.append(header) 
-            table_lines.append("─" * 130)
-            table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
-            table_lines.append("─" * 130)
-            
-            for res in results:
-                if res:
-                    # 颜色与图标装饰
-                    symbol_str = res['symbol'].split(':')[0] # 简化显示，去掉 :USDT
-                    
-                    # 价格变动颜色
-                    change_val = res['change']
-                    change_icon = "🟢" if change_val > 0 else "🔴"
-                    change_str = f"{change_val:+.2f}%"
-                    
-                    # 信号颜色与图标
-                    signal = res['signal']
-                    sig_icon = "✋"
-                    if signal == 'BUY': sig_icon = "🚀"
-                    elif signal == 'SELL': sig_icon = "📉"
-                    
-                    signal_display = f"{sig_icon} {signal}"
-                    
-                    # 信心显示
-                    conf = res['confidence']
-                    conf_display = conf
-                    if conf == 'HIGH': conf_display = "🔥🔥 HIGH"
-                    elif conf == 'MEDIUM': conf_display = "⚡ MED"
-                    elif conf == 'LOW': conf_display = "💤 LOW"
+            # --- 2. 低频策略分析 (每 interval 秒) ---
+            if current_ts - last_strategy_run >= interval:
+                start_ts = time.time()
+                
+                # 还原经典分割线样式
+                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                logger.info(f"─" * 60) 
+                logger.info(f"⏰ 批次执行开始: {current_time}")
+                logger.info(f"─" * 60)
+                
+                # 2.1 Risk Check
+                await risk_manager.check()
+                
+                # 2.2 Parallel Execution
+                tasks = [trader.run() for trader in traders]
+                results = await asyncio.gather(*tasks)
+                
+                # [Added] 结构化表格输出
+                table_lines = []
+                header = f"📊 MARKET SCAN | {len(results)} Symbols"
+                table_lines.append(header) 
+                table_lines.append("─" * 130)
+                table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
+                table_lines.append("─" * 130)
+                
+                for res in results:
+                    if res:
+                        symbol_str = res['symbol'].split(':')[0]
+                        change_val = res['change']
+                        change_icon = "🟢" if change_val > 0 else "🔴"
+                        change_str = f"{change_val:+.2f}%"
+                        
+                        signal = res['signal']
+                        sig_icon = "✋"
+                        if signal == 'BUY': sig_icon = "🚀"
+                        elif signal == 'SELL': sig_icon = "📉"
+                        signal_display = f"{sig_icon} {signal}"
+                        
+                        conf = res['confidence']
+                        conf_display = conf
+                        if conf == 'HIGH': conf_display = "🔥🔥 HIGH"
+                        elif conf == 'MEDIUM': conf_display = "⚡ MED"
+                        elif conf == 'LOW': conf_display = "💤 LOW"
 
-                    # 执行状态显示 [New]
-                    exec_status = res.get('status', 'N/A')
-                    exec_msg = res.get('status_msg', '')
-                    
-                    status_icon = "❓"
-                    if exec_status == 'EXECUTED': status_icon = "✅"
-                    elif exec_status == 'HOLD': status_icon = "⏸️"
-                    elif 'SKIPPED' in exec_status: status_icon = "🚫"
-                    elif exec_status == 'FAILED': status_icon = "❌"
-                    elif exec_status == 'TEST_MODE': status_icon = "🧪"
-                    
-                    # 简化状态显示，去掉冗余前缀
-                    display_status = exec_status.replace('SKIPPED_', '')
-                    if display_status == 'EXECUTED': display_status = 'DONE'
-                    
-                    exec_display = f"{status_icon} {display_status}"
+                        exec_status = res.get('status', 'N/A')
+                        status_icon = "❓"
+                        if exec_status == 'EXECUTED': status_icon = "✅"
+                        elif exec_status == 'HOLD': status_icon = "⏸️"
+                        elif 'SKIPPED' in exec_status: status_icon = "🚫"
+                        elif exec_status == 'FAILED': status_icon = "❌"
+                        elif exec_status == 'TEST_MODE': status_icon = "🧪"
+                        
+                        display_status = exec_status.replace('SKIPPED_', '')
+                        if display_status == 'EXECUTED': display_status = 'DONE'
+                        exec_display = f"{status_icon} {display_status}"
 
-                    # 优先使用 summary (短摘要)，如果没有则使用 reason (截断)
-                    summary_text = res.get('summary', '')
-                    if not summary_text or len(summary_text) == 0:
-                        reason = res['reason'].replace('\n', ' ')
-                        summary_text = (reason[:40] + '...') if len(reason) > 40 else reason
-                    
-                    price_str = f"${res['price']:,.2f}"
-                    
-                    # 格式化打印
-                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
-            
-            table_lines.append("─" * 130)
-            
-            # 使用 logger 输出表格
-            # 通过 strip() 去掉可能导致首行空行的换行符
-            logger.info("\n".join(table_lines))
-            
-            elapsed = time.time() - start_ts
-            sleep_time = max(0.01, interval - elapsed) # 允许毫秒级休眠
-            logger.info(f"💤 本轮耗时 {elapsed:.4f}s, 休眠 {sleep_time:.4f}s...")
-            await asyncio.sleep(sleep_time)
+                        summary_text = res.get('summary', '')
+                        if not summary_text or len(summary_text) == 0:
+                            reason = res['reason'].replace('\n', ' ')
+                            summary_text = (reason[:40] + '...') if len(reason) > 40 else reason
+                        
+                        price_str = f"${res['price']:,.2f}"
+                        table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
+                
+                table_lines.append("─" * 130)
+                logger.info("\n".join(table_lines))
+                
+                elapsed = time.time() - start_ts
+                logger.info(f"💤 本轮策略耗时 {elapsed:.4f}s")
+                last_strategy_run = current_ts
+
+            # 主循环休眠 1s，保持对 watchdog 的响应
+            await asyncio.sleep(1.0)
             
     except KeyboardInterrupt:
         logger.info("🛑 停止中...")

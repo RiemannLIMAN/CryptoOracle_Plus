@@ -44,6 +44,9 @@ class DeepSeekTrader:
         self.signal_history = []
         self.logger = logging.getLogger("crypto_oracle")
         
+        # [Added] 移动止盈水位记录
+        self.high_water_mark = 0.0
+        
     async def initialize(self):
         """Async Initialization"""
         await self.setup_leverage()
@@ -313,8 +316,9 @@ class DeepSeekTrader:
                     ranges.append((high - low) / low * 100)
             avg_volatility = sum(ranges) / len(ranges)
             is_trending = False
-            # [Reverted] 恢复默认趋势判断阈值，保持稳健
-            if adx_value is not None and adx_value > 25:
+            # [Tuning] 将 ADX 趋势阈值从 25 提升至 30
+            # 针对 1m 这种高噪周期，过滤掉弱趋势，防止震荡市被误判为单边行情而追涨
+            if adx_value is not None and adx_value > 30:
                 is_trending = True
             if avg_volatility > 0.5:
                 return "HIGH_TREND" if is_trending else "HIGH_CHOPPY"
@@ -446,35 +450,48 @@ class DeepSeekTrader:
         except Exception:
             pass
 
-        # 3. 卖出微利风控 (仅针对平仓/减仓场景)
+        # 3. 智能平仓风控 (Anti-Whipsaw & Profit Protection)
+        # [Refactored] 统一拦截: 微利平仓 (Profit < Threshold) 和 震荡磨损 (Small Loss & Short Duration)
+        # 适用于 Long->Sell 和 Short->Buy 两种平仓场景
+        
+        is_closing_trade = False
+        pnl_pct = 0.0
+        
+        if current_position:
+            if signal_data['signal'] == 'SELL' and current_position['side'] == 'long':
+                is_closing_trade = True
+                entry = current_position['entry_price']
+                if entry > 0:
+                    pnl_pct = (current_realtime_price - entry) / entry
+            elif signal_data['signal'] == 'BUY' and current_position['side'] == 'short':
+                is_closing_trade = True
+                entry = current_position['entry_price']
+                if entry > 0:
+                    pnl_pct = (entry - current_realtime_price) / entry
+        
         # 如果 AI 信心为 HIGH，则认为是紧急离场，跳过此检查
         is_high_confidence = signal_data.get('confidence', '').upper() == 'HIGH'
-        if signal_data['signal'] == 'SELL' and current_position and not is_high_confidence:
-            pnl_pct = 0
-            entry = current_position['entry_price']
-            if entry > 0:
-                if current_position['side'] == 'long':
-                    pnl_pct = (current_realtime_price - entry) / entry
-                else:
-                    pnl_pct = (entry - current_realtime_price) / entry
-            
-            # [Logic Enhancement] 动态调整最小利润阈值
+        
+        if is_closing_trade and not is_high_confidence:
             # 1. 基础门槛: 双倍手续费 + 滑点
             base_threshold = (self.taker_fee_rate * 2) + 0.0005
             
-            # 2. 波动率惩罚: 如果市场波动小 (ADX低)，则要求更高利润才平仓，避免被噪音洗出去
-            # 如果市场波动大，可以跑得快一点
+            # 2. 波动率惩罚: 如果市场波动小 (ADX低)，则要求更高利润才平仓
             min_profit_threshold = base_threshold
             
-            # [Anti-Churn] 防止频繁小额止盈磨损本金
-            # 只有当浮盈显著大于手续费时才允许平仓
-            # 除非是止损 (pnl < 0)
-            
+            # [Anti-Churn 1] 防止微利平仓 (Profit Interception)
             if 0 <= pnl_pct < min_profit_threshold:
-                # 增加对 "盘整期" 的判断，如果是盘整期，更要拿住
-                # 这里简单处理: 直接拦截微利平仓
                 self._log(f"🛑 拦截微利平仓: 浮盈 {pnl_pct*100:.3f}% < {min_profit_threshold*100:.3f}% (AI信心非HIGH)", 'warning')
                 return "SKIPPED_PROFIT", f"微利拦截 {pnl_pct*100:.2f}%"
+
+            # [Anti-Churn 2] 防止震荡磨损 (Whipsaw Protection)
+            # 如果持仓时间极短 (< 45s) 且 处于微小亏损 (-0.6%以内)，强制拿住，给交易一点呼吸空间
+            # 除非亏损已经扩大 (<= -0.6%) 说明趋势真的反了
+            if hasattr(self, 'last_trade_time') and self.last_trade_time:
+                 holding_seconds = time.time() - self.last_trade_time
+                 if holding_seconds < 45 and -0.006 < pnl_pct < 0:
+                      self._log(f"🛑 拦截震荡磨损: 持仓仅 {holding_seconds:.0f}s, 浮亏 {pnl_pct*100:.3f}% (信心非HIGH)", 'warning')
+                      return "SKIPPED_WHIPSAW", f"震荡保护 {pnl_pct*100:.2f}%"
 
         # [Added] 频繁交易风控: 开仓冷却
         # 如果最近一笔交易是在 N 分钟内，且当前信号不是 HIGH 信心，则拦截
@@ -755,6 +772,11 @@ class DeepSeekTrader:
                     # balance 已由 _wait_for_margin_release 更新
                     equity = await self.get_account_equity() # 虽然 Equity 不变，但 Balance 变了
                     
+                    # [Safe Flip Guard] 稳健反手保护 (平空反手)
+                    if signal_data.get('confidence', '').upper() != 'HIGH':
+                        self._log("🛡️ 稳健模式: 平空完成，信心不足HIGH，暂停反手做多", 'info')
+                        return "CLOSED", "平空完成 (不反手)"
+
                     # 重新计算配额 (简化版，直接复用 allocation_usdt_limit)
                     # 因为 allocation_usdt_limit 基于 initial_balance 或 equity，这两者变化不大
                     # 但 remaining_quota 需要减去 used_quota (此时为0)，所以 remaining_quota = allocation_usdt_limit
@@ -793,13 +815,21 @@ class DeepSeekTrader:
                 await self.exchange.create_market_order(self.symbol, 'buy', final_order_amount, params={'tdMode': self.trade_mode})
                 
                 unit_str = "张 (Cont)" if self.trade_mode != 'cash' else f"{self.symbol.split('/')[0]}"
-                self._log(f"🚀 买入成功: {final_order_amount} {unit_str} (= {trade_amount} Coins)")
+                
+                # [Optimization] 区分 现货买入 和 合约开多 的文案
+                action_verb = "买入"
+                action_title = "买入执行 (BUY)"
+                if self.trade_mode != 'cash':
+                    action_verb = "开多"
+                    action_title = "开多执行 (Open Long)"
+                
+                self._log(f"🚀 {action_verb}成功: {final_order_amount} {unit_str} (= {trade_amount} Coins)")
                 
                 # [Fix] 获取最新余额和估算花费
                 post_balance = await self.get_account_balance()
                 est_cost = trade_amount * current_realtime_price # trade_amount 已更新为实际币数
 
-                msg = f"🚀 **买入执行 (BUY)**\n"
+                msg = f"🚀 **{action_title}**\n"
                 msg += f"• 交易对: {self.symbol}\n"
                 msg += f"• 数量: `{final_order_amount} {unit_str}`\n"
                 msg += f"• 价格: `${current_realtime_price:,.2f}`\n"
@@ -808,9 +838,10 @@ class DeepSeekTrader:
                 msg += f"• 信心: `{signal_data.get('confidence', 'N/A')}`\n"
                 msg += f"> **理由**: {signal_data['reason']}"
                 
-                await self.send_notification(msg, title=f"🚀 买入执行 | {self.symbol}")
+                await self.send_notification(msg, title=f"🚀 {action_verb}执行 | {self.symbol}")
                 self.last_trade_time = time.time() # [Update] 更新最后交易时间
-                return "EXECUTED", f"买入 {final_order_amount}{unit_str}"
+                self.high_water_mark = 0.0 # [Reset] 重置移动止盈水位
+                return "EXECUTED", f"{action_verb} {final_order_amount}{unit_str}"
 
             elif signal_data['signal'] == 'SELL':
                 if current_position and current_position['side'] == 'long':
@@ -847,6 +878,14 @@ class DeepSeekTrader:
                     equity = await self.get_account_equity()
                     remaining_quota = allocation_usdt_limit
                     
+                    # [Safe Flip Guard] 稳健反手保护
+                    # 如果刚刚平了多单，且信心不是 HIGH，则禁止立即反手开空
+                    # 防止在震荡行情中"两头挨打" (Whipsaw)
+                    # 只有 HIGH 信心才允许"平多+开空"一气呵成
+                    if signal_data.get('confidence', '').upper() != 'HIGH':
+                        self._log("🛡️ 稳健模式: 平多完成，信心不足HIGH，暂停反手开空", 'info')
+                        return "CLOSED", "平多完成 (不反手)"
+
                     if self.trade_mode == 'cash':
                          # 现货不能反手开空，逻辑上不应该走到这里 (signal=SELL 且 trade_mode=cash -> 只平仓)
                          pass
@@ -972,6 +1011,115 @@ class DeepSeekTrader:
                 self._log("平仓成功")
         except Exception as e:
             self._log(f"平仓失败: {e}", 'error')
+
+    async def run_safety_check(self):
+        """轻量级安全监控 (仅检查止损)"""
+        try:
+            # 1. 快速获取当前价格
+            ticker = await self.exchange.fetch_ticker(self.symbol)
+            current_price = ticker['last']
+            
+            # 2. 获取持仓
+            pos = await self.get_current_position()
+            if not pos:
+                return None # 空仓无需监控
+                
+            # 3. 计算 PnL
+            pnl_pct = 0.0
+            entry = pos['entry_price']
+            if entry > 0:
+                if pos['side'] == 'long':
+                    pnl_pct = (current_price - entry) / entry
+                else:
+                    pnl_pct = (entry - current_price) / entry
+            
+            # 4. 检查硬止损 (Hard Stop Loss)
+            # 从配置读取最大亏损比例 (默认 -5% 为兜底)
+            max_loss_pct = 0.05 
+            if self.risk_control and 'max_loss_rate' in self.risk_control:
+                max_loss_pct = self.risk_control['max_loss_rate']
+            
+            # 如果配置了金额止损，也换算一下 (简化起见，这里先只看比例)
+            
+            # [Added] 移动止盈 (Trailing Stop) - 捕捉大涨行情
+            # 逻辑: 当盈利超过 activation (如5%) 时启动跟踪，如果从高点回撤超过 callback (如1%) 则止盈
+            trailing_activation = self.risk_control.get('trailing_stop_activation', 0.0)
+            trailing_callback = self.risk_control.get('trailing_stop_callback', 0.0)
+            
+            if trailing_activation > 0 and trailing_callback > 0:
+                # 只有盈利达到激活线才开始记录水位
+                if pnl_pct >= trailing_activation:
+                    if pnl_pct > self.high_water_mark:
+                        self.high_water_mark = pnl_pct
+                        # self._log(f"📈 移动止盈新高: {pnl_pct*100:.2f}% (Activation: {trailing_activation*100}%)", 'info')
+                    
+                    # 检查回撤
+                    drawdown = self.high_water_mark - pnl_pct
+                    if drawdown >= trailing_callback:
+                        self._log(f"📉 [WATCHDOG] 触发移动止盈: 最高 {self.high_water_mark*100:.2f}% -> 当前 {pnl_pct*100:.2f}% (回撤 {drawdown*100:.2f}% >= {trailing_callback*100}%)", 'info')
+                        
+                        fake_signal = {
+                            'signal': 'SELL' if pos['side'] == 'long' else 'BUY',
+                            'confidence': 'HIGH',
+                            'amount': 0,
+                            'reason': f"移动止盈触发 (Trailing Stop): High {self.high_water_mark*100:.1f}% -> Now {pnl_pct*100:.1f}%"
+                        }
+                        await self.execute_trade(fake_signal)
+                        return {
+                            'symbol': self.symbol,
+                            'type': 'TRAILING_STOP',
+                            'pnl': pnl_pct
+                        }
+
+            # 5. 检查硬止盈 (Hard Take Profit) - [New] 双向监控
+            max_profit_pct = 0.0
+            if self.risk_control and 'max_profit_rate' in self.risk_control:
+                max_profit_pct = self.risk_control['max_profit_rate']
+            
+            # 如果配置了有效止盈阈值 (例如 0.2 即 20%)
+            if max_profit_pct > 0 and pnl_pct >= max_profit_pct:
+                self._log(f"💰 触发硬止盈监控: 浮盈 {pnl_pct*100:.2f}% >= {max_profit_pct*100}%", 'info')
+                
+                # 构造一个模拟的 SELL 信号
+                fake_signal = {
+                    'signal': 'SELL' if pos['side'] == 'long' else 'BUY', # 平仓信号
+                    'confidence': 'HIGH', # 强制执行
+                    'amount': 0, # 全平
+                    'reason': f"硬止盈触发 (Safety Check): {pnl_pct*100:.2f}%"
+                }
+                
+                # 执行平仓
+                await self.execute_trade(fake_signal)
+                return {
+                    'symbol': self.symbol,
+                    'type': 'TAKE_PROFIT',
+                    'pnl': pnl_pct
+                }
+
+            if pnl_pct <= -max_loss_pct:
+                self._log(f"🚨 触发硬止损监控: 浮亏 {pnl_pct*100:.2f}% <= -{max_loss_pct*100}%", 'warning')
+                
+                # 构造一个模拟的 SELL 信号
+                fake_signal = {
+                    'signal': 'SELL' if pos['side'] == 'long' else 'BUY', # 平仓信号
+                    'confidence': 'HIGH', # 强制执行
+                    'amount': 0, # 全平
+                    'reason': f"硬止损触发 (Safety Check): {pnl_pct*100:.2f}%"
+                }
+                
+                # 执行平仓
+                await self.execute_trade(fake_signal)
+                return {
+                    'symbol': self.symbol,
+                    'type': 'STOP_LOSS',
+                    'pnl': pnl_pct
+                }
+                
+            return None
+            
+        except Exception as e:
+            # self._log(f"安全监控异常: {e}", 'error')
+            return None
 
     async def run(self):
         """Async 单次运行 - 返回结果给调用者进行统一打印"""

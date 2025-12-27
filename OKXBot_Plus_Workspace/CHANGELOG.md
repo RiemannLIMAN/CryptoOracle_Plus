@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.13] - 2025-12-27
+
+### 🛡️ Risk Enhancement
+- **Watchdog Take Profit**:
+  - **Context**: The previous Watchdog only intercepted losses (Hard Stop-Loss) but ignored profit spikes during strategy sleep intervals.
+  - **New Feature**: Upgraded `run_safety_check` to support **Hard Take Profit**.
+  - **Logic**: If unrealized profit exceeds `max_profit_rate` (e.g., +20%) during the sleep interval, the Watchdog immediately triggers a **HIGH** confidence Close.
+  - **Benefit**: Eliminates the risk of missing "Pump and Dump" profit spikes in the dual-frequency architecture. Captures sudden gains instantly.
+
+## [3.3.12] - 2025-12-27
+
+### 🚀 Architecture Upgrade
+- **Dual-Frequency Polling**:
+  - Implemented a dual-loop architecture to balance "Low Noise" and "Real-time Safety".
+  - **Strategy Loop (Low Freq)**: Runs every **30s/60s**. Handles AI analysis and trading decisions. This filters out market noise and prevents churn.
+  - **Watchdog Loop (High Freq)**: Runs every **5s**. Solely monitors price and checks for Hard Stop-Loss triggers. Lightweight and fast.
+  - **Benefit**: Even if you set the strategy interval to 5 minutes, the bot will still execute a hard stop-loss within 5 seconds of a crash, eliminating the "blind spot" risk of long polling intervals.
+
+## [3.3.11] - 2025-12-27
+
+### 🛡️ Anti-Whipsaw Protection
+- **Enhanced Close Interception**:
+  - Fixed a gap in "Reverse Trade" logic. Now, both **Long -> Sell** and **Short -> Buy** actions are subject to micro-profit checks if AI confidence is not HIGH.
+- **Whipsaw Protection**:
+  - Introduced logic to prevent churn during high-frequency volatility.
+  - **Logic**: If holding duration is less than **45s** AND PnL is within **-0.6%** (normal noise), AND AI confidence is NOT HIGH, the system will **Force HOLD**.
+  - **Goal**: Prevents the bot from realizing small losses repeatedly due to rapid AI signal flipping in choppy markets. Gives the trade some "breathing room".
+
+## [3.3.10] - 2025-12-27
+
+### ✨ UX Improvements
+- **Terminology Distinction**:
+  - Optimized trading verbs in logs and notifications.
+  - **Contract Mode**: Displays as **"Open Long" (开多)** to distinguish from Spot.
+  - **Spot Mode**: Remains **"Buy" (买入)**.
+  - Eliminates semantic confusion when seeing "Buy" in contract trading contexts.
+
 ## [3.3.8] - 2025-12-27
 
 ### ⚡ Realtime Trading Optimization
