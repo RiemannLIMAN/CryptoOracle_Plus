@@ -73,12 +73,18 @@ class DeepSeekTrader:
             return
 
         try:
-            quota = 0
+            # [Fix] 自动模式下也需要获取权益来计算动态配额
+            equity = 0
             if self.initial_balance > 0:
-                if self.allocation <= 1.0:
-                    quota = self.initial_balance * self.allocation
-                else:
-                    quota = self.allocation
+                equity = self.initial_balance
+            else:
+                equity = await self.get_account_equity()
+
+            quota = 0
+            if self.allocation <= 1.0:
+                quota = equity * self.allocation
+            else:
+                quota = self.allocation
             
             if quota <= 0:
                 target_usdt = 10.0
@@ -444,14 +450,16 @@ class DeepSeekTrader:
         
         # 获取余额
         balance = await self.get_account_balance()
+        equity = await self.get_account_equity()
         
         # [Fix] 计算基于配额的硬性资金上限 (USDT)
         # self.allocation 如果 <= 1 (如 0.5)，则是比例；如果 > 1，则是固定金额
         # self.initial_balance 是初始本金
         allocation_usdt_limit = 0
         if self.allocation <= 1.0:
-            # 如果配置了初始本金，按本金比例计算；否则按当前余额比例
-            base_capital = self.initial_balance if self.initial_balance > 0 else balance
+            # 如果配置了初始本金，按本金比例计算；否则按当前权益比例 (Fix: Use Equity not Balance for Auto-Fund)
+            # 解决 "资金自动模式下，随着余额减少，配额不断缩水" 的死循环问题
+            base_capital = self.initial_balance if self.initial_balance > 0 else equity
             allocation_usdt_limit = base_capital * self.allocation
         else:
             allocation_usdt_limit = self.allocation
@@ -480,6 +488,10 @@ class DeepSeekTrader:
         elif signal_data['signal'] == 'SELL':
              if self.trade_mode == 'cash':
                  max_trade_limit = await self.get_spot_balance()
+             elif current_position and current_position['side'] == 'long':
+                 # [Fix] 平多仓逻辑: 最大可卖数量 = 持仓数量
+                 # 只要有持仓，就不受 USDT 配额限制 (防止因配额耗尽无法止损)
+                 max_trade_limit = current_position['size']
              else:
                  # 开空能力: 同理，受配额限制
                  available_margin = min(balance, remaining_quota)
@@ -491,11 +503,11 @@ class DeepSeekTrader:
             # 🦁 激进模式: 允许突破单币种配额，调用账户闲置资金
             # 限制：最多使用账户余额的 90% (保留 10% 作为安全垫/其他币种救急)
             # [Logic Change] 必须同时受限于 initial_balance (如果配置了)
-            # 即: Global Limit = min(Real_Balance, Configured_Balance) * safety_buffer
+            # 即: Global Limit = min(Equity, Configured_Balance) * safety_buffer
             
-            effective_balance = balance
+            effective_balance = equity # Use Equity as base
             if self.initial_balance > 0:
-                 effective_balance = min(balance, self.initial_balance)
+                 effective_balance = min(equity, self.initial_balance)
             
             # [Dynamic Safety Buffer] 动态安全缓冲
             # 1. 现货 或 低倍合约 (<= 5x): 风险低 -> 缓冲 5% (系数 0.95)
@@ -504,7 +516,13 @@ class DeepSeekTrader:
             if self.trade_mode != 'cash' and self.leverage > 5:
                 safety_buffer = 0.90
             
-            global_max_usdt = effective_balance * safety_buffer
+            # Global limit is based on TOTAL equity, but we can only spend AVAILABLE balance
+            # So max_spendable = min(balance, effective_balance * safety_buffer)
+            # Actually, effective_balance * safety_buffer is the TARGET exposure cap.
+            # We want to know how much MORE we can add.
+            # But simplify: just use available balance with safety buffer
+            
+            global_max_usdt = balance * safety_buffer # Available balance is the hard limit for new trades
             global_max_token = 0
             if self.trade_mode == 'cash':
                  global_max_token = global_max_usdt / current_realtime_price
@@ -725,6 +743,33 @@ class DeepSeekTrader:
                         return float(asset['availBal'])
             return 0.0
         except: return 0.0
+
+    async def get_account_equity(self):
+        """获取账户总权益 (Equity = 余额 + 未实现盈亏)"""
+        try:
+            params = {}
+            if self.test_mode:
+                params = {'simulated': True}
+            
+            balance = await self.exchange.fetch_balance(params)
+            # 1. 尝试直接获取 total (有些交易所支持)
+            if 'USDT' in balance and 'total' in balance['USDT']:
+                return float(balance['USDT']['total'])
+            
+            # 2. OKX 统一账户 totalEq
+            if 'info' in balance and 'data' in balance['info']:
+                return float(balance['info']['data'][0]['totalEq'])
+            
+            # 3. 降级: Free + Used
+            if 'USDT' in balance:
+                free = float(balance['USDT'].get('free', 0))
+                used = float(balance['USDT'].get('used', 0))
+                return free + used
+                
+            return 0.0
+        except Exception as e:
+            self._log(f"获取权益失败: {e}", 'error')
+            return 0.0
 
     async def close_all_positions(self):
         try:

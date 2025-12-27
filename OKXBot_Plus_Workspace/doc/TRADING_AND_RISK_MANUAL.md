@@ -1,7 +1,7 @@
 # 核心交易逻辑与资金管理手册 (Trading & Risk Management Manual)
 
-**版本**: v3.1.15 (Notification UI Overhaul)  
-**更新日期**: 2025-12-23  
+**版本**: v3.2.4 (Fix Auto Quota & Close)  
+**更新日期**: 2025-12-27  
 **适用系统**: CryptoOracle AI Trading System (OKXBot_Plus)
 
 ---
@@ -10,7 +10,7 @@
 
 本系统采用**基准资金 (Smart Baseline)** 与 **动态权益 (Dynamic Equity)** 相结合的双轨制资金管理模式，确保在剧烈波动中准确计算盈亏比率。
 
-### 1.1 账户权益计算 (Equity Calculation)
+### 1.1 账户权益计算 (Equity Calculation) **[v3.2.4 Updated]**
 系统优先使用交易所统一账户的 **总权益 (Total Equity)** 作为资金视图，该指标已包含：
 - **可用余额 (Free Balance)**: 未被占用的 USDT。
 - **仓位保证金 (Margin)**: 已被合约仓位占用的保证金。
@@ -22,6 +22,8 @@
 Current_Total_Value = Exchange_Total_Equity (优先) 
                       OR (USDT_Balance + Spot_Market_Value) (降级模式)
 ```
+
+> **重要改进**: 在 v3.2.4 之前，自动配额计算错误地使用了“可用余额”作为基准。这导致用户开仓后，随着余额减少，配额上限也不断降低，最终导致“有钱但系统认为没钱”的死循环。v3.2.4 已修复此问题，**始终以总权益作为计算基准**。
 
 ### 1.2 智能基准资金 (Smart Baseline)
 基准资金是计算账户整体盈亏比例的分母，系统支持两种模式：
@@ -58,6 +60,8 @@ Current_Total_Value = Exchange_Total_Equity (优先)
    - `Account_Max_Buy`: 当前余额支持的最大购买力 (受配额硬性限制)。
    
    > **例外 (Smart Fund Sharing)**: 当 AI 信心为 **HIGH** 时，系统进入“激进模式 (Aggressive Mode)”。此时允许**突破单币种配额**，调用账户中最多 **90%** 的闲置资金（弹性配额），以最大化捕捉高确定性机会。
+
+   > **平仓豁免 (Closing Exemption) [v3.2.4]**: 对于 **平仓 (Close Long/Short)** 操作，系统**不再检查** USDT 资金配额限制。只要账户持有仓位，就允许卖出。这解决了因“资金配额耗尽”而导致无法止损/止盈的严重 Bug。
 
 ---
 
@@ -183,14 +187,30 @@ Current_Total_Value = Exchange_Total_Equity (优先)
 
 **解决方案**:
 1.  **推荐配置**: 将 `config.json` 中的 `allocation` 设置为 **0.3 ~ 0.5** (30% ~ 50%)。
-2.  **自动安全保护 (v3.2.0+)**: 如果您坚持使用 `allocation: 1.0` (100%)，且 `amount` 设为 `"auto"`，系统现在会自动强制仅使用 **60%** 的配额资金开仓，强制保留 40% 的安全垫。
+2.  **自动安全保护 (v3.2.1+)**: 如果您坚持使用 `allocation: 1.0` (100%)，且 `amount` 设为 `"auto"`，系统现在会自动强制仅使用 **60%** 的配额资金开仓，强制保留 40% 的安全垫。
     - **示例**: 配置 `allocation: 1` -> 实际单次使用 60% 资金。
     - **示例**: 配置 `allocation: 0.5` -> 实际单次使用 30% 资金 (0.5 * 0.6)。
 这能确保账户始终保留一半以上的资金作为：
 1.  **安全垫**: 提高强平价格，抵抗波动。
 2.  **机动部队**: 用于执行补仓 (DCA) 或反手 (Stop & Reverse) 操作。
 
-### 6.2 虚假熔断 (False Stop-Loss Trigger)
+### 6.2 配额缩水死循环 (Quota Shrinkage Death Spiral) **[v3.2.4 New]**
+**现象**: 
+在“资金自动模式”下（未配置 `initial_balance`），机器人随着买入操作的进行，后续的“配额”越来越小，甚至变成 0，导致无法继续加仓或操作。
+
+**原因 (已修复)**:
+旧版本逻辑中，自动模式的配额是基于 **可用余额 (Available Balance)** 计算的。
+- 初始: 余额 1000U -> 配额 500U (50%)
+- 买入 500U 后: 余额 500U -> 配额变成 250U (50% * 500)
+- 这显然是错误的，配额不应随仓位增加而减少。
+
+**修复方案 (v3.2.4)**:
+现在的配额计算改为基于 **总权益 (Total Equity)**。
+- 初始: 权益 1000U -> 配额 500U
+- 买入 500U 后: 权益仍为 1000U (假设价格不变) -> 配额仍为 500U
+- 这样确保了机器人始终清楚自己的总资产规模，不会因持仓而“变傻”。
+
+### 6.3 虚假熔断 (False Stop-Loss Trigger)
 **现象**: 配置文件中已将 `initial_balance_usdt` 设为 0，但启动后依然按照旧的本金计算盈亏，导致瞬间触发熔断。
 
 **原因**:
@@ -201,7 +221,7 @@ Current_Total_Value = Exchange_Total_Equity (优先)
 2.  删除 `data/risk_state.json` 文件。
 3.  重启机器人。系统将重新以当前实际余额作为基准。
 
-### 6.3 频繁止损 (Whipsaw)
+### 6.4 频繁止损 (Whipsaw)
 **现象**: 在震荡行情中，AI 频繁买入后立即止损，造成资金磨损。
 
 **原因**:

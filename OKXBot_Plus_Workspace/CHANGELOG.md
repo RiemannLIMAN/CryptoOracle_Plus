@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.4] - 2025-12-27
+
+### 🐛 Fixes
+- **Auto-Fund Mode**: Corrected allocation logic. Now uses **Total Equity** instead of Available Balance as the base, preventing the "Shrinking Quota" bug.
+- **Closing Logic**: Fixed a critical bug where closing positions (SELL) was blocked by "Insufficient Balance" checks. Closing logic now correctly ignores USDT quota limits.
+- **Refactor**: Unified `get_account_equity` logic for accurate capital assessment.
+
 ## [3.2.3] - 2025-12-27
 
 ### ✨ Features
