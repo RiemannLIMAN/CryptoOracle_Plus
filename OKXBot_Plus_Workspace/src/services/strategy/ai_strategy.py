@@ -95,15 +95,15 @@ ADX (14): {adx_str} (趋势强度)"""
         
         # 输出要求
         请严格返回如下JSON格式，不要包含Markdown标记：
-        {{
+        {
             "signal": "BUY" | "SELL" | "HOLD",
-            "reason": "核心逻辑(50字内，使用专业术语，言简意赅但逻辑完整)",
+            "reason": "核心逻辑(必须包含R/R计算，如'突破均线，目标2.1(R/R=1.5)，动能强'，50字内)",
             "summary": "看板摘要(20字内，完整表达核心观点，无需刻意缩写)",
             "stop_loss": 止损价格(数字，必须设置),
-            "take_profit": 止盈价格(数字，建议R/R > 1.1),
+            "take_profit": 止盈价格(数字，建议R/R > 1.2),
             "confidence": "HIGH" | "MEDIUM" | "LOW",
             "amount": 建议交易数量(数字，必须大于 {min_limit_info}，如果信号强烈，建议 {max_buy*0.5:.4f} 左右)
-        }}
+        }
         """
 
     async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001):
