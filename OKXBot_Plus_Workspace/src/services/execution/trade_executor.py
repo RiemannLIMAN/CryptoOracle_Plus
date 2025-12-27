@@ -408,31 +408,10 @@ class DeepSeekTrader:
         current_conf_val = confidence_levels.get(signal_data.get('confidence', 'LOW').upper(), 1)
         min_conf_val = confidence_levels.get(self.min_confidence.upper(), 2)
         
-        # [Fix] 如果是 SELL 信号（开空或平仓），且处于单边下跌趋势 (HIGH_TREND)，则放宽信心要求
-        # 允许 LOW 信心执行，防止踏空暴跌
-        is_strong_downtrend = False
-        try:
-            volatility_status = signal_data.get('volatility_status', 'NORMAL')
-            # 如果 AI 没返回 volatility_status，我们可以尝试从 price_data 里拿（如果传进来的话）
-            # 或者更直接地：如果 AI 建议 SELL 并且理由包含 "下跌趋势"、"空头" 等关键词
-            reason_lower = signal_data.get('reason', '').lower()
-            if "下跌" in reason_lower or "趋势" in reason_lower or "空头" in reason_lower or "downtrend" in reason_lower:
-                 is_strong_downtrend = True
-        except:
-            pass
-
-        # 逻辑优化：
-        # 1. 场景A: 持仓状态下的 SELL (止损/平仓) -> 始终允许 LOW 信心
-        # 2. 场景B: 强趋势下的 SELL (开空) -> 允许 LOW 信心 (防止踏空)
-        if signal_data['signal'] == 'SELL':
-             if current_position and current_position['side'] == 'long':
-                 if current_conf_val < min_conf_val:
-                     self._log(f"⚠️ 信心豁免(止损): 持仓状态下的 SELL，忽略信心阈值")
-                     current_conf_val = max(current_conf_val, 2) # 强制提权到 MEDIUM
-             elif is_strong_downtrend:
-                 if current_conf_val < min_conf_val:
-                     self._log(f"⚠️ 信心豁免(趋势): 检测到下跌趋势描述，允许低信心开空")
-                     current_conf_val = max(current_conf_val, 2) # 强制提权到 MEDIUM
+        # [Strict Confidence Enforcement] 严格信心执行
+        # 移除了所有对 "SELL" 信号的信心豁免逻辑
+        # 即使是止损或趋势做空，也必须满足最低信心要求
+        # 理由: 减少无效的恐慌性止损和频繁的趋势试错
         
         if current_conf_val < min_conf_val:
             self._log(f"✋ 信心不足: {signal_data.get('confidence')} < {self.min_confidence}, 强制观望")
