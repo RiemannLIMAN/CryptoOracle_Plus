@@ -5,7 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.2.2] - 2025-12-27
+## [3.2.3] - 2025-12-27
+
+### ✨ Features
+- **Dynamic Safety Buffer**:
+  - Optimized Aggressive Mode (High Confidence) capital usage logic.
+  - Instead of a fixed 10% buffer (90% usage), the system now dynamically adjusts:
+    - **Spot / Low Leverage (<= 5x)**: **5% Buffer** (Uses 95% of capital) for maximum efficiency.
+    - **High Leverage (> 5x)**: **10% Buffer** (Uses 90% of capital) for safety against volatility.
 
 ### 🐛 Fixes
 - **Asset Initialization Display**:

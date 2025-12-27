@@ -491,13 +491,20 @@ class DeepSeekTrader:
             # 🦁 激进模式: 允许突破单币种配额，调用账户闲置资金
             # 限制：最多使用账户余额的 90% (保留 10% 作为安全垫/其他币种救急)
             # [Logic Change] 必须同时受限于 initial_balance (如果配置了)
-            # 即: Global Limit = min(Real_Balance, Configured_Balance) * 0.9
+            # 即: Global Limit = min(Real_Balance, Configured_Balance) * safety_buffer
             
             effective_balance = balance
             if self.initial_balance > 0:
                  effective_balance = min(balance, self.initial_balance)
             
-            global_max_usdt = effective_balance * 0.90
+            # [Dynamic Safety Buffer] 动态安全缓冲
+            # 1. 现货 或 低倍合约 (<= 5x): 风险低 -> 缓冲 5% (系数 0.95)
+            # 2. 高倍合约 (> 5x): 风险高 -> 缓冲 10% (系数 0.90)
+            safety_buffer = 0.95
+            if self.trade_mode != 'cash' and self.leverage > 5:
+                safety_buffer = 0.90
+            
+            global_max_usdt = effective_balance * safety_buffer
             global_max_token = 0
             if self.trade_mode == 'cash':
                  global_max_token = global_max_usdt / current_realtime_price
