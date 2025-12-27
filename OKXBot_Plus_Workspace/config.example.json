@@ -43,7 +43,7 @@
     {
       "symbol": "SOL/USDT:USDT",
       "amount": "auto",
-      "allocation": 0.5,
+      "allocation": 0.3,
       "leverage": 2,
       "trade_mode": "cross"    
     },
