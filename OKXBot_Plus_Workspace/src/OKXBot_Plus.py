@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.3.13 (Dual-Watchdog)"
+SYSTEM_VERSION = "v3.3.14 (Trailing-Stop)"
 
 BANNER = r"""
    _____                  __           ____                  __   
