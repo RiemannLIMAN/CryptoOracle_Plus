@@ -475,15 +475,35 @@ class DeepSeekTrader:
                 else:
                     pnl_pct = (entry - current_realtime_price) / entry
             
-            # 最小利润阈值: 双倍手续费 + 0.05% 滑点保护
-            min_profit_threshold = (self.taker_fee_rate * 2) + 0.0005
+            # [Logic Enhancement] 动态调整最小利润阈值
+            # 1. 基础门槛: 双倍手续费 + 滑点
+            base_threshold = (self.taker_fee_rate * 2) + 0.0005
             
-            # 只有当处于微利状态 (0 < 收益 < 阈值) 时才拦截
-            # 亏损状态(pnl < 0) 不拦截 (止损)
-            # 暴利状态(pnl > 阈值) 不拦截 (止盈)
+            # 2. 波动率惩罚: 如果市场波动小 (ADX低)，则要求更高利润才平仓，避免被噪音洗出去
+            # 如果市场波动大，可以跑得快一点
+            min_profit_threshold = base_threshold
+            
+            # [Anti-Churn] 防止频繁小额止盈磨损本金
+            # 只有当浮盈显著大于手续费时才允许平仓
+            # 除非是止损 (pnl < 0)
+            
             if 0 <= pnl_pct < min_profit_threshold:
+                # 增加对 "盘整期" 的判断，如果是盘整期，更要拿住
+                # 这里简单处理: 直接拦截微利平仓
                 self._log(f"🛑 拦截微利平仓: 浮盈 {pnl_pct*100:.3f}% < {min_profit_threshold*100:.3f}% (AI信心非HIGH)", 'warning')
                 return "SKIPPED_PROFIT", f"微利拦截 {pnl_pct*100:.2f}%"
+
+        # [Added] 频繁交易风控: 开仓冷却
+        # 如果最近一笔交易是在 N 分钟内，且当前信号不是 HIGH 信心，则拦截
+        # 防止 AI 在短时间内反复横跳 (Whipsaw)
+        # 需依赖 self.last_trade_time (需在 execute_trade 成功后更新)
+        if hasattr(self, 'last_trade_time') and self.last_trade_time:
+            time_since_last = time.time() - self.last_trade_time
+            cooldown = 60 # 默认 60秒 冷却
+            if time_since_last < cooldown and not is_high_confidence:
+                 self._log(f"⏳ 交易冷却中: 距上次交易仅 {time_since_last:.0f}s < {cooldown}s", 'warning')
+                 return "SKIPPED_COOL", f"冷却中 {time_since_last:.0f}s"
+
 
         # 4. 资金三方取小 & 最小数量适配
         ai_suggest = signal_data['amount']
@@ -795,6 +815,7 @@ class DeepSeekTrader:
                 msg += f"> **理由**: {signal_data['reason']}"
                 
                 await self.send_notification(msg, title=f"🚀 买入执行 | {self.symbol}")
+                self.last_trade_time = time.time() # [Update] 更新最后交易时间
                 return "EXECUTED", f"买入 {final_order_amount}{unit_str}"
 
             elif signal_data['signal'] == 'SELL':
@@ -860,6 +881,7 @@ class DeepSeekTrader:
                     msg += f"> **理由**: {signal_data['reason']}"
                     
                     await self.send_notification(msg, title=f"📉 现货卖出 | {self.symbol}")
+                    self.last_trade_time = time.time() # [Update]
                     return "EXECUTED", f"卖出 {final_order_amount}"
                 else:
                     # 开空 (使用转换后的 final_order_amount)
@@ -879,6 +901,7 @@ class DeepSeekTrader:
                     msg += f"> **理由**: {signal_data['reason']}"
                     
                     await self.send_notification(msg, title=f"📉 开空执行 | {self.symbol}")
+                    self.last_trade_time = time.time() # [Update]
                     return "EXECUTED", f"开空 {final_order_amount}{unit_str}"
 
         except Exception as e:

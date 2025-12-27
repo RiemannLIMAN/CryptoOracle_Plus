@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.2.9 (Fix AI Bias)"
+SYSTEM_VERSION = "v3.3.0 (Anti-Churn & Cooldown)"
 
 BANNER = r"""
    _____                  __           ____                  __   
