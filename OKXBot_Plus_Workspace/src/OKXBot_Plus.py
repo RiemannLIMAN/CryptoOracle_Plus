@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.2.7 (Robustness & Flip Fix)"
+SYSTEM_VERSION = "v3.2.8 (Smart Wait)"
 
 BANNER = r"""
    _____                  __           ____                  __   

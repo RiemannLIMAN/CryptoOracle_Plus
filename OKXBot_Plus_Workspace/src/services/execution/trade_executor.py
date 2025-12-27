@@ -377,6 +377,26 @@ class DeepSeekTrader:
         ]
         await self.send_notification("\n".join(report))
 
+    async def _wait_for_margin_release(self, old_balance, timeout=2.0):
+        """[Smart Wait] 智能轮询等待保证金释放，比固定死等更高效"""
+        start_time = time.time()
+        attempt = 0
+        while (time.time() - start_time) < timeout:
+            attempt += 1
+            await asyncio.sleep(0.2) # 200ms 轮询间隔
+            new_balance = await self.get_account_balance()
+            
+            # 判定标准: 余额显著增加 (释放了保证金)
+            # 如果旧余额接近0，只要新余额大于10U就算释放成功
+            # 如果旧余额不为0，要求增加一定比例
+            diff = new_balance - old_balance
+            if diff > 10.0 or (old_balance > 0 and new_balance / old_balance > 1.1):
+                self._log(f"⚡ 保证金快速释放! 耗时: {(time.time() - start_time)*1000:.0f}ms | 余额: {old_balance:.2f} -> {new_balance:.2f}")
+                return new_balance
+        
+        self._log(f"⚠️ 等待保证金超时 ({timeout}s)，继续尝试...", 'warning')
+        return await self.get_account_balance()
+
     async def execute_trade(self, signal_data):
         """执行交易 (Async - Enhanced Logic)"""
         
@@ -708,11 +728,17 @@ class DeepSeekTrader:
                         f"**数量**: `{current_position['size']} {unit_str}`\n> **理由**: {signal_data['reason']}",
                         title=f"🔄 平空仓成功 | {self.symbol}"
                     )
-                    await asyncio.sleep(2) # 增加等待时间，确保保证金释放
-
+                    
+                    # [Smart Wait] 智能等待保证金释放，替代死等 2s
+                    # 记录旧余额以便对比
+                    old_balance_check = balance # 这里用之前的 balance 变量
+                    if old_balance_check <= 0: old_balance_check = 0.1 # 防止除0
+                    
+                    balance = await self._wait_for_margin_release(balance, timeout=2.0)
+                    
                     # [Fix Flip Logic] 平仓后，保证金已释放，需要重新获取最新的余额和配额
                     # 否则后续开仓会使用旧的(较小的)余额，导致"余额不足"
-                    balance = await self.get_account_balance()
+                    # balance 已由 _wait_for_margin_release 更新
                     equity = await self.get_account_equity() # 虽然 Equity 不变，但 Balance 变了
                     
                     # 重新计算配额 (简化版，直接复用 allocation_usdt_limit)
@@ -783,10 +809,15 @@ class DeepSeekTrader:
                     msg += f"• 盈亏: {pnl_pct*100:+.2f}% (估算)\n"
                     msg += f"• 理由: {signal_data['reason']}"
                     await self.send_notification(msg)
-                    await asyncio.sleep(2) # 增加等待时间
+                    
+                    # [Smart Wait]
+                    old_balance_check = balance
+                    if old_balance_check <= 0: old_balance_check = 0.1
+                    
+                    balance = await self._wait_for_margin_release(balance, timeout=2.0)
 
                     # [Fix Flip Logic] 平多后反手开空
-                    balance = await self.get_account_balance()
+                    # balance 已更新
                     equity = await self.get_account_equity()
                     remaining_quota = allocation_usdt_limit
                     
