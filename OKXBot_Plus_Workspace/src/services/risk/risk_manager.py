@@ -418,6 +418,15 @@ class RiskManager:
                 else:
                     quota = trader.allocation
                     allocation_str = "Fixed"
+            else:
+                # [Fix] 如果没有配置 initial_balance (自动模式)，则 quota 基于当前账户权益计算
+                # 这里使用传入的 current_usdt_equity 作为基准
+                if trader.allocation <= 1.0:
+                    quota = current_usdt_equity * trader.allocation
+                    allocation_str = f"{trader.allocation*100:.0f}%"
+                else:
+                    quota = trader.allocation
+                    allocation_str = "Fixed"
             
             holding_amount = 0.0
             position_val = 0.0
