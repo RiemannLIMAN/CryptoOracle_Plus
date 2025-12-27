@@ -144,6 +144,15 @@ class DeepSeekTrader:
             self._log(emoji.emojize(f":gear: 设置杠杆: {self.leverage}x ({self.margin_mode})"))
         except Exception as e:
             self._log(emoji.emojize(f":no_entry: 杠杆设置失败: {e}"), 'error')
+            # [Safety] 尝试获取当前持仓/杠杆信息，告知用户实际运行的杠杆
+            try:
+                positions = await self.exchange.fetch_positions([self.symbol])
+                for pos in positions:
+                    if pos['symbol'] == self.symbol:
+                        actual_lev = pos.get('leverage', 'Unknown')
+                        self._log(f"⚠️ 当前实际运行杠杆: {actual_lev}x", 'warning')
+            except:
+                pass
 
     def calculate_indicators(self, df):
         try:
@@ -568,14 +577,24 @@ class DeepSeekTrader:
                  min_amount = market.get('limits', {}).get('amount', {}).get('min')
                  min_cost = market.get('limits', {}).get('cost', {}).get('min')
                  
-                 if min_amount and trade_amount < min_amount:
-                     if max_trade_limit >= min_amount:
-                         self._log(f"⚠️ 数量 {trade_amount} < 最小限制 {min_amount}，自动提升")
-                         trade_amount = min_amount
+                 # [Fix] 统一单位: min_amount 通常是合约张数 (Contracts)，需转换为币数 (Coins) 进行比较
+                 # 否则会导致 Coins < Contracts (如 50 < 1) 的逻辑错误
+                 contract_size = 1.0
+                 if self.trade_mode != 'cash':
+                     contract_size = float(market.get('contractSize', 1.0))
+                 
+                 min_amount_coins = min_amount
+                 if self.trade_mode != 'cash' and min_amount:
+                     min_amount_coins = min_amount * contract_size
+                 
+                 if min_amount_coins and trade_amount < min_amount_coins:
+                     if max_trade_limit >= min_amount_coins:
+                         self._log(f"⚠️ 数量 {trade_amount} < 最小限制 {min_amount_coins} (Coins)，自动提升")
+                         trade_amount = min_amount_coins
                      else:
-                         self._log(f"🚫 余额不足最小单位 {min_amount}", 'warning')
-                         await self._send_diagnostic_report(trade_amount, min_amount, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, "余额不足以购买最小单位")
-                         return "SKIPPED_MIN", f"少于最小限额 {min_amount}"
+                         self._log(f"🚫 余额不足最小单位 {min_amount_coins} (Coins)", 'warning')
+                         await self._send_diagnostic_report(trade_amount, min_amount_coins, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, "余额不足以购买最小单位")
+                         return "SKIPPED_MIN", f"少于最小限额 {min_amount_coins}"
 
                  if min_cost and (trade_amount * current_realtime_price) < min_cost:
                       # 尝试提升
@@ -689,7 +708,46 @@ class DeepSeekTrader:
                         f"**数量**: `{current_position['size']} {unit_str}`\n> **理由**: {signal_data['reason']}",
                         title=f"🔄 平空仓成功 | {self.symbol}"
                     )
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(2) # 增加等待时间，确保保证金释放
+
+                    # [Fix Flip Logic] 平仓后，保证金已释放，需要重新获取最新的余额和配额
+                    # 否则后续开仓会使用旧的(较小的)余额，导致"余额不足"
+                    balance = await self.get_account_balance()
+                    equity = await self.get_account_equity() # 虽然 Equity 不变，但 Balance 变了
+                    
+                    # 重新计算配额 (简化版，直接复用 allocation_usdt_limit)
+                    # 因为 allocation_usdt_limit 基于 initial_balance 或 equity，这两者变化不大
+                    # 但 remaining_quota 需要减去 used_quota (此时为0)，所以 remaining_quota = allocation_usdt_limit
+                    remaining_quota = allocation_usdt_limit 
+                    
+                    if self.trade_mode == 'cash':
+                        available_usdt = min(balance, remaining_quota)
+                        max_trade_limit = (available_usdt * 0.99) / current_realtime_price
+                    else:
+                        available_margin = min(balance, remaining_quota)
+                        max_trade_limit = (available_margin * self.leverage * 0.99) / current_realtime_price
+                    
+                    # 重新应用稳健模式限制 (AI建议 vs 配额)
+                    if signal_data.get('confidence', '').upper() == 'HIGH':
+                         # Recalculate aggressive limit
+                         global_max_usdt = balance * safety_buffer 
+                         global_max_token = (global_max_usdt * self.leverage) / current_realtime_price
+                         trade_amount = min(ai_suggest, global_max_token)
+                    else:
+                         trade_amount = min(ai_suggest, config_amt, max_trade_limit)
+
+                    # 重新进行最小数量检查 (因为 trade_amount 变了)
+                    # 这里简单处理: 如果太小就放弃开仓，或者依赖后续的 checks
+                    # 由于我们已经到了 execution 阶段，最好是直接更新 final_order_amount
+                    
+                    # 重新计算 contracts
+                    num_contracts = int(trade_amount / contract_size)
+                    final_order_amount = float(num_contracts)
+                    trade_amount = final_order_amount * contract_size
+                    
+                    if num_contracts < 1:
+                        self._log(f"⚠️ 反手开仓资金不足 (Min 1 Cont)，仅平仓", 'warning')
+                        return "PARTIAL", "平空成功，反手资金不足"
                 
                 # 开多/买入 (使用转换后的 final_order_amount)
                 await self.exchange.create_market_order(self.symbol, 'buy', final_order_amount, params={'tdMode': self.trade_mode})
@@ -725,7 +783,34 @@ class DeepSeekTrader:
                     msg += f"• 盈亏: {pnl_pct*100:+.2f}% (估算)\n"
                     msg += f"• 理由: {signal_data['reason']}"
                     await self.send_notification(msg)
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(2) # 增加等待时间
+
+                    # [Fix Flip Logic] 平多后反手开空
+                    balance = await self.get_account_balance()
+                    equity = await self.get_account_equity()
+                    remaining_quota = allocation_usdt_limit
+                    
+                    if self.trade_mode == 'cash':
+                         # 现货不能反手开空，逻辑上不应该走到这里 (signal=SELL 且 trade_mode=cash -> 只平仓)
+                         pass
+                    else:
+                        available_margin = min(balance, remaining_quota)
+                        max_trade_limit = (available_margin * self.leverage * 0.99) / current_realtime_price
+                    
+                        if signal_data.get('confidence', '').upper() == 'HIGH':
+                             global_max_usdt = balance * safety_buffer 
+                             global_max_token = (global_max_usdt * self.leverage) / current_realtime_price
+                             trade_amount = min(ai_suggest, global_max_token)
+                        else:
+                             trade_amount = min(ai_suggest, config_amt, max_trade_limit)
+
+                        num_contracts = int(trade_amount / contract_size)
+                        final_order_amount = float(num_contracts)
+                        trade_amount = final_order_amount * contract_size
+                        
+                        if num_contracts < 1:
+                            self._log(f"⚠️ 反手开仓资金不足 (Min 1 Cont)，仅平仓", 'warning')
+                            return "PARTIAL", "平多成功，反手资金不足"
                 
                 if self.trade_mode == 'cash':
                     # 现货卖出
