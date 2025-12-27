@@ -83,7 +83,10 @@ class DeepSeekTrader:
             if quota <= 0:
                 target_usdt = 10.0
             else:
-                target_usdt = quota * 0.1
+                # [Logic Change] 自动模式下，每次只使用 allocation 的 60%
+                # 这样即使 allocation 配置为 0.5 (50%)，实际单次只用 30%
+                # 留出 40% (即总资金的 20%) 给补仓或安全垫
+                target_usdt = quota * 0.6
             
             market = self.exchange.market(self.symbol)
             min_cost = market.get('limits', {}).get('cost', {}).get('min')
