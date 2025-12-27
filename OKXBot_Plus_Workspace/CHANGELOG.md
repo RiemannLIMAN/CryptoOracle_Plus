@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.3.5] - 2025-12-27
+
+### ⚖️ Balanced Risk Control
+- **Unified Risk Standard**:
+  - Clarified that risk logic is now identical for both **Long** and **Short** directions.
+  - Whether opening long/short or closing long/short, all actions must pass the same **Confidence Threshold** and **Micro-Profit Filter**.
+  - **Goal**: Eliminate directional bias or privilege, ensuring the bot remains equally rigorous in both directions. This prevents frequent trial-and-error in shorting or panic-selling in closing.
+
 ## [3.3.4] - 2025-12-27
 
 ### 🛡️ Risk Management

@@ -413,6 +413,10 @@ class DeepSeekTrader:
         # 即使是止损或趋势做空，也必须满足最低信心要求
         # 理由: 减少无效的恐慌性止损和频繁的趋势试错
         
+        # [Enhancement] 对做空 (Open Short) 信号的额外保护
+        # 如果是 开空 (SELL且无持仓)，建议进一步提高信心门槛，因为做空风险通常大于做多
+        # 但目前为了保持逻辑统一，暂时与做多保持一致，只依赖 min_confidence
+        
         if current_conf_val < min_conf_val:
             self._log(f"✋ 信心不足: {signal_data.get('confidence')} < {self.min_confidence}, 强制观望")
             signal_data['signal'] = 'HOLD'
