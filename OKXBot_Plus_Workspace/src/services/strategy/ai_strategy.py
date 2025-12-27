@@ -40,10 +40,18 @@ class DeepSeekAgent:
             trend = "阳线" if kline['close'] > kline['open'] else "阴线"
             kline_text += f"K线{i + 1}: {trend} 收盘:{kline['close']:.2f} 涨跌:{change:+.2f}%\n"
 
-        rsi_str = f"{ind.get('rsi', 'N/A'):.2f}" if ind.get('rsi') else "N/A"
-        macd_str = f"MACD: {ind.get('macd', 'N/A'):.4f}, Signal: {ind.get('macd_signal', 'N/A'):.4f}, Hist: {ind.get('macd_hist', 'N/A'):.4f}" if ind.get('macd') else "N/A"
-        adx_str = f"{ind.get('adx', 'N/A'):.2f}" if ind.get('adx') else "N/A"
-        bb_str = f"Upper: {ind.get('bb_upper', 'N/A'):.2f}, Lower: {ind.get('bb_lower', 'N/A'):.2f}"
+        # [Safety Check] 防止 'N/A' 被格式化导致报错
+        def safe_fmt(val, fmt=".2f"):
+            try:
+                if val is None or val == 'N/A': return "N/A"
+                return f"{float(val):{fmt}}"
+            except:
+                return "N/A"
+
+        rsi_str = safe_fmt(ind.get('rsi'))
+        macd_str = f"MACD: {safe_fmt(ind.get('macd'), '.4f')}, Signal: {safe_fmt(ind.get('macd_signal'), '.4f')}, Hist: {safe_fmt(ind.get('macd_hist'), '.4f')}"
+        adx_str = safe_fmt(ind.get('adx'))
+        bb_str = f"Upper: {safe_fmt(ind.get('bb_upper'))}, Lower: {safe_fmt(ind.get('bb_lower'))}"
         
         indicator_text = f"""【技术指标】
 RSI (14): {rsi_str}
@@ -95,7 +103,7 @@ ADX (14): {adx_str} (趋势强度)"""
         
         # 输出要求
         请严格返回如下JSON格式，不要包含Markdown标记：
-        {
+        {{
             "signal": "BUY" | "SELL" | "HOLD",
             "reason": "核心逻辑(必须包含R/R计算，如'突破均线，目标2.1(R/R=1.5)，动能强'，50字内)",
             "summary": "看板摘要(20字内，完整表达核心观点，无需刻意缩写)",
@@ -103,7 +111,7 @@ ADX (14): {adx_str} (趋势强度)"""
             "take_profit": 止盈价格(数字，建议R/R > 1.2),
             "confidence": "HIGH" | "MEDIUM" | "LOW",
             "amount": 建议交易数量(数字，必须大于 {min_limit_info}，如果信号强烈，建议 {max_buy*0.5:.4f} 左右)
-        }
+        }}
         """
 
     async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001):

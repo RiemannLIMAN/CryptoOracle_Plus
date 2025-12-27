@@ -5,6 +5,16 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [3.3.3] - 2025-12-27
+
+### 🐛 Bug 修复
+- **格式化字符串修复 (Invalid format specifier)**:
+  - 修复了 `ai_strategy.py` 中 f-string 与 JSON 模板花括号冲突的问题。
+  - **问题**: Python 的 f-string 会尝试解析 `{}` 内的内容，导致 JSON 示例中的 `{ "signal": ... }` 被误读为格式说明符。
+  - **修复**: 使用双花括号 `{{ }}` 对 JSON 模板进行了转义。
+- **指标格式化安全 (Safety Format)**:
+  - 增加了 `safe_fmt` 辅助函数，防止在指标数据缺失（为 `None` 或 `'N/A'`）时，尝试进行浮点数格式化（如 `:.2f`）导致的崩溃。
+
 ## [3.3.2] - 2025-12-27
 
 ### 🧠 提示词增强
