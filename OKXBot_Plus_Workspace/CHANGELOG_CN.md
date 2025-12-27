@@ -5,6 +5,14 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [3.3.6] - 2025-12-27
+
+### 🐛 Bug 修复
+- **变量作用域修复 (UnboundLocalError)**:
+  - 修复了 `trade_executor.py` 中 `pnl_pct` 变量在 **HIGH 信心平仓** 场景下未定义导致的崩溃。
+  - **原因**: 之前的代码只在“微利风控”逻辑块中定义了 `pnl_pct`。如果 AI 信心为 `HIGH`，程序会跳过该逻辑块直接执行平仓，随后在构建通知消息时引用不存在的 `pnl_pct` 变量。
+  - **修复**: 在构建通知消息前，增加了独立的盈亏计算逻辑，确保变量始终可用。
+
 ## [3.3.5] - 2025-12-27
 
 ### ⚖️ 多空平衡风控
