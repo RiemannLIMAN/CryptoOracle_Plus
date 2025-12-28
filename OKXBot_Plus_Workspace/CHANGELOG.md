@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.3.0] - 2025-12-28 (Smart-Calibration & UX Polish)
+### 💰 Risk Management (Smart Calibration)
+- **Realized PnL Check**:
+  - Added `calculate_realized_performance` to fetch the last 100 actual trades from the exchange for calculating win rate and PnL, rejecting local "self-indulgent" calculations.
+- **Auto-Calibration**:
+  - Completely resolved the "fake profit on restart" issue.
+  - The bot now real-time compares "Displayed PnL" with "Realized PnL". If a significant deviation is found (e.g., baseline shift due to restart), it automatically adjusts `deposit_offset` to force zero out fake profits.
+- **Target Equity Perspective**:
+  - Added "Target Equity" display in logs.
+  - Example: `Current 104 U | Target 134 U`. Allows users to see at a glance that although there is 4 U extra (Offset), the target remains a solid +30 U.
+
+### ✨ UX Polish
+- **Log Rotation Upgrade**:
+  - Log filename fixed to `trading_bot.log` (no timestamp), with automatic rotation (keeping last 5 files, 10MB each).
+  - **Benefit**: Finally allows reliable monitoring via `tail -f log/trading_bot.log` without finding new filenames on every restart.
+- **UI Simplification**:
+  - Removed the "Recent Trade History" spam on startup, keeping only the classic equity curve and performance stats for a cleaner interface.
+  - Removed meaningless "No Data" placeholders.
+- **Status First**:
+  - Forced printing of account fund status before every "Batch Analysis" starts. Lets users see if the money is still there before reading AI analysis.
+
+### ⚙️ Config Fix
+- **Auto-Enable Notifications**:
+  - Automatically forces notification to be enabled if `NOTIFICATION_WEBHOOK` is detected in `.env`. No more missed messages due to forgetting to change `enabled: false` in `config.json`.
+
 ## [v3.1.17] - 2025-12-28 (AI Strategy & Dual-Freq)
 ### 🚀 Enhancements
 - **Dual-Frequency Monitoring**:
