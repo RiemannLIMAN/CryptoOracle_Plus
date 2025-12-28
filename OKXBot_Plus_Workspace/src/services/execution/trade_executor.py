@@ -804,7 +804,9 @@ class DeepSeekTrader:
             current_pos, 
             balance, 
             self.amount,
-            self.taker_fee_rate
+            self.taker_fee_rate,
+            self.leverage, # 传入杠杆
+            self.risk_control # 传入风控配置
         )
         
         if signal_data:

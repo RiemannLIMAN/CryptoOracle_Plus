@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.1.17] - 2025-12-28 (AI Strategy & Dual-Freq)
+### 🚀 功能增强 (Enhancements)
+- **双频监控机制 (Dual-Frequency Monitoring)**:
+  - 实现了 `Timeframe` (分析周期) 与 `Loop Interval` (轮询间隔) 的解耦。
+  - 现在支持 "看 15分钟大图" (Timeframe=15m) 的同时，保持 "每 15秒 检查一次" (Loop=15s) 的敏捷反应，完美平衡了趋势判断的稳健性与止损的及时性。
+- **AI 策略全面升级 (AI Strategy Upgrade)**:
+  - **稳定币识别**: 自动检测 USDC/USDT 等稳定币对，自动切换为 "均值回归" 策略，专注于 1.0000 附近的微利套利，拒绝趋势跟踪。
+  - **杠杆感知**: AI 现在能感知当前杠杆倍数，在高杠杆 (如 10x) 环境下会自动收紧止损建议。
+  - **稳健化改造**: 移除了 Prompt 中过于激进的 "鼓励高频交易" 指令，强化了对 ADX 趋势强度和 K 线结构的依赖。
+- **文档更新**: 新增 `doc/PROJECT_COMPLETE_FLOW.md`，包含核心逻辑详解与常见问题解答。
+
 ## [v3.1.16] - 2025-12-28 (Short Protection Fix)
 ### 🐛 关键修复 (Critical Fix)
 - **做空止损失效 (Short Stop-Loss Gap)**:

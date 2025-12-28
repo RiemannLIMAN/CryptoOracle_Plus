@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.17] - 2025-12-28 (AI Strategy & Dual-Freq)
+### 🚀 Enhancements
+- **Dual-Frequency Monitoring**:
+  - Decoupled `Timeframe` (Analysis Period) from `Loop Interval` (Polling Frequency).
+  - Now supports analyzing "15m Charts" for stability while polling "Every 15s" for agility, balancing trend detection with rapid stop-loss reaction.
+- **AI Strategy Upgrade**:
+  - **Stablecoin Recognition**: Automatically detects stablecoin pairs (e.g., USDC/USDT) and switches to "Mean Reversion" strategy, focusing on peg arbitrage instead of trend following.
+  - **Leverage Awareness**: AI is now aware of the current leverage multiplier and automatically tightens stop-loss suggestions under high leverage.
+  - **Robustness**: Removed aggressive "high-frequency trading" prompts, enforcing stricter reliance on ADX trend strength and K-line structure.
+- **Documentation**: Added `doc/PROJECT_COMPLETE_FLOW.md` with core logic explanation and FAQs.
+
 ## [v3.1.16] - 2025-12-28 (Short Protection Fix)
 ### 🐛 Critical Fix
 - **Short Stop-Loss Gap**:

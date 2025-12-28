@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.1.16 (Short Protection Fix)"
+SYSTEM_VERSION = "v3.1.17 (AI Strategy & Dual-Freq)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -177,7 +177,7 @@ async def main():
     # --- 进入主循环 ---
     timeframe = config['trading']['timeframe']
     
-    # [Hack] 即使配置是 "1m"，我们依然可以强制更快的轮询速度
+    # [Hack] 即使配置是 "15m"，我们依然可以强制更快的轮询速度
     # 如果用户想在 config.json 里写 "1m" 来避免报错，但又想 30s 跑一次
     # 我们可以在这里硬编码覆盖 interval
     
@@ -189,11 +189,14 @@ async def main():
     elif 'ms' in timeframe: interval = int(timeframe.replace('ms', '')) / 1000
     elif 's' in timeframe: interval = int(timeframe.replace('s', ''))
     
-    # [强制覆盖] 如果是 1m，尝试读取 loop_interval 配置，默认 15s
-    if timeframe == '1m':
-        custom_interval = config['trading'].get('loop_interval', 15)
-        logger.info(f"⚡ [极速模式 Pro] 配置为 1m，强制轮询间隔为 {custom_interval}s")
+    # [方案 A] 强制使用 loop_interval (如果存在)，与 timeframe 解耦
+    # 这样可以实现：Timeframe="15m" (看15分钟图)，但每 15秒 (loop_interval) 检查一次
+    custom_interval = config['trading'].get('loop_interval')
+    if custom_interval and isinstance(custom_interval, (int, float)) and custom_interval > 0:
+        logger.info(f"⚡ [双频模式] K线周期: {timeframe} | 轮询间隔: {custom_interval}s")
         interval = custom_interval
+    else:
+        logger.info(f"⏰ 轮询间隔: {interval}秒 (跟随 Timeframe)")
 
     logger.info(f"⏰ 轮询间隔: {interval}秒")
     
