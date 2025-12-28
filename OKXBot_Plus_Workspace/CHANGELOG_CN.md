@@ -5,6 +5,19 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.3.4] - 2025-12-28 (Cost Awareness)
+### 🛡️ 交易防磨损 (Cost Awareness)
+- **交易成本感知 (Cost Awareness)**:
+  - 在 AI Prompt 中明确计算了手续费和资金费率的磨损比例。
+  - 强制 AI 遵守“预期利润 > 3倍成本”的决策原则。
+  - **注意**：移除了硬性的时间冷却限制，给予 AI 在极端行情下追单的自由，但 AI 需自行承担成本评估责任。
+
+## [v3.3.3] - 2025-12-28 (Fix)
+### 🐛 Bug 修复
+- **修复做空加仓的满仓逻辑**:
+  - 之前只在 "买入 (BUY)" 侧修复了满仓报错逻辑。
+  - 现已同步修复 "卖出 (SELL/Short)" 侧的逻辑。现在做空加仓遇到余额不足时，也会正确显示 "🔒 [满仓保护]"，而不是报错。
+
 ## [v3.3.2] - 2025-12-28 (Hotfix)
 ### 🐛 Bug 修复
 - **修复 NameError**: 

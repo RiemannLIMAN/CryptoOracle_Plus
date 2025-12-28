@@ -46,6 +46,9 @@ class DeepSeekTrader:
     async def initialize(self):
         """Async Initialization"""
         await self.setup_leverage()
+        # [Fix] 使用内部已有的 _update_fee_rate 方法，避免重复定义
+        if hasattr(self, '_update_fee_rate'):
+            await self._update_fee_rate()
 
     def _log(self, msg, level='info'):
         if level == 'info':
@@ -814,7 +817,19 @@ class DeepSeekTrader:
                              self._log(f"⚠️ 已持有 Short 仓位 ({current_position['size']})，跳过重复开仓 (信心非HIGH)", 'warning')
                              return "HOLD_DUP", "已持仓(防重)"
 
-                    # [Logic Fix] 无论是否是反手，都需要检查最小/最大数量限制
+                    # [Logic Fix] 反手开仓 (Flip) 逻辑增强
+                    # 如果当前有 Short 仓位，且正在 SELL 逻辑里，说明是加仓或反手？
+                    # 等等，如果 signal 是 SELL，且当前持有 Short，那就是加仓。
+                    # 如果 signal 是 SELL，且当前持有 Long，那已经在上面平多 (Close Long) 了。
+                    # 所以走到这里 (trade_amount > 0)，要么是：
+                    # 1. 空仓 -> 开空
+                    # 2. 持有 Long -> 平多后 -> 反手开空
+                    # 3. 持有 Short -> 加仓空
+                    
+                    # 关键修复：如果是反手 (之前持有 Long，现在这里 trade_amount > 0 要开空)，
+                    # 此时保证金可能还没释放回来（如果没 await sleep），或者被视为开新仓检查。
+                    # 我们需要确保 should_check_min 逻辑正确。
+                    
                     if trade_amount > 0:
                          # 开仓检查最小数量
                          try:
@@ -838,6 +853,12 @@ class DeepSeekTrader:
                              # [Fix] 但是如果是合约反手 (trade_mode != cash)，即使是 is_closing 也需要检查，因为我们实际上是在开新仓
                              should_check_min = not is_closing or self.trade_mode != 'cash'
                              
+                             # [New] 如果是反手开空 (Flip to Short)，且之前有 Long 仓位 (说明刚平掉)，
+                             # 这种情况下，我们应该允许即使余额看起来紧张也尝试下单 (因为平仓会释放保证金)
+                             # 但这里很难判断之前是否持有 Long，因为 current_position 是传入时的快照。
+                             # 如果 current_position['side'] == 'long'，说明刚才执行了平多。
+                             is_flipping = current_position and current_position['side'] == 'long'
+                             
                              if should_check_min:
                                  if min_amount_coins and trade_amount < min_amount_coins:
                                      if max_trade_limit >= min_amount_coins:
@@ -847,9 +868,28 @@ class DeepSeekTrader:
                                          if self.trade_mode != 'cash':
                                              final_order_amount = int(trade_amount / contract_size)
                                      else:
-                                         self._log(f"🚫 余额不足最小单位 {min_amount_coins:.6f}", 'warning')
-                                         await self._send_diagnostic_report(trade_amount, min_amount_coins, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, "余额不足以购买最小单位")
-                                         return "SKIPPED_MIN", f"少于最小限额 {min_amount_coins}"
+                                         # [New] 如果是反手 (Flipping) 导致的余额计算不足，可能是因为平仓资金还没到账，
+                                         # 或者计算 max_trade_limit 时用的是旧余额。
+                                         # 我们尝试强制执行 (让交易所去判断)，而不是在这里拦截。
+                                         if is_flipping:
+                                              self._log(f"🔄 [反手保护] 余额计算可能滞后，强制尝试反手开空...", 'info')
+                                              # 强制提升到最小数量
+                                              trade_amount = min_amount_coins
+                                              final_order_amount = int(trade_amount / contract_size)
+                                         else:
+                                             # [New] 如果是加仓场景 (Pyramiding) 导致的余额不足，则不算错误，而是满仓保护
+                                             is_pyramiding = current_position and (
+                                                 (signal_data['signal'] == 'BUY' and current_position['side'] == 'long') or
+                                                 (signal_data['signal'] == 'SELL' and current_position['side'] == 'short')
+                                             )
+                                             
+                                             if is_pyramiding:
+                                                 self._log(f"🔒 [满仓保护] 资金已打满，无法加仓，继续持有当前仓位让利润奔跑", 'info')
+                                                 return "SKIPPED_FULL", "满仓持有中"
+                                             else:
+                                                 self._log(f"🚫 余额不足最小单位 {min_amount_coins:.6f}", 'warning')
+                                                 await self._send_diagnostic_report(trade_amount, min_amount_coins, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, "余额不足以购买最小单位")
+                                                 return "SKIPPED_MIN", f"少于最小限额 {min_amount_coins}"
 
                                  if min_cost and (trade_amount * current_realtime_price) < min_cost:
                                      # 尝试提升
@@ -861,9 +901,24 @@ class DeepSeekTrader:
                                          if self.trade_mode != 'cash':
                                              final_order_amount = int(trade_amount / contract_size)
                                      else:
-                                         self._log(f"🚫 余额不足最小金额 {min_cost}U", 'warning')
-                                         await self._send_diagnostic_report(trade_amount, min_cost, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, f"余额不足最小金额 (需 {min_cost}U)")
-                                         return "SKIPPED_MIN", f"金额 < {min_cost}U"
+                                         if is_flipping:
+                                              self._log(f"🔄 [反手保护] 金额计算可能滞后，强制尝试反手开空...", 'info')
+                                              trade_amount = req_amount
+                                              final_order_amount = int(trade_amount / contract_size)
+                                         else:
+                                              # [New] 同上，如果是加仓场景，不算错误
+                                              is_pyramiding = current_position and (
+                                                  (signal_data['signal'] == 'BUY' and current_position['side'] == 'long') or
+                                                  (signal_data['signal'] == 'SELL' and current_position['side'] == 'short')
+                                              )
+                                              
+                                              if is_pyramiding:
+                                                  self._log(f"🔒 [满仓保护] 资金已打满，无法加仓，继续持有当前仓位让利润奔跑", 'info')
+                                                  return "SKIPPED_FULL", "满仓持有中"
+                                              else:
+                                                  self._log(f"🚫 余额不足最小金额 {min_cost}U", 'warning')
+                                                  await self._send_diagnostic_report(trade_amount, min_cost, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, f"余额不足最小金额 (需 {min_cost}U)")
+                                                  return "SKIPPED_MIN", f"金额 < {min_cost}U"
 
                              if max_amount_coins and trade_amount > max_amount_coins:
                                   self._log(f"⚠️ 数量 {trade_amount} > 市场最大限制 {max_amount_coins}，自动截断")
@@ -1050,6 +1105,17 @@ class DeepSeekTrader:
             if equity > 0:
                 current_pnl = equity - self.initial_balance
 
+        # [New] 获取资金费率 (Funding Rate)
+        funding_rate = 0.0
+        try:
+             # 仅合约模式需要获取资金费率
+             if self.trade_mode != 'cash':
+                 fr_data = await self.exchange.fetch_funding_rate(self.symbol)
+                 if fr_data:
+                     funding_rate = float(fr_data.get('fundingRate', 0))
+        except:
+             pass
+
         signal_data = await self.agent.analyze(
             self.symbol, 
             self.timeframe, 
@@ -1060,7 +1126,8 @@ class DeepSeekTrader:
             self.taker_fee_rate,
             self.leverage, # 传入杠杆
             self.risk_control, # 传入风控配置
-            current_pnl # [New] 传入当前账户总盈亏
+            current_pnl, # [New] 传入当前账户总盈亏
+            funding_rate # [New] 传入资金费率
         )
         
         if signal_data:

@@ -47,12 +47,45 @@ class DeepSeekAgent:
         else:
             return "你是一位敏锐的波段交易员。当前市场波动正常。请基于 K 线结构寻找机会。\n1. 顺势交易：如果趋势明确（如连续阴跌），请果断建议顺势开单，不要等待完美回调。\n2. 关键位：如果价格跌破支撑或突破压力，立即发出信号。\n3. 允许 LOW 信心试错：如果不确定性较高但盈亏比划算，可以给出 LOW 信心建议。"
 
-    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control, current_account_pnl=0.0, current_pos=None):
+    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control, current_account_pnl=0.0, current_pos=None, funding_rate=0.0):
         ind = price_data.get('indicators', {})
         min_limit_info = price_data.get('min_limit_info', '0.01')
         min_notional_info = price_data.get('min_notional_info', '5.0')
         
         is_stable = self._is_stable_coin_pair(symbol)
+        
+        # [New] 交易成本分析 (Cost Awareness)
+        fee_cost_pct = taker_fee_rate * 100
+        # 资金费率 (Funding Fee)
+        funding_desc = "无"
+        if funding_rate != 0:
+            funding_desc = f"{funding_rate*100:.4f}%"
+            if funding_rate > 0: funding_desc += " (多付空收)"
+            else: funding_desc += " (空付多收)"
+            
+        cost_msg = f"""
+        💰 **交易成本分析 (Cost Awareness)**:
+        - 手续费 (Taker): {fee_cost_pct:.3f}% (单边)，一开一平需覆盖 {fee_cost_pct*2:.3f}% 的涨幅才能回本。
+        - 资金费率: {funding_desc}。如果持仓方向与费率方向不利（如做多且费率为正），每8小时会被扣费。
+        - **决策原则**: 除非预期利润 > 3倍成本 (>{fee_cost_pct*6:.3f}%)，否则不要频繁开仓。拒绝无效磨损！
+        """
+        
+        # [Critical] 明确信号定义 (防止反手失败)
+        signal_def_msg = ""
+        if current_pos and current_pos['side'] == 'short':
+             signal_def_msg = """
+        ⚠️ **当前持有空单 (Short)，请注意信号定义**:
+        - **BUY** = 平空 (Close Short) / 止盈 / 止损 / 反手开多。
+        - **SELL** = 加仓空单 (Pyramiding)。如果已满仓，SELL 信号将被忽略。
+        - **想反手做多？** 请务必发送 **BUY** 信号！不要发 SELL！
+             """
+        elif current_pos and current_pos['side'] == 'long':
+             signal_def_msg = """
+        ⚠️ **当前持有多单 (Long)，请注意信号定义**:
+        - **SELL** = 平多 (Close Long) / 止盈 / 止损 / 反手开空。
+        - **BUY** = 加仓多单 (Pyramiding)。如果已满仓，BUY 信号将被忽略。
+        - **想反手开空？** 请务必发送 **SELL** 信号！不要发 BUY！
+             """
         
         # 提取风控目标
         max_profit_usdt = risk_control.get('max_profit_usdt', 0)
@@ -139,17 +172,18 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
         # [New] 资金耗尽预警
         min_notional_val = to_float(min_notional_info) or 5.0
         fund_status_msg = ""
+        # [Fix] 这里的 balance 是可用余额 (Avail)。如果 < 5U，说明真的没钱了
         if balance < min_notional_val:
             fund_status_msg = f"""
-        🔴 **严重警告：资金已耗尽**
-        当前可用余额 ({balance:.2f} U) 已不足最小下单金额 ({min_notional_val} U)。
-        这意味着你 **无法再开新仓**，也无法加仓！
-        请务必注意：
-        1. **严禁建议 BUY (加仓)**：系统无法执行，只会报错。
-        2. **专注于持仓管理**：你现在只能建议 HOLD (持仓观望) 或 SELL (平仓/减仓)。
-        3. **平仓释放资金**：如果趋势反转，必须果断建议 SELL 平仓，这将释放保证金，让你重新获得开仓能力。
+        � **状态更新：资金已满仓 (Full Position)**
+        当前可用余额 ({balance:.2f} U) 已耗尽，说明资金利用率已达 100%。
+        
+        【你的决策逻辑需调整】：
+        1. **关于加仓 (BUY)**：虽然你仍可以建议 BUY (表达你看涨的信心)，但请知悉系统将无法执行，会显示 "🔒 满仓持有"。
+        2. **重点转向 (Focus)**：请把注意力从 "寻找买点" 转移到 "持仓管理" 和 "寻找卖点"。
+        3. **风险评估**：既然已满仓，风险敞口最大。请更严格地审视 K 线结构，一旦发现趋势反转信号，必须果断建议 SELL (减仓/平仓) 以锁定利润或止损。
             """
-
+        
         # 计算最大可买数量 (简单估算)
         max_buy_token = 0
         if price_data.get('price', 0) > 0:
@@ -182,9 +216,11 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
         周期: {timeframe}
         当前价格: ${price_data['price']:,.4f}
         阶段涨跌: {price_data['price_change']:+.2f}%
+        {cost_msg}
         
         # 账户与风险
         当前持仓: {position_text}
+        {signal_def_msg}
         可用余额: {balance:.2f} U
         当前杠杆: {leverage}x (高风险!)
         {risk_msg}
@@ -219,7 +255,7 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
         }}
         """
 
-    async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0):
+    async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0):
         """
         调用 DeepSeek 进行市场分析
         """
@@ -236,7 +272,7 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
                 position_text = f"{current_pos['side']}仓, 数量:{current_pos['size']}, 浮盈:{pnl:.2f}U"
 
             prompt = self._build_user_prompt(
-                symbol, timeframe, price_data, balance, position_text, role_prompt, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos
+                symbol, timeframe, price_data, balance, position_text, role_prompt, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate
             )
 
             # self.logger.info(f"[{symbol}] ⏳ 请求 DeepSeek (Async)...")

@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.3.4] - 2025-12-28 (Cost Awareness)
+### 🛡️ Cost Awareness
+- **Cost Awareness Logic**:
+  - AI Prompt now explicitly calculates and displays trading fees and funding rates.
+  - Enforces a "Profit > 3x Cost" decision principle for AI.
+  - **Note**: Hard-coded time cooldowns have been removed to allow AI to chase extreme momentum, but AI must self-assess the cost.
+
+## [v3.3.3] - 2025-12-28 (Fix)
+### 🐛 Bug Fixes
+- **Fixed Full-Lock Logic for Short Side**:
+  - Previously, the "Full Position" error suppression was only applied to the BUY side.
+  - Now, it is also applied to the SELL (Short) side. Pyramiding into a short position with insufficient funds will now correctly show "🔒 Full Position Protection" instead of an error.
+
 ## [v3.3.2] - 2025-12-28 (Hotfix)
 ### 🐛 Bug Fixes
 - **Fixed NameError**: 
