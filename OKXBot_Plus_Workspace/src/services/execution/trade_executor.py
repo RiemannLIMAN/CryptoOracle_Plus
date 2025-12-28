@@ -222,11 +222,15 @@ class DeepSeekTrader:
             
             # 显式传递最小交易单位给 AI
             min_limit_info = "0.01"
+            min_notional_info = "5.0"
             try:
                 market = self.exchange.market(self.symbol)
                 min_amount = market.get('limits', {}).get('amount', {}).get('min')
                 if min_amount:
                     min_limit_info = str(min_amount)
+                min_cost = market.get('limits', {}).get('cost', {}).get('min')
+                if min_cost:
+                    min_notional_info = str(min_cost)
             except:
                 pass
 
@@ -245,7 +249,8 @@ class DeepSeekTrader:
                 # 这里改为使用 dynamic feed_limit
                 'kline_data': df[['timestamp', 'open', 'high', 'low', 'close', 'volume']].tail(feed_limit).to_dict('records'),
                 'indicators': indicators,
-                'min_limit_info': min_limit_info
+                'min_limit_info': min_limit_info,
+                'min_notional_info': min_notional_info
             }
         except Exception as e:
             self._log(f"获取K线数据失败: {e}", 'error')
@@ -493,14 +498,34 @@ class DeepSeekTrader:
             if self.initial_balance > 0:
                  effective_balance = min(balance, self.initial_balance)
             
-            global_max_usdt = effective_balance * 0.90
-            global_max_token = 0
-            if self.trade_mode == 'cash':
-                 global_max_token = global_max_usdt / current_realtime_price
-            else:
-                 global_max_token = (global_max_usdt * self.leverage) / current_realtime_price
+            # 扣除当前持仓占用的保证金，计算剩余可用资金
+            # 注意: 这里计算的是 "整个 Bot" 的剩余资金
+            used_margin = 0
+            if current_position:
+                 used_margin = (current_position['size'] * current_realtime_price) / self.leverage
             
-            trade_amount = min(ai_suggest, global_max_token)
+            available_capital = max(0, effective_balance - used_margin)
+
+            # [Logic Fix] 如果是反手信号 (Flip)，预期会释放当前保证金
+            # 否则如果满仓时反手，available_capital 接近 0，会导致无法开出新仓位
+            is_potential_flip = False
+            if current_position:
+                if signal_data['signal'] == 'BUY' and current_position['side'] == 'short': is_potential_flip = True
+                if signal_data['signal'] == 'SELL' and current_position['side'] == 'long': is_potential_flip = True
+            
+            if is_potential_flip:
+                # 将当前保证金加回可用资金 (保守起见暂不计算未实现盈利)
+                available_capital += used_margin
+                self._log(f"🔄 检测到反手信号，预估释放保证金: {used_margin:.2f} U")
+            
+            # 计算物理最大可开仓数量 (Physical Max)
+            max_physical_token = 0
+            if self.trade_mode == 'cash':
+                 max_physical_token = (available_capital * 0.90) / current_realtime_price
+            else:
+                 max_physical_token = (available_capital * self.leverage * 0.90) / current_realtime_price
+            
+            trade_amount = min(ai_suggest, max_physical_token)
             
             # 检查是否真的突破了配额
             current_quota_token = max_trade_limit # 上面计算的 max_trade_limit 是受配额限制的
@@ -518,7 +543,10 @@ class DeepSeekTrader:
             elif current_position and current_position['side'] == 'long':
                 is_closing = True
         
-        if not is_closing:
+        # [Logic Fix] 无论是否是反手，都需要检查最小/最大数量限制
+        # 只有非平仓状态下，且 trade_amount > 0 才开仓
+        # 这里移除 if not is_closing 的限制，确保 Flip 单也经过数量修正
+        if trade_amount > 0:
              # 开仓检查最小数量
              try:
                  market = self.exchange.market(self.symbol)
@@ -610,6 +638,14 @@ class DeepSeekTrader:
                     await asyncio.sleep(1)
                 
                 # 开多/买入
+                if trade_amount <= 0:
+                     return "SKIPPED_ZERO", "计算数量为0"
+
+                # [Safety] 同向开仓保护 (防止重复下单)
+                if not is_closing and current_position and current_position['side'] == 'long':
+                     self._log(f"⚠️ 已持有 Long 仓位 ({current_position['size']})，跳过重复开仓", 'warning')
+                     return "HOLD_DUP", "已持仓(防重)"
+
                 await self.exchange.create_market_order(self.symbol, 'buy', trade_amount, params={'tdMode': self.trade_mode})
                 self._log(f"🚀 买入成功: {trade_amount}")
                 
@@ -654,6 +690,13 @@ class DeepSeekTrader:
                     return "EXECUTED", f"卖出 {trade_amount}"
                 else:
                     # 开空
+                    if trade_amount <= 0: return "SKIPPED_ZERO", "计算数量为0"
+
+                    # [Safety] 同向开仓保护 (防止重复下单)
+                    if not is_closing and current_position and current_position['side'] == 'short':
+                         self._log(f"⚠️ 已持有 Short 仓位 ({current_position['size']})，跳过重复开仓", 'warning')
+                         return "HOLD_DUP", "已持仓(防重)"
+
                     await self.exchange.create_market_order(self.symbol, 'sell', trade_amount, params={'tdMode': self.trade_mode})
                     self._log(f"📉 开空成功: {trade_amount}")
                     

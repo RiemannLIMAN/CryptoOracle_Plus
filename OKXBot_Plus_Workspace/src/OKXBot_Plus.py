@@ -225,7 +225,8 @@ async def main():
             header = f"📊 MARKET SCAN | {len(results)} Symbols"
             table_lines.append(header) 
             table_lines.append("─" * 130)
-            table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
+            # [UI Clean] 移除了 EXECUTION 列，腾出空间给 Summary
+            table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'SIGNAL':<8} | {'CONF':<8} | {'ANALYSIS SUMMARY'}")
             table_lines.append("─" * 130)
             
             for res in results:
@@ -253,33 +254,30 @@ async def main():
                     elif conf == 'MEDIUM': conf_display = "⚡ MED"
                     elif conf == 'LOW': conf_display = "💤 LOW"
 
-                    # 执行状态显示 [New]
+                    # 执行状态处理 (合并到 Summary 前缀)
                     exec_status = res.get('status', 'N/A')
-                    exec_msg = res.get('status_msg', '')
+                    status_prefix = ""
                     
-                    status_icon = "❓"
-                    if exec_status == 'EXECUTED': status_icon = "✅"
-                    elif exec_status == 'HOLD': status_icon = "⏸️"
-                    elif 'SKIPPED' in exec_status: status_icon = "🚫"
-                    elif exec_status == 'FAILED': status_icon = "❌"
-                    elif exec_status == 'TEST_MODE': status_icon = "🧪"
+                    if 'SKIPPED' in exec_status:
+                        status_prefix = f"[🚫 {exec_status.replace('SKIPPED_', '')}] "
+                    elif exec_status == 'FAILED':
+                        status_prefix = "[❌ FAILED] "
+                    elif exec_status == 'TEST_MODE':
+                        status_prefix = "[🧪 TEST] "
                     
-                    # 简化状态显示，去掉冗余前缀
-                    display_status = exec_status.replace('SKIPPED_', '')
-                    if display_status == 'EXECUTED': display_status = 'DONE'
-                    
-                    exec_display = f"{status_icon} {display_status}"
-
                     # 优先使用 summary (短摘要)，如果没有则使用 reason (截断)
                     summary_text = res.get('summary', '')
                     if not summary_text or len(summary_text) == 0:
                         reason = res['reason'].replace('\n', ' ')
-                        summary_text = (reason[:40] + '...') if len(reason) > 40 else reason
+                        summary_text = (reason[:80] + '...') if len(reason) > 80 else reason
+                    
+                    # 组合最终摘要
+                    final_summary = status_prefix + summary_text
                     
                     price_str = f"${res['price']:,.2f}"
                     
                     # 格式化打印
-                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
+                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {signal_display:<8} | {conf_display:<8} | {final_summary}")
             
             table_lines.append("─" * 130)
             

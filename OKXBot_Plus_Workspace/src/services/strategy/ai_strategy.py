@@ -48,6 +48,7 @@ class DeepSeekAgent:
     def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control):
         ind = price_data.get('indicators', {})
         min_limit_info = price_data.get('min_limit_info', '0.01')
+        min_notional_info = price_data.get('min_notional_info', '5.0')
         
         is_stable = self._is_stable_coin_pair(symbol)
         
@@ -85,9 +86,9 @@ Bollinger: {bb_str}
 ADX(14): {adx_str} (趋势强度 >25为强)"""
 
         # 计算最大可买数量 (简单估算)
-        max_buy = 0
+        max_buy_token = 0
         if price_data['price'] > 0:
-            max_buy = (balance * leverage) / price_data['price']
+            max_buy_token = (balance * leverage) / price_data['price']
 
         stable_coin_instruction = ""
         if is_stable:
@@ -122,6 +123,9 @@ ADX(14): {adx_str} (趋势强度 >25为强)"""
         可用余额: {balance:.2f} U
         当前杠杆: {leverage}x (高风险!)
         {risk_msg}
+        - 理论极限: {max_buy_token:.4f} 个 (标的资产数量，非合约张数)
+        - 建议默认: {amount} 个 (仅供参考)
+        - **最小下单限制**: 数量 > {min_limit_info} 个 且 价值 > {min_notional_info} U (必须遵守!)
         
         # 技术指标
         {kline_text}
@@ -139,12 +143,12 @@ ADX(14): {adx_str} (趋势强度 >25为强)"""
         请严格返回如下JSON格式，不要包含Markdown标记：
         {{
             "signal": "BUY" | "SELL" | "HOLD",
-            "reason": "核心逻辑(50字内，基于{timeframe}周期结构分析)",
-            "summary": "看板摘要(20字内)",
+            "reason": "核心逻辑(100字内，基于{timeframe}周期结构分析，需包含支撑/压力位具体价格、指标背离情况等细节)",
+            "summary": "看板摘要(40字内)",
             "stop_loss": 止损价格(数字),
             "take_profit": 止盈价格(数字),
             "confidence": "HIGH" | "MEDIUM" | "LOW",
-            "amount": 建议数量(数字，建议值: {amount})
+            "amount": 建议数量(数字，单位:个，建议值: {amount})
         }}
         """
 
