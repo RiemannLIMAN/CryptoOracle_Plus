@@ -5,6 +5,31 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.3.0] - 2025-12-28 (Smart-Calibration & UX Polish)
+### 💰 资金管理 (Smart Calibration)
+- **实盘战绩核对 (Realized PnL)**: 
+  - 新增 `calculate_realized_performance`，自动从交易所拉取最近 100 笔真实交易来计算胜率和盈亏，拒绝本地计算的“自嗨”数据。
+- **自动盈亏校准 (Auto-Calibration)**: 
+  - 彻底解决了“重启后显示假盈利”的顽疾。
+  - 机器人现在会实时比对“显示盈亏”和“交易所实盘盈亏”。如果发现差异过大（例如重启导致基准偏移），会自动调整 `deposit_offset`，强制归零虚假盈利。
+- **账户目标透视**: 
+  - 在日志中新增“目标资金 (Target Equity)”显示。
+  - 例子: `当前 104 U | 目标 134 U`。让用户一眼看清：虽然账户里多了 4 U (Offset)，但目标依然是实打实的 +30 U，没有被吃掉。
+
+### ✨ 体验优化 (UX Polish)
+- **日志轮转升级 (Log Rotation)**: 
+  - 日志文件名固定为 `trading_bot.log`（不再带时间戳），并增加了自动轮转（保留最近5个，每个10MB）。
+  - **收益**: 终于可以愉快地使用 `tail -f log/trading_bot.log` 长期监控了，不用每次重启都找新文件名。
+- **界面精简**: 
+  - 移除了启动时的“历史战绩回顾”刷屏，只保留经典的资金曲线和实盘统计，界面更加清爽。
+  - 删除了无意义的“暂无数据”占位符。
+- **状态前置**: 
+  - 强制在每轮“批次分析”开始前，先打印账户资金状态。让用户在看 AI 吹牛之前，先看到兜里的钱还在不在。
+
+### ⚙️ 配置修复 (Config Fix)
+- **自动开启通知**: 
+  - 只要检测到 `.env` 文件里配了 `NOTIFICATION_WEBHOOK`，机器人就会自动强制开启通知功能。再也不用因为忘了改 `config.json` 里的 `enabled: false` 而收不到消息了。
+
 ## [v3.2.0] - 2025-12-28 (Dual-Heartbeat Architecture)
 ### 🚀 架构升级 (Architecture Upgrade)
 - **双频心跳机制 (Dual-Heartbeat)**:
