@@ -92,7 +92,7 @@ async def main():
 
     # 将启动脚本中的提示信息也记录到日志
     logger.info("=" * 60)
-    logger.info(f"💡 [实时日志] tail -f log/crypto_oracle.log")
+    logger.info(f"💡 [实时日志] 请参考上方 '日志文件已创建' 的路径")
     logger.info(f"💡 [后台进程] ps -ef | grep OKXBot_Plus.py")
     logger.info(f"💡 [停止指令] kill -9 {os.getpid()}")
     logger.info("=" * 60)
