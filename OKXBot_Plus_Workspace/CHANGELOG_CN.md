@@ -5,6 +5,13 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.1.16] - 2025-12-28 (Short Protection Fix)
+### 🐛 关键修复 (Critical Fix)
+- **做空止损失效 (Short Stop-Loss Gap)**:
+  - **问题**: 在旧版代码中，`run_safety_check` 仅计算了做多 (Long) 方向的 PnL，导致做空 (Short) 仓位在价格上涨时无法正确识别亏损，从而无法触发硬止损。
+  - **修复**: 重写了 PnL 计算逻辑，增加了对 `side == 'short'` 的支持，并确保在触发止损时发送正确的反向信号（平空=BUY）。
+  - **收益**: 确保了做空仓位在遭遇暴涨行情时能被 Watchdog 及时拦截。
+
 ## [v3.1.15] - 2025-12-23 (Notification UI Overhaul)
 ### 🎨 体验优化 & 通知升级 (UX & Notifications)
 - **飞书/Lark 卡片重构**:

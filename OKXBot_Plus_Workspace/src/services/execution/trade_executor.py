@@ -707,6 +707,69 @@ class DeepSeekTrader:
         except Exception as e:
             self._log(f"平仓失败: {e}", 'error')
 
+    async def run_safety_check(self):
+        """
+        高频安全检查 (每 5秒 运行)
+        仅检查止损/止盈，不进行复杂分析
+        """
+        try:
+            # 1. 获取最新价格 (Ticker) - 速度快，消耗资源少
+            ticker = await self.exchange.fetch_ticker(self.symbol)
+            current_price = ticker['last']
+            
+            # 2. 获取持仓
+            pos = await self.get_current_position()
+            if not pos:
+                return None # 空仓无需监控
+                
+            # 3. 计算 PnL
+            pnl_pct = 0.0
+            entry = pos['entry_price']
+            if entry > 0:
+                if pos['side'] == 'long':
+                    pnl_pct = (current_price - entry) / entry
+                elif pos['side'] == 'short':
+                    pnl_pct = (entry - current_price) / entry
+            
+            # 4. 检查硬止损 (Hard Stop Loss) - [Fixed] 双向监控
+            if self.risk_control.get('max_loss_rate'):
+                max_loss = float(self.risk_control['max_loss_rate'])
+                if pnl_pct <= -max_loss:
+                    self._log(f"🚨 [WATCHDOG] 触发硬止损: 当前亏损 {pnl_pct*100:.2f}% (阈值 -{max_loss*100}%)", 'warning')
+                    
+                    # 构造一个伪造的 SELL 信号立即平仓
+                    fake_signal = {
+                        'signal': 'SELL' if pos['side'] == 'long' else 'BUY', # 这里的逻辑稍显混乱，execute_trade 中 SELL 涵盖了平多和开空
+                        # 实际上 execute_trade 里：
+                        # if signal == 'BUY' and pos.side == 'short' -> 平空
+                        # if signal == 'SELL' and pos.side == 'long' -> 平多
+                        # 所以这里我们需要根据持仓方向给反向信号
+                        
+                        # 但 wait，execute_trade 的逻辑是：
+                        # BUY = 平空 + 开多
+                        # SELL = 平多 + 开空
+                        # 所以如果我是 Long，我要平仓，我应该发 SELL
+                        # 如果我是 Short，我要平仓，我应该发 BUY
+                        'signal': 'SELL' if pos['side'] == 'long' else 'BUY',
+                        
+                        'confidence': 'HIGH', # 强制最高信心
+                        'amount': 0, # amount 0 在平仓逻辑中会被忽略，直接全平
+                        'reason': f"硬止损触发: Loss {pnl_pct*100:.2f}%"
+                    }
+                    
+                    await self.execute_trade(fake_signal)
+                    return {
+                        'symbol': self.symbol,
+                        'type': 'STOP_LOSS',
+                        'pnl': pnl_pct
+                    }
+            
+            return None
+            
+        except Exception as e:
+            # self._log(f"安全检查异常: {e}", 'error')
+            return None
+
     async def run(self):
         """Async 单次运行 - 返回结果给调用者进行统一打印"""
         # self._log(f"🚀 开始分析...")

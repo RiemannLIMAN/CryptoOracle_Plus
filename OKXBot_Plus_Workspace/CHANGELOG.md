@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.1.16] - 2025-12-28 (Short Protection Fix)
+### 🐛 Critical Fix
+- **Short Stop-Loss Gap**:
+  - **Problem**: In the legacy codebase, `run_safety_check` only calculated PnL for Long positions. Short positions failed to recognize losses when prices rose, preventing Hard Stop-Loss from triggering.
+  - **Fix**: Rewrote PnL calculation logic to support `side == 'short'` and ensured correct reverse signals (Close Short = BUY) are sent upon stop-loss trigger.
+  - **Benefit**: Ensures Short positions are safely intercepted by the Watchdog during pump rallies.
+
 ## [v3.1.15] - 2025-12-23 (Notification UI Overhaul)
 ### 🎨 UX & Notifications
 - **Lark/Feishu Cards Overhaul**:
