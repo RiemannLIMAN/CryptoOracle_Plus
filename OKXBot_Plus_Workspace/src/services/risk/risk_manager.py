@@ -162,8 +162,8 @@ class RiskManager:
             
             # 更新最后显示时间，防止短时间内重复打印
             self.last_chart_display_time = time.time()
-        except Exception:
-            pass
+        except Exception as e:
+            self._log(f"显示历史战绩失败: {e}", 'warning')
 
     async def check(self):
         """执行风控检查 (Async)"""
@@ -210,8 +210,8 @@ class RiskManager:
                     tickers = await self.exchange.fetch_tickers(symbols_to_fetch)
                     for s, t in tickers.items():
                         prices[s] = t['last']
-                except:
-                    pass
+                except Exception as e:
+                    self._log(f"获取价格失败: {e}", 'warning')
 
             # 只有当没有使用 totalEq 时，才需要手动累加现货资产价值
             # 因为 totalEq 通常已经包含了所有资产的折算价值
@@ -327,14 +327,34 @@ class RiskManager:
                      # 重新计算
                      adjusted_equity = current_total_value - self.deposit_offset
                      raw_pnl = adjusted_equity - self.smart_baseline
-
+            
+            # [Fix] 防止重复打印日志
+            # 策略优化：
+            # 1. 如果 PnL 变化超过 0.005 U，立即打印 (捕捉剧烈波动)
+            # 2. 否则，每隔 60 秒强制打印一次心跳 (证明机器人还活着)
+            current_ts = time.time()
+            is_significant_change = not hasattr(self, 'last_logged_pnl') or abs(raw_pnl - self.last_logged_pnl) > 0.005
+            is_heartbeat_time = (current_ts - getattr(self, 'last_log_ts', 0)) > 60
+            
+            if is_significant_change or is_heartbeat_time:
+                pnl_percent = (raw_pnl / self.smart_baseline) * 100
+                log_icon = "💰" if is_significant_change else "💓" # 用不同图标区分
+                
+                self._log(f"{log_icon} 账户监控: 基准 {self.smart_baseline:.2f} U | 当前总值 {current_total_value:.2f} U (抵扣 {self.deposit_offset:.2f}) | 盈亏 {raw_pnl:+.2f} U ({pnl_percent:+.2f}%)")
+                
+                self.last_logged_pnl = raw_pnl
+                self.last_log_ts = current_ts
+            
             self.last_known_pnl = raw_pnl # 更新记录
             
             current_pnl = raw_pnl
             pnl_percent = (current_pnl / self.smart_baseline) * 100
-
-            self._log(f"💰 账户监控: 基准 {self.smart_baseline:.2f} U | 当前总值 {current_total_value:.2f} U (抵扣 {self.deposit_offset:.2f}) | 盈亏 {current_pnl:+.2f} U ({pnl_percent:+.2f}%)")
-            self.record_pnl_to_csv(current_total_value, current_pnl, pnl_percent)
+            
+            # [Fix] 限制 CSV 写入和图表更新频率 (例如每分钟一次，而不是每秒)
+            current_ts = time.time()
+            if current_ts - getattr(self, 'last_csv_record_time', 0) > 60:
+                self.record_pnl_to_csv(current_total_value, current_pnl, pnl_percent)
+                self.last_csv_record_time = current_ts
             
             if time.time() - self.last_chart_display_time > 3600:
                 self.display_pnl_history()
@@ -404,8 +424,8 @@ class RiskManager:
             tickers = await self.exchange.fetch_tickers(symbols)
             for s, t in tickers.items():
                 prices[s] = t['last']
-        except:
-            pass
+        except Exception as e:
+            self._log(f"初始化获取价格失败: {e}", 'warning')
 
         for trader in self.traders:
             quota = 0.0
@@ -460,15 +480,10 @@ class RiskManager:
             
             pnl_est_str = "-"
             if entry_price > 0 and holding_amount > 0 and current_price > 0:
-                # 简单估算盈亏
+                # 简单估算盈亏 (默认为做多/现货)
                 raw_pnl = (current_price - entry_price) * holding_amount
-                # 如果是做空，盈亏反向
-                if hasattr(trader, 'position_side') and trader.position_side == 'short': 
-                     # 这里假设 DeepSeekTrader 有 position_side 属性或者我们需要从 get_current_position 获取
-                     # 实际上 get_current_position 返回了 side
-                     pass
                 
-                # 为了准确，我们重新获取一次 position 信息
+                # 如果是合约，检查是否为做空
                 if trader.trade_mode != 'cash':
                      pos = await trader.get_current_position()
                      if pos and pos['side'] == 'short':

@@ -414,8 +414,8 @@ class DeepSeekTrader:
                     title=f"⚠️ 交易取消 | {self.symbol}"
                 )
                 return "SKIPPED_SLIPPAGE", f"滑点 {price_gap_percent:.2f}%"
-        except Exception:
-            pass
+        except Exception as e:
+            self._log(f"滑点检查失败: {e}", 'warning')
 
         # 3. 卖出微利风控 (仅针对平仓/减仓场景)
         # 如果 AI 信心为 HIGH，则认为是紧急离场，跳过此检查
@@ -504,7 +504,13 @@ class DeepSeekTrader:
             if current_position:
                  used_margin = (current_position['size'] * current_realtime_price) / self.leverage
             
-            available_capital = max(0, effective_balance - used_margin)
+            # [Fix] 资金计算逻辑修正
+            # 如果配置了 initial_balance，则 effective_balance 代表"总资金上限"，需要减去 used_margin 得到剩余可用
+            # 如果没配置 (initial_balance=0)，effective_balance 就是交易所返回的 Free Balance (可用余额)，本身就不包含 used_margin
+            if self.initial_balance > 0:
+                 available_capital = max(0, effective_balance - used_margin)
+            else:
+                 available_capital = effective_balance
 
             # [Logic Fix] 如果是反手信号 (Flip)，预期会释放当前保证金
             # 否则如果满仓时反手，available_capital 接近 0，会导致无法开出新仓位
@@ -544,23 +550,33 @@ class DeepSeekTrader:
                 is_closing = True
         
         # [Logic Fix] 无论是否是反手，都需要检查最小/最大数量限制
-        # 只有非平仓状态下，且 trade_amount > 0 才开仓
-        # 这里移除 if not is_closing 的限制，确保 Flip 单也经过数量修正
         if trade_amount > 0:
              # 开仓检查最小数量
              try:
                  market = self.exchange.market(self.symbol)
-                 min_amount = market.get('limits', {}).get('amount', {}).get('min')
+                 contract_size = float(market.get('contractSize', 1.0))
+                 if self.trade_mode == 'cash' or contract_size <= 0:
+                     contract_size = 1.0
+
+                 # 获取原始限制 (可能是张数，也可能是币数)
+                 raw_min_amount = market.get('limits', {}).get('amount', {}).get('min')
+                 raw_max_market = market.get('limits', {}).get('market', {}).get('max')
+                 raw_max_amount = market.get('limits', {}).get('amount', {}).get('max')
+                 
+                 # 统一转换为 Coins 单位进行比较
+                 min_amount_coins = raw_min_amount * contract_size if raw_min_amount else None
+                 max_amount_coins = (raw_max_market if raw_max_market else raw_max_amount) * contract_size if (raw_max_market or raw_max_amount) else None
+                 
                  min_cost = market.get('limits', {}).get('cost', {}).get('min')
                  
-                 if min_amount and trade_amount < min_amount:
-                     if max_trade_limit >= min_amount:
-                         self._log(f"⚠️ 数量 {trade_amount} < 最小限制 {min_amount}，自动提升")
-                         trade_amount = min_amount
+                 if min_amount_coins and trade_amount < min_amount_coins:
+                     if max_trade_limit >= min_amount_coins:
+                         self._log(f"⚠️ 数量 {trade_amount} < 最小限制 {min_amount_coins:.6f} (Coins)，自动提升")
+                         trade_amount = min_amount_coins
                      else:
-                         self._log(f"🚫 余额不足最小单位 {min_amount}", 'warning')
-                         await self._send_diagnostic_report(trade_amount, min_amount, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, "余额不足以购买最小单位")
-                         return "SKIPPED_MIN", f"少于最小限额 {min_amount}"
+                         self._log(f"🚫 余额不足最小单位 {min_amount_coins:.6f}", 'warning')
+                         await self._send_diagnostic_report(trade_amount, min_amount_coins, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, "余额不足以购买最小单位")
+                         return "SKIPPED_MIN", f"少于最小限额 {min_amount_coins}"
 
                  if min_cost and (trade_amount * current_realtime_price) < min_cost:
                       # 尝试提升
@@ -573,20 +589,14 @@ class DeepSeekTrader:
                            await self._send_diagnostic_report(trade_amount, min_cost, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, f"余额不足最小金额 (需 {min_cost}U)")
                            return "SKIPPED_MIN", f"金额 < {min_cost}U"
 
-                 # [Fix] 超出最大下单数量限制 (Code 51202)
-                 # 优先检查 limits.market.max (OKX 市价单专属限制)，其次检查 limits.amount.max
-                 max_market_amount = market.get('limits', {}).get('market', {}).get('max')
-                 max_amount = market.get('limits', {}).get('amount', {}).get('max')
-                 effective_max = max_market_amount if max_market_amount else max_amount
-                 
-                 if effective_max and trade_amount > effective_max:
-                      self._log(f"⚠️ 数量 {trade_amount} > 市场最大限制 {effective_max}，自动截断")
-                      trade_amount = effective_max
+                 if max_amount_coins and trade_amount > max_amount_coins:
+                      self._log(f"⚠️ 数量 {trade_amount} > 市场最大限制 {max_amount_coins}，自动截断")
+                      trade_amount = max_amount_coins
 
-             except Exception:
-                 pass
+             except Exception as e:
+                 self._log(f"下单限制检查异常: {e}", 'warning')
 
-        # [Debug] 详细记录下单参数，排查 "Exceeds maximum" 问题
+        # [Debug] 详细记录下单参数
         contract_size = 1.0
         try:
             market = self.exchange.market(self.symbol)
@@ -601,11 +611,10 @@ class DeepSeekTrader:
             log_msg += f"估算价值: {est_value:.2f} U | ContractSize: {contract_size}"
             
             if self.trade_mode != 'cash':
+                # 这里仅做记录，实际转换在执行阶段
                 num_contracts = trade_amount / contract_size
                 log_msg += f" | 换算张数: {num_contracts:.4f}"
                 
-                # [Safety Check] 如果估算价值远超配额 (例如 > 2倍)，说明可能单位搞错了 (Coins vs Contracts)
-                # 只有当张数 > 10 且 价值异常大时才拦截，防止误判
                 if est_value > (config_amt * 5) and est_value > 100:
                     self._log(log_msg, 'warning')
                     self._log(f"🛑 异常拦截: 估算价值 {est_value:.2f}U 远超配置 {config_amt}U，可能是合约单位换算错误", 'error')
@@ -624,14 +633,24 @@ class DeepSeekTrader:
         except:
             pass
             
-        if trade_amount <= 0:
-             return "SKIPPED_ZERO", "计算数量为0"
+        # [Fix] 这里的 check 移动到具体开仓逻辑中，防止阻断 "仅平仓" (Amount=0) 的操作
+        # if trade_amount <= 0:
+        #      return "SKIPPED_ZERO", "计算数量为0"
 
         # 5. 执行
         try:
+            # 准备下单数量 (如果是合约，转换为张数)
+            final_order_amount = trade_amount
+            if self.trade_mode != 'cash':
+                 market = self.exchange.market(self.symbol)
+                 c_size = float(market.get('contractSize', 1.0))
+                 if c_size > 0 and c_size != 1.0:
+                      final_order_amount = trade_amount / c_size
+                      # self._log(f"💱 转换下单数量: {trade_amount} Coins -> {final_order_amount} Contracts")
+
             if signal_data['signal'] == 'BUY':
                 if current_position and current_position['side'] == 'short':
-                    # 平空
+                    # 平空 (使用持仓自带的 size，通常已经是张数)
                     await self.exchange.create_market_order(self.symbol, 'buy', current_position['size'], params={'reduceOnly': True})
                     self._log("🔄 平空仓成功")
                     await self.send_notification(f"🔄 平空仓成功 {self.symbol}\n数量: {current_position['size']}\n理由: {signal_data['reason']}")
@@ -639,6 +658,8 @@ class DeepSeekTrader:
                 
                 # 开多/买入
                 if trade_amount <= 0:
+                     if current_position and current_position['side'] == 'short':
+                         return "EXECUTED", "仅平空"
                      return "SKIPPED_ZERO", "计算数量为0"
 
                 # [Safety] 同向开仓保护 (防止重复下单)
@@ -646,12 +667,12 @@ class DeepSeekTrader:
                      self._log(f"⚠️ 已持有 Long 仓位 ({current_position['size']})，跳过重复开仓", 'warning')
                      return "HOLD_DUP", "已持仓(防重)"
 
-                await self.exchange.create_market_order(self.symbol, 'buy', trade_amount, params={'tdMode': self.trade_mode})
-                self._log(f"🚀 买入成功: {trade_amount}")
+                await self.exchange.create_market_order(self.symbol, 'buy', final_order_amount, params={'tdMode': self.trade_mode})
+                self._log(f"🚀 买入成功: {trade_amount} Coins ({final_order_amount} sz)")
                 
                 msg = f"🚀 **买入执行 (BUY)**\n"
                 msg += f"• 交易对: {self.symbol}\n"
-                msg += f"• 数量: {trade_amount}\n"
+                msg += f"• 数量: {trade_amount} Coins\n"
                 msg += f"• 价格: ${current_realtime_price:,.2f}\n"
                 msg += f"• 理由: {signal_data['reason']}\n"
                 msg += f"• 信心: {signal_data.get('confidence', 'N/A')}"
@@ -674,6 +695,11 @@ class DeepSeekTrader:
                 
                 if self.trade_mode == 'cash':
                     # 现货卖出
+                    if trade_amount <= 0: # 现货卖出如果没有数量，就无法执行
+                         # 但如果前面已经通过 max_trade_limit 设置了全仓卖出，trade_amount 应该 > 0
+                         # 除非余额为 0
+                         return "SKIPPED_ZERO", "可卖数量为0"
+
                     await self.exchange.create_market_order(self.symbol, 'sell', trade_amount)
                     self._log(f"📉 卖出成功: {trade_amount}")
                     
@@ -690,20 +716,23 @@ class DeepSeekTrader:
                     return "EXECUTED", f"卖出 {trade_amount}"
                 else:
                     # 开空
-                    if trade_amount <= 0: return "SKIPPED_ZERO", "计算数量为0"
+                    if trade_amount <= 0:
+                         if current_position and current_position['side'] == 'long':
+                             return "EXECUTED", "仅平多"
+                         return "SKIPPED_ZERO", "计算数量为0"
 
                     # [Safety] 同向开仓保护 (防止重复下单)
                     if not is_closing and current_position and current_position['side'] == 'short':
                          self._log(f"⚠️ 已持有 Short 仓位 ({current_position['size']})，跳过重复开仓", 'warning')
                          return "HOLD_DUP", "已持仓(防重)"
 
-                    await self.exchange.create_market_order(self.symbol, 'sell', trade_amount, params={'tdMode': self.trade_mode})
-                    self._log(f"📉 开空成功: {trade_amount}")
+                    await self.exchange.create_market_order(self.symbol, 'sell', final_order_amount, params={'tdMode': self.trade_mode})
+                    self._log(f"📉 开空成功: {trade_amount} Coins ({final_order_amount} sz)")
                     
                     post_balance = await self.get_account_balance()
                     est_cost = trade_amount * current_realtime_price
                     
-                    msg = f"**数量**: `{trade_amount}`\n"
+                    msg = f"**数量**: `{trade_amount}` Coins\n"
                     msg += f"**价格**: `${current_realtime_price:,.2f}`\n"
                     msg += f"**金额**: `{est_cost:.2f} U`\n"
                     msg += f"**余额**: `{post_balance:.2f} U` (Avail)\n"
@@ -739,6 +768,31 @@ class DeepSeekTrader:
                         return float(asset['availBal'])
             return 0.0
         except: return 0.0
+
+    async def get_account_equity(self):
+        """获取账户总权益 (USDT)"""
+        try:
+            params = {}
+            if self.test_mode:
+                params = {'simulated': True}
+            
+            balance = await self.exchange.fetch_balance(params)
+            
+            # 1. 优先尝试统一账户 Total Equity
+            if 'info' in balance and 'data' in balance['info']:
+                data0 = balance['info']['data'][0]
+                if 'totalEq' in data0:
+                    return float(data0['totalEq'])
+            
+            # 2. 尝试经典账户 USDT Equity
+            if 'USDT' in balance:
+                if 'equity' in balance['USDT']: return float(balance['USDT']['equity'])
+                if 'total' in balance['USDT']: return float(balance['USDT']['total'])
+                
+            return 0.0
+        except Exception as e:
+            self._log(f"获取账户权益失败: {e}", 'warning')
+            return 0.0
 
     async def close_all_positions(self):
         try:
@@ -840,6 +894,13 @@ class DeepSeekTrader:
         current_pos = await self.get_current_position()
         balance = await self.get_account_balance()
         
+        # [New] 获取账户总权益并计算 PnL
+        current_pnl = 0.0
+        if self.initial_balance > 0:
+            equity = await self.get_account_equity()
+            if equity > 0:
+                current_pnl = equity - self.initial_balance
+
         signal_data = await self.agent.analyze(
             self.symbol, 
             self.timeframe, 
@@ -849,7 +910,8 @@ class DeepSeekTrader:
             self.amount,
             self.taker_fee_rate,
             self.leverage, # 传入杠杆
-            self.risk_control # 传入风控配置
+            self.risk_control, # 传入风控配置
+            current_pnl # [New] 传入当前账户总盈亏
         )
         
         if signal_data:

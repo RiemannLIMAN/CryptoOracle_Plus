@@ -5,6 +5,32 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.2.0] - 2025-12-28 (Dual-Heartbeat Architecture)
+### 🚀 架构升级 (Architecture Upgrade)
+- **双频心跳机制 (Dual-Heartbeat)**:
+  - 彻底重构主循环，将 **AI 分析** 与 **风控检查** 的频率解耦。
+  - **快心跳 (Tick Rate)**: 默认为 `1s`。每秒执行一次硬止损检查、账户权益监控和异常状态拦截，确保对市场插针行情的“秒级”反应。
+  - **慢心跳 (Analysis Interval)**: 默认为 `60s`。每分钟唤醒一次 AI 进行深度趋势分析 (基于 15m K线)。
+  - **收益**: 解决了旧版“AI 思考期间风控停摆”的致命缺陷，实现了“深思熟虑”与“敏捷反应”的完美共存。
+
+### 💰 策略增强 (Strategy Enhancement)
+- **动态目标止盈 (Dynamic Target)**:
+  - AI 策略层新增 `current_account_pnl` 上下文。
+  - **盈利保护**: 当距离目标止盈 < 30% 时，AI 会收到“保护指令”，倾向于落袋为安。
+  - **强制停手**: 当目标达成 (100%) 时，AI 会收到“最高优先级指令”，禁止开新仓，只许平仓。
+- **配置对齐**:
+  - 移除了无效参数 `signal_limit`。
+  - 优化了 `config.json` 结构，确保所有参数（如 `loop_interval`）与代码逻辑一一对应。
+
+### 🛠️ 体验与修复 (UX & Fixes)
+- **智能日志 (Smart Logging)**:
+  - 引入日志去重与心跳机制。只有当账户 PnL 变动超过 `0.005 U` 时才打印日志，或每分钟打印一次保活心跳。彻底解决了控制台刷屏问题。
+  - 限制了 CSV 写入和图表更新频率（1分钟/次），降低磁盘 I/O。
+- **Bug 修复**:
+  - 修复了 `DeepSeekTrader` 中缺失 `get_account_equity` 方法导致崩溃的问题。
+  - 修复了 `RiskManager` 中变量引用顺序错误导致的 `UnboundLocalError`。
+  - 修复了日志文件名生成逻辑，恢复为“每次启动生成新文件”模式，便于历史回溯。
+
 ## [v3.1.17] - 2025-12-28 (AI Strategy & Dual-Freq)
 ### 🚀 功能增强 (Enhancements)
 - **双频监控机制 (Dual-Frequency Monitoring)**:
