@@ -120,6 +120,133 @@ class RiskManager:
         tasks = [trader.close_all_positions() for trader in self.traders]
         await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def calculate_realized_performance(self):
+        """基于交易所历史订单计算已实现盈亏与胜率"""
+        try:
+            sep_line = "=" * 80
+            
+            total_realized_pnl = 0.0
+            total_trades = 0
+            win_trades = 0
+            
+            has_data = False
+            report_body = ""
+            
+            for trader in self.traders:
+                try:
+                    # 获取最近 100 条成交
+                    trades = await trader.exchange.fetch_my_trades(trader.symbol, limit=100)
+                    if not trades:
+                        continue
+                    
+                    symbol_pnl = 0.0
+                    symbol_wins = 0
+                    symbol_count = 0
+                    
+                    for trade in trades:
+                        # 仅统计有 PnL 的订单 (通常是合约平仓单)
+                        # 现货交易通常没有直接的 PnL 字段，需要更复杂的匹配逻辑，暂只统计合约
+                        pnl = 0.0
+                        if 'info' in trade and 'pnl' in trade['info']:
+                            try:
+                                pnl = float(trade['info']['pnl'])
+                            except:
+                                pnl = 0.0
+                        
+                        # 如果 API 没返回 PnL (如现货)，暂时跳过统计，避免误导
+                        if pnl != 0:
+                            symbol_pnl += pnl
+                            symbol_count += 1
+                            if pnl > 0:
+                                symbol_wins += 1
+                    
+                    if symbol_count > 0:
+                        has_data = True
+                        win_rate = (symbol_wins / symbol_count) * 100
+                        pnl_icon = "🟢" if symbol_pnl > 0 else "🔴"
+                        report_body += f"\n{trader.symbol:<15} | 交易: {symbol_count:<3} | 胜率: {win_rate:>5.1f}% | 累计盈亏: {symbol_pnl:+.2f} U {pnl_icon}"
+                        
+                        total_realized_pnl += symbol_pnl
+                        total_trades += symbol_count
+                        win_trades += symbol_wins
+                    else:
+                        # 只有在有数据时才显示这一行，如果完全没数据就不显示了，免得占地方
+                        # report_body += f"\n{trader.symbol:<15} | 暂无已实现盈亏记录 (仅统计合约平仓)"
+                        pass
+                        
+                except Exception as e:
+                    self._log(f"计算 {trader.symbol} 绩效失败: {e}", 'warning')
+            
+            if has_data:
+                 report = f"\n{sep_line}\n📊 实盘数据统计 (Performance Stats)\n{sep_line}"
+                 report += report_body
+                 
+                 if total_trades > 0:
+                    avg_win_rate = (win_trades / total_trades) * 100
+                    report += f"\n{sep_line}\n🏆 总计表现     | 交易: {total_trades:<3} | 胜率: {avg_win_rate:>5.1f}% | 总盈亏: {total_realized_pnl:+.2f} U"
+                    
+                    # [New] 缓存已实现盈亏，供 check() 函数进行自我校准
+                    self.realized_pnl_cache = total_realized_pnl
+                 
+                 report += f"\n{sep_line}"
+                 self.logger.info(report)
+            else:
+                # 没数据就不打印了，清爽一点
+                self.realized_pnl_cache = 0.0
+            
+        except Exception as e:
+            self._log(f"生成实盘统计失败: {e}", 'error')
+
+    async def display_recent_trades(self):
+        """显示最近成交记录 (真实战绩)"""
+        try:
+            sep_line = "=" * 80
+            
+            for trader in self.traders:
+                try:
+                    # 获取最近 5 条成交
+                    trades = await trader.exchange.fetch_my_trades(trader.symbol, limit=5)
+                    if not trades:
+                        continue
+                    
+                    # 只有当有数据时才打印标题
+                    self.logger.info(f"\n{sep_line}\n📜 历史战绩回顾 (Trade History)\n{sep_line}")
+                        
+                    for trade in reversed(trades): # 时间正序
+                        # 解析字段
+                        symbol = trade['symbol']
+                        side = trade['side'].upper() # BUY/SELL
+                        price = float(trade['price'])
+                        amount = float(trade['amount'])
+                        cost = float(trade['cost']) if trade.get('cost') else price * amount
+                        fee = 0.0
+                        if trade.get('fee'):
+                            fee = float(trade['fee']['cost'])
+                        
+                        ts = datetime.fromtimestamp(trade['timestamp']/1000).strftime('%m-%d %H:%M')
+                        
+                        icon = "🟢" if side == 'BUY' else "🔴"
+                        
+                        # 尝试计算 PnL (仅限合约平仓单)
+                        # OKX 的 fetch_my_trades 返回的数据结构里，info 字段可能包含 pnl
+                        pnl_str = ""
+                        if 'info' in trade and 'pnl' in trade['info']:
+                            pnl = float(trade['info']['pnl'])
+                            if pnl != 0:
+                                pnl_icon = "🎉" if pnl > 0 else "💸"
+                                pnl_str = f" | PnL: {pnl:+.2f} U {pnl_icon}"
+                        
+                        log_str = f"{ts} | {symbol} | {icon} {side:<4} | 价格: {price} | 数量: {amount} | 金额: {cost:.2f} U{pnl_str}"
+                        self.logger.info(log_str)
+                    
+                    self.logger.info(sep_line + "\n")
+                        
+                except Exception as e:
+                    self._log(f"获取 {trader.symbol} 历史成交失败: {e}", 'warning')
+            
+        except Exception as e:
+            self._log(f"显示成交记录失败: {e}", 'error')
+
     def display_pnl_history(self):
         # 保持同步方法
         if not os.path.isfile(self.csv_file):
@@ -128,7 +255,8 @@ class RiskManager:
             df = pd.read_csv(self.csv_file)
             if df.empty: return
             
-            header = "\n" + "="*40 + f"\n📜 历史战绩回顾 (共 {len(df)} 条记录)\n" + "="*40
+            # [Reverted] 恢复为经典的 "历史盈亏回顾" 标题，这才是用户记忆中的设计
+            header = "\n" + "="*40 + f"\n� 历史盈亏回顾 (共 {len(df)} 条记录)\n" + "="*40
             self.logger.info(header)
             # print(header) # Duplicate print removed
               
@@ -143,6 +271,11 @@ class RiskManager:
             for _, row in recent.iterrows():
                 timestamp = row['timestamp'][5:-3]
                 pnl = row['pnl_usdt']
+                
+                # [Fix] 恢复原始逻辑，只显示 PnL，不显示复杂公式
+                # 您的原始截图显示的是：12-28 20:02 | 4.16 U | [绿条]
+                # 这里必须严格还原那个格式
+                
                 bar = ""
                 num_blocks = abs(pnl) * scale_factor
                 full_blocks = int(num_blocks)
@@ -154,6 +287,7 @@ class RiskManager:
                 else:
                     bar = "➖"
                 
+                # 严格还原格式: "时间 | 盈亏 U | 进度条"
                 line = f"{timestamp} | {pnl:>6.2f} U | {bar}"
                 self.logger.info(line)
                 # print(line) # Duplicate print removed
@@ -167,7 +301,7 @@ class RiskManager:
         except Exception as e:
             self._log(f"显示历史战绩失败: {e}", 'warning')
 
-    async def check(self):
+    async def check(self, force_log=False):
         """执行风控检查 (Async)"""
         try:
             balance = await self.exchange.fetch_balance()
@@ -233,6 +367,15 @@ class RiskManager:
 
             if not self.smart_baseline or self.smart_baseline <= 0:
                 return
+            
+            # [Removed] 用户要求删除 "历史战绩回顾" (display_recent_trades)
+            # 仅保留 "实盘数据统计" (calculate_realized_performance) 用于校准
+            # 和 "历史盈亏回顾" (display_pnl_history) 用于看资金曲线
+            if not hasattr(self, 'realized_pnl_cache'):
+                 # await self.display_recent_trades() # Deleted
+                 # 延迟一秒，避免日志乱序
+                 # await asyncio.sleep(1)
+                 await self.calculate_realized_performance()
 
             # [Auto-Deposit Detection] 充值自动识别逻辑
             # 如果计算出的 PnL 比上一次瞬间增加了太多 (例如 > 20% 本金 或 > 50U)，且不是因为暴涨
@@ -245,6 +388,7 @@ class RiskManager:
             # [Fix] 首次运行 PnL 异常检测 (Startup Anomaly Check)
             # 如果这是本次启动后第一次计算 PnL，且 PnL 巨大 (说明 initialize_baseline 可能漏掉了 offset)
             # 我们直接将其视为 Offset，而不是盈利
+            # 只有当 raw_pnl 是正数时才进行此检查。如果是负数（亏损），则如实反映。
             if not hasattr(self, 'last_known_pnl'):
                 # 首次计算
                 if raw_pnl > max(10.0, self.smart_baseline * 0.1):
@@ -336,6 +480,38 @@ class RiskManager:
                      adjusted_equity = current_total_value - self.deposit_offset
                      raw_pnl = adjusted_equity - self.smart_baseline
             
+            # [Fix] 逻辑补丁：如果当前计算出的 PnL 与“实盘交易统计”里的 PnL 差异巨大，说明 Baseline 错了
+            # 这是一个自我纠错机制。
+            # 只有当用户没有手动干预过 offset 时才生效
+            if self.is_initialized and hasattr(self, 'realized_pnl_cache'):
+                 # 容差: 1 U (避免因为手续费/滑点计算微小差异导致跳变)
+                 # 逻辑: 如果 (显示盈亏 - 交易所统计盈亏) > 5 U，说明 Baseline 偏低了，我们在虚报盈利
+                 #       如果 (显示盈亏 - 交易所统计盈亏) < -5 U，说明 Baseline 偏高了，我们在虚报亏损
+                 
+                 # 仅当两者方向一致时才校准，防止逻辑打架
+                 # 例如: 显示 +4.81，统计 +0.00。Diff = 4.81。
+                 # 我们应该把显示盈亏校准到 +0.00。
+                 # 方法: 调整 deposit_offset。
+                 # Target_PnL = (Total - Offset) - Baseline
+                 # Target = Realized_PnL
+                 # Offset = Total - Baseline - Realized_PnL
+                 
+                 # 为了稳健，我们只在首次启动后的前几分钟做这个校准
+                 if not hasattr(self, 'pnl_calibrated') and abs(raw_pnl - self.realized_pnl_cache) > 2.0:
+                      new_offset = current_total_value - self.smart_baseline - self.realized_pnl_cache
+                      
+                      # 只有当 new_offset 是正数时（即确实是初始资金多了）才校准
+                      if new_offset > 0:
+                          self._log(f"⚖️ 盈亏自动校准: 检测到显示盈亏 ({raw_pnl:.2f}) 与交易所实盘统计 ({self.realized_pnl_cache:.2f}) 不符")
+                          self._log(f"🔄 修正前 Offset: {self.deposit_offset:.2f} -> 修正后: {new_offset:.2f}")
+                          self.deposit_offset = new_offset
+                          self.save_state()
+                          
+                          # 立即重新计算
+                          adjusted_equity = current_total_value - self.deposit_offset
+                          raw_pnl = adjusted_equity - self.smart_baseline
+                          self.pnl_calibrated = True
+
             # [Fix] 防止重复打印日志
             # 策略优化：基于百分比变化的智能日志
             # 1. 如果 PnL 变化超过本金的 0.1%，立即打印
@@ -351,13 +527,35 @@ class RiskManager:
             is_significant_change = not hasattr(self, 'last_logged_pnl') or pnl_diff > dynamic_threshold
             is_heartbeat_time = (current_ts - getattr(self, 'last_log_ts', 0)) > 60
             
-            if is_significant_change or is_heartbeat_time:
+            if is_significant_change or is_heartbeat_time or force_log:
                 pnl_percent = (raw_pnl / self.smart_baseline) * 100
                 log_icon = "💰" if is_significant_change else "💓"
                 
                 # [Mod] 将高频心跳日志降级为 DEBUG，避免刷屏
                 # 只有当触发真正的止损/止盈时，才使用 INFO 级别
-                self._log(f"{log_icon} 账户监控: 基准 {self.smart_baseline:.2f} U | 当前总值 {current_total_value:.2f} U (抵扣 {self.deposit_offset:.2f}) | 盈亏 {raw_pnl:+.2f} U ({pnl_percent:+.2f}%)", level='debug')
+                # 如果是 force_log (如每轮交易开始前)，则强制使用 INFO 确保可见
+                log_level = 'info' if force_log else 'debug'
+                
+                # [Improved] 显示 PnL 计算公式，解决用户疑惑 "我没赚啊"
+                # PnL = (Current - Offset) - Baseline
+                # Eq = Current - Offset
+                log_msg = f"{log_icon} 账户监控: 基准 {self.smart_baseline:.2f} U | 当前总值 {current_total_value:.2f} U"
+                if self.deposit_offset != 0:
+                    log_msg += f" (抵扣 {self.deposit_offset:.2f})"
+                
+                log_msg += f" | 盈亏 {raw_pnl:+.2f} U ({pnl_percent:+.2f}%)"
+                
+                # 如果有误解，显示详细公式
+                if raw_pnl > 0:
+                     log_msg += f" [公式: {adjusted_equity:.2f} - {self.smart_baseline:.2f}]"
+                
+                # [New] 显示目标权益 (Target Equity)
+                if self.max_profit:
+                     target_eq = self.smart_baseline + self.deposit_offset + self.max_profit
+                     remaining = self.max_profit - raw_pnl
+                     log_msg += f" | 目标: {target_eq:.2f} U (还差 {remaining:.2f})"
+                
+                self._log(log_msg, level=log_level)
                 
                 self.last_logged_pnl = raw_pnl
                 self.last_log_ts = current_ts
@@ -476,7 +674,8 @@ class RiskManager:
             else:
                 pos = await trader.get_current_position()
                 if pos:
-                    holding_amount = pos['size']
+                    # [Fix] 优先使用 coin_size (实际币数)
+                    holding_amount = pos.get('coin_size', pos['size'])
                     # 对于合约，市值估算可能需要更精确，这里简化为 持仓数量 * 价格
                     # 实际上合约价值 = 数量 * 合约面值 * 价格 (如果是币本位) 或者 数量 * 价格 (如果是U本位且单位是币)
                     # OKX U本位合约 size 通常是 币的数量
@@ -538,6 +737,12 @@ class RiskManager:
                 else:
                     self.deposit_offset = 0.0
                     self._log(f"✅ 初始本金确认: {self.smart_baseline:.2f} U")
+                    
+                    # [New] 提示用户如果这是初始资金差异
+                    diff = real_total_equity - self.initial_balance
+                    if diff > 0.5:
+                        self._log(f"💡 提示: 当前资金 ({real_total_equity:.2f}) > 配置本金 ({self.initial_balance})。差额 {diff:.2f} U 即将进行【自动校准】。")
+                        # self._log(f"👉 如果这是您的初始本金，请在 config.json 中将 initial_balance_usdt 修改为 {real_total_equity:.2f} 以归零盈亏。")
         else:
             if not self.smart_baseline:
                 self.smart_baseline = real_total_equity

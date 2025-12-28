@@ -37,17 +37,17 @@ class DeepSeekAgent:
             return "你是一位专注于【稳定币套利】的量化交易员。当前交易对由两种稳定币组成，价格理论上应恒定在 1.0000。请忽略大部分趋势指标，专注于均值回归。你的目标是捕捉极其微小的脱锚波动（如 0.9995 买入，1.0005 卖出）。"
         
         # [Strategy Update] 趋势增强策略
-        # 当 HIGH_TREND 时，鼓励金字塔加仓
+        # 当 HIGH_TREND 时，鼓励金字塔加仓，但也必须警惕反转
         if volatility_status == "HIGH_TREND":
-            return "你是一位激进的趋势猎手。当前市场处于【单边极强趋势】，ADX爆表。请务必顺势而为！如果当前已有持仓且趋势延续（如阳线不断创新高），请果断给出 HIGH 信心信号以触发加仓（Pyramiding）。不要恐慌性止盈，让利润奔跑。"
+            return "你是一位激进的趋势猎手。当前市场处于【单边极强趋势】，ADX爆表。原则：顺势而为！\n1. 如果当前持仓方向与趋势一致（如持多且不断创新高），果断 HIGH 信心加仓。\n2. ⚠️ 关键：如果当前持仓与趋势相反（如持多但出现暴跌阴线），立即给出 SELL 信号并建议反手开空（Flip）。不要死扛！\n3. 理由中请明确指出趋势方向（Bullish/Bearish）。"
         elif volatility_status == "HIGH_CHOPPY":
-            return "你是一位冷静的避险交易员。当前市场处于【剧烈震荡】，波动大且无方向。请极度谨慎，优先选择 HOLD 观望。严禁在震荡区间中间位置开单，只有在布林带极端突破且有明确反转信号时才考虑超短线操作。"
+            return "你是一位冷静的避险交易员。当前市场处于【剧烈震荡】。优先选择 HOLD。但如果出现【明确的假突破】或【关键位反转】，可以尝试 LOW 信心短线操作，不要过于保守。"
         elif volatility_status == "LOW":
-            return "你是一位无情的震荡猎手。当前市场【极度缩量横盘】，ADX极低。这是网格交易的天堂！请放弃大趋势幻想，专注于 15m 周期的布林带轨道。核心策略：【价格触碰下轨+RSI<30 = BUY】，【价格触碰上轨+RSI>70 = SELL】。只要有微利(>0.5%)就立即平仓，不要恋战。如果是中间位置，坚决 HOLD。"
+            return "你是一位激进的超短线猎手。当前市场【缩量横盘】。请利用布林带轨道进行剥头皮交易！\n1. 价格触碰布林下轨且RSI<35 -> BUY\n2. 价格触碰布林上轨且RSI>65 -> SELL\n不要死等大行情，只要有 0.3% 利润空间即可出手。"
         else:
-            return "你是一位稳健的波段交易员。当前市场波动正常。请忽略 1m 周期内的微小噪音，基于整体 K 线结构（50根）寻找盈亏比 > 1.5 的确定性形态（如W底、头肩底）。如果当前持仓浮亏不大且形态未坏，请多一点耐心 (HOLD)。但如果出现顶背离或关键支撑位跌破，请毫不犹豫地 CUT LOSS。"
+            return "你是一位敏锐的波段交易员。当前市场波动正常。请基于 K 线结构寻找机会。\n1. 顺势交易：如果趋势明确（如连续阴跌），请果断建议顺势开单，不要等待完美回调。\n2. 关键位：如果价格跌破支撑或突破压力，立即发出信号。\n3. 允许 LOW 信心试错：如果不确定性较高但盈亏比划算，可以给出 LOW 信心建议。"
 
-    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control, current_account_pnl=0.0):
+    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control, current_account_pnl=0.0, current_pos=None):
         ind = price_data.get('indicators', {})
         min_limit_info = price_data.get('min_limit_info', '0.01')
         min_notional_info = price_data.get('min_notional_info', '5.0')
@@ -81,6 +81,11 @@ class DeepSeekAgent:
                  closing_instruction = "🔴 **最高优先级指令**：目标已达成！请立即建议 SELL (平仓) 或 HOLD (空仓)，严禁开新仓。"
             elif progress > 0.7:
                  closing_instruction = "🟠 **盈利保护指令**：目标接近完成 (>70%)。若市场走势不明朗或ADX下降，请优先选择 SELL 落袋为安，放弃鱼尾行情。"
+        
+        # [New] 亏损/反手提示
+        if current_pos and current_pos.get('unrealized_pnl', 0) < 0:
+             pnl_val = current_pos['unrealized_pnl']
+             closing_instruction += f"\n🔴 **亏损警报**：当前持仓浮亏 {pnl_val:.2f} U。请严格评估趋势是否已反转！如果确认趋势反转（如多单遇暴跌），请立即建议 SELL 并注明 '反手' 或 'Flip'。"
 
         # [Modified] 动态获取 K 线数量，不再硬编码 30
         kline_count = len(price_data.get('kline_data', []))
@@ -90,7 +95,15 @@ class DeepSeekAgent:
         for i, kline in enumerate(reversed(detailed_klines)): # 倒序展示更符合直觉
             change = ((kline['close'] - kline['open']) / kline['open']) * 100
             trend = "阳" if kline['close'] > kline['open'] else "阴"
-            kline_text += f"T-{i}: {trend} C:{kline['close']:.4f} ({change:+.2f}%)\n"
+            # [New] 显示成交量和量比
+            vol_str = f"Vol:{int(kline['volume'])}"
+            if 'vol_ratio' in kline and kline['vol_ratio'] is not None:
+                vr = kline['vol_ratio']
+                if vr > 2.0: vol_str += f"(🔥爆量 x{vr:.1f})"
+                elif vr > 1.2: vol_str += f"(放量 x{vr:.1f})"
+                elif vr < 0.6: vol_str += f"(缩量 x{vr:.1f})"
+            
+            kline_text += f"T-{i}: {trend} C:{kline['close']:.4f} ({change:+.2f}%) {vol_str}\n"
         
         if kline_count > 15:
             kline_text += f"...(更早的 {kline_count-15} 根K线已省略，但请基于整体结构分析)..."
@@ -100,11 +113,28 @@ class DeepSeekAgent:
         adx_str = f"{ind.get('adx', 'N/A'):.2f}" if ind.get('adx') else "N/A"
         bb_str = f"Up: {ind.get('bb_upper', 'N/A'):.2f}, Low: {ind.get('bb_lower', 'N/A'):.2f}"
         
+        # [New] 成交量概况
+        vol_ratio_val = ind.get('vol_ratio', 1.0)
+        vol_status = "正常"
+        if vol_ratio_val > 2.0: vol_status = "🔥 极度放量"
+        elif vol_ratio_val > 1.5: vol_status = "📈 显著放量"
+        elif vol_ratio_val < 0.5: vol_status = "📉 极度缩量"
+        
+        # [New] 资金流向 (OBV & 买盘占比)
+        obv_val = f"{ind.get('obv', 'N/A')}"
+        buy_prop = ind.get('buy_prop', 0.5)
+        buy_prop_str = f"{buy_prop*100:.1f}%"
+        flow_status = "均衡"
+        if buy_prop > 0.6: flow_status = "🟢 买盘主导"
+        elif buy_prop < 0.4: flow_status = "🔴 卖盘主导"
+        
         indicator_text = f"""【技术指标】
 RSI(14): {rsi_str}
 MACD: {macd_str}
 Bollinger: {bb_str}
-ADX(14): {adx_str} (趋势强度 >25为强)"""
+ADX(14): {adx_str} (趋势强度 >25为强)
+Volume: 当前量比 {vol_ratio_val:.2f} ({vol_status})
+Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能量潮)"""
 
         # 计算最大可买数量 (简单估算)
         max_buy_token = 0
@@ -191,7 +221,7 @@ ADX(14): {adx_str} (趋势强度 >25为强)"""
                 position_text = f"{current_pos['side']}仓, 数量:{current_pos['size']}, 浮盈:{pnl:.2f}U"
 
             prompt = self._build_user_prompt(
-                symbol, timeframe, price_data, balance, position_text, role_prompt, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl
+                symbol, timeframe, price_data, balance, position_text, role_prompt, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos
             )
 
             # self.logger.info(f"[{symbol}] ⏳ 请求 DeepSeek (Async)...")

@@ -41,6 +41,11 @@ async def send_notification_async(webhook_url, message, title=None):
         elif "启动" in message:
             header_color = "blue"
 
+        # [Fix] 飞书互动卡片对正文长度有限制，且需要转义
+        # 如果 message 太长，进行截断
+        safe_msg = message
+        if len(safe_msg) > 5000: safe_msg = safe_msg[:5000] + "..."
+        
         payload = {
             "msg_type": "interactive",
             "card": {
@@ -59,7 +64,7 @@ async def send_notification_async(webhook_url, message, title=None):
                         "tag": "div",
                         "text": {
                             "tag": "lark_md",
-                            "content": message
+                            "content": safe_msg
                         }
                     },
                     {

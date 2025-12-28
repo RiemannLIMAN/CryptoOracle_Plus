@@ -47,6 +47,12 @@ class Config:
             env_webhook = os.getenv('NOTIFICATION_WEBHOOK', '')
             if env_webhook:
                 loaded_config['notification']['webhook_url'] = env_webhook
+                # [Fix] 如果环境变量里配了 webhook，强制开启通知功能
+                loaded_config['notification']['enabled'] = True
+            
+            # 如果环境变量里没有，但 config.json 里有 enabled=true 且有 url，则保持原样
+            # 但如果 config.json 里 enabled=false，上面这行强制开启会覆盖它，这通常是符合预期的
+            # 因为只要用户特意去配了 .env，通常就是想用。
                 
             return loaded_config
         except Exception as e:

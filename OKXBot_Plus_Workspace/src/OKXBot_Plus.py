@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.2.0 (Dual-Heartbeat Architecture)"
+SYSTEM_VERSION = "v3.3.0 (Smart-Calibration & UX Polish)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -233,6 +233,10 @@ async def main():
                 logger.info(f"─" * 60)
                 logger.info(f"⏰ 批次执行开始: {current_time_str}")
                 logger.info(f"─" * 60)
+
+                # [New] 在每轮交易开始前，打印一次账户监控
+                # 这会让用户在看到"批次执行开始"之前，先看到"账户监控"
+                await risk_manager.check(force_log=True)
                 
                 # Parallel Execution
                 tasks = [trader.run() for trader in traders]
