@@ -36,14 +36,16 @@ class DeepSeekAgent:
         if is_stable_pair:
             return "你是一位专注于【稳定币套利】的量化交易员。当前交易对由两种稳定币组成，价格理论上应恒定在 1.0000。请忽略大部分趋势指标，专注于均值回归。你的目标是捕捉极其微小的脱锚波动（如 0.9995 买入，1.0005 卖出）。"
         
+        # [Strategy Update] 趋势增强策略
+        # 当 HIGH_TREND 时，鼓励金字塔加仓
         if volatility_status == "HIGH_TREND":
-            return "你是一位稳健的趋势跟踪交易员。当前市场处于【单边剧烈波动】，ADX显示趋势极强。请顺势而为，但不要在回调的第一根K线就恐慌离场。只有在趋势结构被明显破坏（如高点不再抬高）时才考虑止盈。"
+            return "你是一位激进的趋势猎手。当前市场处于【单边极强趋势】，ADX爆表。请务必顺势而为！如果当前已有持仓且趋势延续（如阳线不断创新高），请果断给出 HIGH 信心信号以触发加仓（Pyramiding）。不要恐慌性止盈，让利润奔跑。"
         elif volatility_status == "HIGH_CHOPPY":
             return "你是一位冷静的避险交易员。当前市场处于【剧烈震荡】，波动大且无方向。请极度谨慎，优先选择 HOLD 观望。严禁在震荡区间中间位置开单，只有在布林带极端突破且有明确反转信号时才考虑超短线操作。"
         elif volatility_status == "LOW":
-            return "你是一位耐心的网格交易员。当前市场【窄幅横盘】。这是垃圾时间，严禁频繁开仓。请寻找箱体上下沿的高抛低吸机会，中间位置一律 HOLD。"
+            return "你是一位无情的震荡猎手。当前市场【极度缩量横盘】，ADX极低。这是网格交易的天堂！请放弃大趋势幻想，专注于 15m 周期的布林带轨道。核心策略：【价格触碰下轨+RSI<30 = BUY】，【价格触碰上轨+RSI>70 = SELL】。只要有微利(>0.5%)就立即平仓，不要恋战。如果是中间位置，坚决 HOLD。"
         else:
-            return "你是一位稳健的波段交易员。当前市场波动正常。请忽略 1m 周期内的微小噪音，基于整体 K 线结构（50根）寻找盈亏比 > 1.5 的确定性形态。如果当前持仓浮亏不大且形态未坏，请多一点耐心 (HOLD)。"
+            return "你是一位稳健的波段交易员。当前市场波动正常。请忽略 1m 周期内的微小噪音，基于整体 K 线结构（50根）寻找盈亏比 > 1.5 的确定性形态（如W底、头肩底）。如果当前持仓浮亏不大且形态未坏，请多一点耐心 (HOLD)。但如果出现顶背离或关键支撑位跌破，请毫不犹豫地 CUT LOSS。"
 
     def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control, current_account_pnl=0.0):
         ind = price_data.get('indicators', {})

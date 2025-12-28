@@ -549,7 +549,13 @@ class DeepSeekTrader:
             elif current_position and current_position['side'] == 'long':
                 is_closing = True
         
+        # [New] 如果是 BUY 平空 (Short -> Flat)
+        if signal_data['signal'] == 'BUY' and current_position and current_position['side'] == 'short':
+            is_closing = True
+        
         # [Logic Fix] 无论是否是反手，都需要检查最小/最大数量限制
+        # 但如果是平仓 (Closing)，我们不应该受最小下单数量限制 (例如我只剩 0.001 ETH，必须能卖掉)
+        # OKX 通常允许平仓单小于 min_limit
         if trade_amount > 0:
              # 开仓检查最小数量
              try:
@@ -569,25 +575,27 @@ class DeepSeekTrader:
                  
                  min_cost = market.get('limits', {}).get('cost', {}).get('min')
                  
-                 if min_amount_coins and trade_amount < min_amount_coins:
-                     if max_trade_limit >= min_amount_coins:
-                         self._log(f"⚠️ 数量 {trade_amount} < 最小限制 {min_amount_coins:.6f} (Coins)，自动提升")
-                         trade_amount = min_amount_coins
-                     else:
-                         self._log(f"🚫 余额不足最小单位 {min_amount_coins:.6f}", 'warning')
-                         await self._send_diagnostic_report(trade_amount, min_amount_coins, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, "余额不足以购买最小单位")
-                         return "SKIPPED_MIN", f"少于最小限额 {min_amount_coins}"
+                 # [Modified] 如果是平仓操作 (is_closing=True)，跳过最小数量检查，防止尾仓无法平掉
+                 if not is_closing:
+                     if min_amount_coins and trade_amount < min_amount_coins:
+                         if max_trade_limit >= min_amount_coins:
+                             self._log(f"⚠️ 数量 {trade_amount} < 最小限制 {min_amount_coins:.6f} (Coins)，自动提升")
+                             trade_amount = min_amount_coins
+                         else:
+                             self._log(f"🚫 余额不足最小单位 {min_amount_coins:.6f}", 'warning')
+                             await self._send_diagnostic_report(trade_amount, min_amount_coins, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, "余额不足以购买最小单位")
+                             return "SKIPPED_MIN", f"少于最小限额 {min_amount_coins}"
 
-                 if min_cost and (trade_amount * current_realtime_price) < min_cost:
-                      # 尝试提升
-                      req_amount = (min_cost / current_realtime_price) * 1.05
-                      if max_trade_limit >= req_amount:
-                           self._log(f"⚠️ 金额不足最小限制 {min_cost}U，自动提升数量至 {req_amount}")
-                           trade_amount = req_amount
-                      else:
-                           self._log(f"🚫 余额不足最小金额 {min_cost}U", 'warning')
-                           await self._send_diagnostic_report(trade_amount, min_cost, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, f"余额不足最小金额 (需 {min_cost}U)")
-                           return "SKIPPED_MIN", f"金额 < {min_cost}U"
+                     if min_cost and (trade_amount * current_realtime_price) < min_cost:
+                          # 尝试提升
+                          req_amount = (min_cost / current_realtime_price) * 1.05
+                          if max_trade_limit >= req_amount:
+                               self._log(f"⚠️ 金额不足最小限制 {min_cost}U，自动提升数量至 {req_amount}")
+                               trade_amount = req_amount
+                          else:
+                               self._log(f"🚫 余额不足最小金额 {min_cost}U", 'warning')
+                               await self._send_diagnostic_report(trade_amount, min_cost, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, f"余额不足最小金额 (需 {min_cost}U)")
+                               return "SKIPPED_MIN", f"金额 < {min_cost}U"
 
                  if max_amount_coins and trade_amount > max_amount_coins:
                       self._log(f"⚠️ 数量 {trade_amount} > 市场最大限制 {max_amount_coins}，自动截断")
@@ -663,16 +671,21 @@ class DeepSeekTrader:
                      return "SKIPPED_ZERO", "计算数量为0"
 
                 # [Safety] 同向开仓保护 (防止重复下单)
+                # 策略调整：允许 HIGH 信心加仓
                 if not is_closing and current_position and current_position['side'] == 'long':
-                     self._log(f"⚠️ 已持有 Long 仓位 ({current_position['size']})，跳过重复开仓", 'warning')
-                     return "HOLD_DUP", "已持仓(防重)"
+                     if signal_data.get('confidence', '').upper() == 'HIGH':
+                         self._log(f"🔥 加仓模式: 已持有 Long，但信心 HIGH，允许加仓", 'info')
+                         # 加仓逻辑... (继续往下走，不再 return)
+                     else:
+                         self._log(f"⚠️ 已持有 Long 仓位 ({current_position['size']})，跳过重复开仓 (信心非HIGH)", 'warning')
+                         return "HOLD_DUP", "已持仓(防重)"
 
                 await self.exchange.create_market_order(self.symbol, 'buy', final_order_amount, params={'tdMode': self.trade_mode})
-                self._log(f"🚀 买入成功: {trade_amount} Coins ({final_order_amount} sz)")
+                self._log(f"🚀 买入成功: {trade_amount} Coins ({final_order_amount} 张)")
                 
                 msg = f"🚀 **买入执行 (BUY)**\n"
                 msg += f"• 交易对: {self.symbol}\n"
-                msg += f"• 数量: {trade_amount} Coins\n"
+                msg += f"• 数量: {trade_amount} 币 ({final_order_amount} 张)\n"
                 msg += f"• 价格: ${current_realtime_price:,.2f}\n"
                 msg += f"• 理由: {signal_data['reason']}\n"
                 msg += f"• 信心: {signal_data.get('confidence', 'N/A')}"
@@ -722,9 +735,13 @@ class DeepSeekTrader:
                          return "SKIPPED_ZERO", "计算数量为0"
 
                     # [Safety] 同向开仓保护 (防止重复下单)
+                    # 策略调整：允许 HIGH 信心加仓
                     if not is_closing and current_position and current_position['side'] == 'short':
-                         self._log(f"⚠️ 已持有 Short 仓位 ({current_position['size']})，跳过重复开仓", 'warning')
-                         return "HOLD_DUP", "已持仓(防重)"
+                         if signal_data.get('confidence', '').upper() == 'HIGH':
+                             self._log(f"🔥 加仓模式: 已持有 Short，但信心 HIGH，允许加仓", 'info')
+                         else:
+                             self._log(f"⚠️ 已持有 Short 仓位 ({current_position['size']})，跳过重复开仓 (信心非HIGH)", 'warning')
+                             return "HOLD_DUP", "已持仓(防重)"
 
                     await self.exchange.create_market_order(self.symbol, 'sell', final_order_amount, params={'tdMode': self.trade_mode})
                     self._log(f"📉 开空成功: {trade_amount} Coins ({final_order_amount} sz)")

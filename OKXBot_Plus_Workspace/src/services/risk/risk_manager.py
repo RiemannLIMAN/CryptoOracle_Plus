@@ -79,6 +79,8 @@ class RiskManager:
             self.logger.info(f"[RISK_MGR] {msg}")
         elif level == 'error':
             self.logger.error(f"[RISK_MGR] {msg}")
+        elif level == 'debug':
+            self.logger.debug(f"[RISK_MGR] {msg}")
 
     async def send_notification(self, message, title=None):
         """发送通知 (Async)"""
@@ -307,21 +309,27 @@ class RiskManager:
             # 比如：当 `adjusted_equity < initial_balance` (说明有效资金不足配置额) 且 `deposit_offset > 0` 时，
             # 我们可以尝试减少 offset，让资金“流回”有效池。
             
-            if self.deposit_offset > 0 and adjusted_equity < self.initial_balance:
-                 # 资金回流检测
-                 # 如果 当前总值 (100) > 有效资金 (80) + Offset (20) -> 平衡
-                 # 如果 我们希望有效资金恢复到 100 (配置值)
-                 # 我们需要减少 Offset。
-                 
-                 gap = self.initial_balance - adjusted_equity # 缺口 20U
-                 recoverable = min(gap, self.deposit_offset)  # 最多能从 offset 里拿回多少
-                 
-                 # 这里需要非常小心，别把真正的“用户不想用的钱”给拿回来了。
-                 # 但逻辑上，既然用户配置了 initial_balance = 100，就说明他希望机器人用 100。
-                 # 之前是因为钱不够(只有80)没办法。现在钱够了(100)，当然应该用。
+            # [Fix] 资金回流检测逻辑调整
+            # 只有当 `deposit_offset` 异常大 (说明之前判定了充值) 且有效资金不足时，才考虑回流
+            # 但用户指出：如果亏损了就自动补，会导致无限亏损，掩盖真实风险。
+            # 因此，我们应该只在一种情况下允许回流：当 "当前总资产" 显著大于 "配置本金" 时 (即依然处于盈余或充值状态)
+            # 或者是用户手动开启了 "自动补仓" (目前没有这个开关)
+            
+            # 现在的逻辑改为：
+            # 1. 只有当 Adjusted Equity (有效资金) 严重低于配置 (例如 < 90%)，且 Offset 很大时，才怀疑是 Offset 算多了，尝试修复。
+            # 2. 对于微小的亏损 (例如 100 -> 99.9)，不要动 Offset，让它如实反映亏损。
+            
+            # if self.deposit_offset > 0 and adjusted_equity < self.initial_balance:
+            #     # ... (原有的激进回流逻辑) ...
+            
+            # [New] 保守回流逻辑: 仅在检测到明显的“Offset 误判”时才回流
+            # 判定标准: 如果 Offset 占据了太多的资金，导致有效资金连配置的 95% 都不到，那可能是之前把卖币回来的钱误判为充值了。
+            if self.deposit_offset > 0 and adjusted_equity < self.initial_balance * 0.95:
+                 gap = self.initial_balance - adjusted_equity
+                 recoverable = min(gap, self.deposit_offset)
                  
                  if recoverable > 0:
-                     self._log(f"💧 资金回流检测: 配置 {self.initial_balance} > 有效 {adjusted_equity:.2f}，释放抵扣额 {recoverable:.2f} U")
+                     self._log(f"💧 资金异常回流: 有效资金 ({adjusted_equity:.2f}) 严重偏离配置 ({self.initial_balance})，判定为Offset误判，释放 {recoverable:.2f} U")
                      self.deposit_offset -= recoverable
                      self.save_state()
                      # 重新计算
@@ -329,18 +337,27 @@ class RiskManager:
                      raw_pnl = adjusted_equity - self.smart_baseline
             
             # [Fix] 防止重复打印日志
-            # 策略优化：
-            # 1. 如果 PnL 变化超过 0.005 U，立即打印 (捕捉剧烈波动)
-            # 2. 否则，每隔 60 秒强制打印一次心跳 (证明机器人还活着)
+            # 策略优化：基于百分比变化的智能日志
+            # 1. 如果 PnL 变化超过本金的 0.1%，立即打印
+            # 2. 或者，如果绝对值变化超过 0.5 U，立即打印 (针对小资金)
+            # 3. 否则，保持静默 (由心跳机制兜底)
+            
             current_ts = time.time()
-            is_significant_change = not hasattr(self, 'last_logged_pnl') or abs(raw_pnl - self.last_logged_pnl) > 0.005
+            pnl_diff = abs(raw_pnl - getattr(self, 'last_logged_pnl', 0))
+            
+            # 动态阈值: 0.1% 的基准资金 (例如 1000U -> 1U, 100U -> 0.1U)
+            dynamic_threshold = max(0.5, self.smart_baseline * 0.001)
+            
+            is_significant_change = not hasattr(self, 'last_logged_pnl') or pnl_diff > dynamic_threshold
             is_heartbeat_time = (current_ts - getattr(self, 'last_log_ts', 0)) > 60
             
             if is_significant_change or is_heartbeat_time:
                 pnl_percent = (raw_pnl / self.smart_baseline) * 100
-                log_icon = "💰" if is_significant_change else "💓" # 用不同图标区分
+                log_icon = "💰" if is_significant_change else "💓"
                 
-                self._log(f"{log_icon} 账户监控: 基准 {self.smart_baseline:.2f} U | 当前总值 {current_total_value:.2f} U (抵扣 {self.deposit_offset:.2f}) | 盈亏 {raw_pnl:+.2f} U ({pnl_percent:+.2f}%)")
+                # [Mod] 将高频心跳日志降级为 DEBUG，避免刷屏
+                # 只有当触发真正的止损/止盈时，才使用 INFO 级别
+                self._log(f"{log_icon} 账户监控: 基准 {self.smart_baseline:.2f} U | 当前总值 {current_total_value:.2f} U (抵扣 {self.deposit_offset:.2f}) | 盈亏 {raw_pnl:+.2f} U ({pnl_percent:+.2f}%)", level='debug')
                 
                 self.last_logged_pnl = raw_pnl
                 self.last_log_ts = current_ts
