@@ -123,17 +123,17 @@ def setup_logger(name="crypto_oracle"):
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
 
-    # [Revert] 使用带时间戳的文件名，每次启动生成新日志
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_filename = os.path.join(log_dir, f"trading_bot_{timestamp}.log")
+    # [Fix] 使用固定文件名，方便 tail -f 监控
+    # 如果需要历史备份，RotatingFileHandler 会自动处理 (.1, .2)
+    log_filename = os.path.join(log_dir, "crypto_oracle.log")
 
     # 强制输出到 stdout，确保控制台可见
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     
-    # 既然文件名自带时间戳，这里可以不用 RotatingFileHandler，或者仅作为单文件大小限制使用
-    # 使用 FileHandler 即可
-    file_handler = logging.FileHandler(log_filename, encoding='utf-8')
+    # 使用 RotatingFileHandler 防止日志无限增长
+    # 10MB 一个文件，保留 5 个备份
+    file_handler = RotatingFileHandler(log_filename, maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
     file_handler.setLevel(logging.INFO)
 
     logging.basicConfig(
