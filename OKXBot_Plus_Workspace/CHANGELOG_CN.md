@@ -5,6 +5,21 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.3.2] - 2025-12-28 (Hotfix)
+### 🐛 Bug 修复
+- **修复 NameError**: 
+  - 修复了在 Prompt 构建过程中因缺少 `max_buy_token` 定义而导致 DeepSeek 分析失败的问题。
+  - 这是由于在添加 "资金耗尽预警" 逻辑时意外删除了变量定义。现已恢复。
+
+## [v3.3.1] - 2025-12-28 (Fund-Aware AI & Full-Lock)
+### 🧠 AI 逻辑增强 (Smart AI)
+- **资金耗尽感知 (Fund Awareness)**: 
+  - **问题**: 之前当可用余额不足时，AI 仍然会因为看好趋势而建议 "加仓"，导致执行器报错 "余额不足"，这既浪费算力又让用户感到焦虑。
+  - **修复**: 现在当可用余额低于最小下单金额 (如 5U) 时，系统会向 AI 发送 **🔴 严重警告**，明确告知 "资金已耗尽，严禁建议 BUY"。AI 将被迫转入 "持仓管理模式"，专注于何时平仓变现。
+- **满仓状态识别 (Full Lock)**:
+  - **体验优化**: 如果 AI 依然头铁建议加仓但余额不足，执行器不再报错 "🚫 余额不足"，而是显示绿色的 "🔒 [满仓保护]"。
+  - **UI**: 看板状态更新为 `🔒 FULL`，传达出 "资金利用率已打满，正在让利润奔跑" 的积极信号，而非错误警告。
+
 ## [v3.3.0] - 2025-12-28 (Smart-Calibration & UX Polish)
 ### 💰 资金管理 (Smart Calibration)
 - **实盘战绩核对 (Realized PnL)**: 

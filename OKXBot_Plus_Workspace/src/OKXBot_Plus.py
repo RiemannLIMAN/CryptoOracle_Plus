@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.3.0 (Smart-Calibration & UX Polish)"
+SYSTEM_VERSION = "v3.3.2 (Hotfix: Max Buy Token)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -273,12 +273,14 @@ async def main():
                         status_icon = "❓"
                         if exec_status == 'EXECUTED': status_icon = "✅"
                         elif exec_status == 'HOLD': status_icon = "⏸️"
+                        elif exec_status == 'SKIPPED_FULL': status_icon = "🔒" # 满仓锁
                         elif 'SKIPPED' in exec_status: status_icon = "🚫"
                         elif exec_status == 'FAILED': status_icon = "❌"
                         elif exec_status == 'TEST_MODE': status_icon = "🧪"
                         
                         display_status = exec_status.replace('SKIPPED_', '')
                         if display_status == 'EXECUTED': display_status = 'DONE'
+                        elif display_status == 'FULL': display_status = 'FULL' # 显示 FULL
                         exec_display = f"{status_icon} {display_status}"
                         
                         summary_text = res.get('summary', '')

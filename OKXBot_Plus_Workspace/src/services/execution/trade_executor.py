@@ -686,31 +686,51 @@ class DeepSeekTrader:
                          should_check_min = not is_closing or self.trade_mode != 'cash'
                          
                          if should_check_min:
-                             if min_amount_coins and trade_amount < min_amount_coins:
-                                 if max_trade_limit >= min_amount_coins:
-                                     self._log(f"⚠️ 数量 {trade_amount} < 最小限制 {min_amount_coins:.6f} (Coins)，自动提升")
-                                     trade_amount = min_amount_coins
-                                     # 重新计算 final_order_amount
-                                     if self.trade_mode != 'cash':
-                                         final_order_amount = int(trade_amount / contract_size)
-                                 else:
-                                     self._log(f"🚫 余额不足最小单位 {min_amount_coins:.6f}", 'warning')
-                                     await self._send_diagnostic_report(trade_amount, min_amount_coins, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, "余额不足以购买最小单位")
-                                     return "SKIPPED_MIN", f"少于最小限额 {min_amount_coins}"
+                            if min_amount_coins and trade_amount < min_amount_coins:
+                                if max_trade_limit >= min_amount_coins:
+                                    self._log(f"⚠️ 数量 {trade_amount} < 最小限制 {min_amount_coins:.6f} (Coins)，自动提升")
+                                    trade_amount = min_amount_coins
+                                    # 重新计算 final_order_amount
+                                    if self.trade_mode != 'cash':
+                                        final_order_amount = int(trade_amount / contract_size)
+                                else:
+                                    # [New] 如果是加仓场景 (Pyramiding) 导致的余额不足，则不算错误，而是满仓保护
+                                    is_pyramiding = current_position and (
+                                        (signal_data['signal'] == 'BUY' and current_position['side'] == 'long') or
+                                        (signal_data['signal'] == 'SELL' and current_position['side'] == 'short')
+                                    )
+                                    
+                                    if is_pyramiding:
+                                        self._log(f"🔒 [满仓保护] 资金已打满，无法加仓，继续持有当前仓位让利润奔跑", 'info')
+                                        return "SKIPPED_FULL", "满仓持有中"
+                                    else:
+                                        self._log(f"🚫 余额不足最小单位 {min_amount_coins:.6f}", 'warning')
+                                        await self._send_diagnostic_report(trade_amount, min_amount_coins, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, "余额不足以购买最小单位")
+                                        return "SKIPPED_MIN", f"少于最小限额 {min_amount_coins}"
 
-                             if min_cost and (trade_amount * current_realtime_price) < min_cost:
-                                 # 尝试提升
-                                 req_amount = (min_cost / current_realtime_price) * 1.05
-                                 if max_trade_limit >= req_amount:
-                                     self._log(f"⚠️ 金额不足最小限制 {min_cost}U，自动提升数量至 {req_amount}")
-                                     trade_amount = req_amount
-                                     # 重新计算 final_order_amount
-                                     if self.trade_mode != 'cash':
-                                         final_order_amount = int(trade_amount / contract_size)
-                                 else:
-                                     self._log(f"🚫 余额不足最小金额 {min_cost}U", 'warning')
-                                     await self._send_diagnostic_report(trade_amount, min_cost, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, f"余额不足最小金额 (需 {min_cost}U)")
-                                     return "SKIPPED_MIN", f"金额 < {min_cost}U"
+                            if min_cost and (trade_amount * current_realtime_price) < min_cost:
+                                # 尝试提升
+                                req_amount = (min_cost / current_realtime_price) * 1.05
+                                if max_trade_limit >= req_amount:
+                                    self._log(f"⚠️ 金额不足最小限制 {min_cost}U，自动提升数量至 {req_amount}")
+                                    trade_amount = req_amount
+                                    # 重新计算 final_order_amount
+                                    if self.trade_mode != 'cash':
+                                        final_order_amount = int(trade_amount / contract_size)
+                                else:
+                                    # [New] 同上，如果是加仓场景，不算错误
+                                    is_pyramiding = current_position and (
+                                        (signal_data['signal'] == 'BUY' and current_position['side'] == 'long') or
+                                        (signal_data['signal'] == 'SELL' and current_position['side'] == 'short')
+                                    )
+                                    
+                                    if is_pyramiding:
+                                        self._log(f"🔒 [满仓保护] 资金已打满，无法加仓，继续持有当前仓位让利润奔跑", 'info')
+                                        return "SKIPPED_FULL", "满仓持有中"
+                                    else:
+                                        self._log(f"🚫 余额不足最小金额 {min_cost}U", 'warning')
+                                        await self._send_diagnostic_report(trade_amount, min_cost, max_trade_limit, ai_suggest, config_amt, signal_data, current_realtime_price, f"余额不足最小金额 (需 {min_cost}U)")
+                                        return "SKIPPED_MIN", f"金额 < {min_cost}U"
 
                          if max_amount_coins and trade_amount > max_amount_coins:
                              self._log(f"⚠️ 数量 {trade_amount} > 市场最大限制 {max_amount_coins}，自动截断")

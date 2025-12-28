@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v3.3.2] - 2025-12-28 (Hotfix)
+### 🐛 Bug Fixes
+- **Fixed NameError**: 
+  - Resolved `max_buy_token` undefined error causing DeepSeek analysis failure.
+  - This was accidentally removed during the "Fund Awareness" update. It has been restored.
+
+## [v3.3.1] - 2025-12-28 (Fund-Aware AI & Full-Lock)
+### 🧠 AI Intelligence
+- **Fund Awareness**:
+  - **Problem**: Previously, AI would still suggest "BUY" (Pyramiding) even when funds were exhausted, causing "Insufficient Balance" errors.
+  - **Fix**: Injected a **🔴 Critical Warning** into the AI prompt when available balance < min order size. The AI is now explicitly told "Funds Exhausted, BUY is Forbidden", forcing it to switch to "Position Management Mode" (HOLD/SELL).
+- **Full Lock Recognition**:
+  - **UX**: If AI still suggests BUY despite the warning, the executor now handles it gracefully as "🔒 Full Position Protection" instead of an error.
+  - **UI**: Dashboard status now shows `🔒 FULL`, indicating "Capital fully utilized, letting profits run".
+
 ## [v3.3.0] - 2025-12-28 (Smart-Calibration & UX Polish)
 ### 💰 Risk Management (Smart Calibration)
 - **Realized PnL Check**:
