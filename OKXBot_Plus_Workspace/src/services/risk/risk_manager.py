@@ -545,6 +545,13 @@ class RiskManager:
                 
                 log_msg += f" | 盈亏 {raw_pnl:+.2f} U ({pnl_percent:+.2f}%)"
                 
+                # [New] 显示实盘战绩 (Realized PnL)
+                # 理论盈亏(raw_pnl) = 当前权益 - 初始权益 (包含浮动盈亏)
+                # 实盘战绩(realized) = 交易所统计的已平仓盈亏
+                if hasattr(self, 'realized_pnl_cache') and self.realized_pnl_cache != 0:
+                     pnl_icon = "🎉" if self.realized_pnl_cache > 0 else "💸"
+                     log_msg += f" | 实盘战绩 {self.realized_pnl_cache:+.2f} U {pnl_icon}"
+                
                 # 如果有误解，显示详细公式
                 if raw_pnl > 0:
                      log_msg += f" [公式: {adjusted_equity:.2f} - {self.smart_baseline:.2f}]"
@@ -713,6 +720,9 @@ class RiskManager:
         self.logger.info(sep_line)
         
         real_total_equity = current_usdt_equity + total_position_value
+        
+        # [New] 显示当前资金总数 (响应用户需求)
+        self.logger.info(f"💰 当前资金总数 (Total Equity): {real_total_equity:.2f} U")
         
         if self.initial_balance and self.initial_balance > 0:
             # [Logic Change] 固定本金模式

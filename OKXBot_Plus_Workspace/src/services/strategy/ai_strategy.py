@@ -32,20 +32,40 @@ class DeepSeekAgent:
         except:
             return False
 
+    def _is_high_volatility_coin(self, symbol):
+        """判断是否为高波动币种 (山寨币/MEME)"""
+        # 主流币定义 (相对稳健)
+        major_coins = {'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'TRX', 'LINK', 'LTC'}
+        try:
+            base = symbol.split('/')[0]
+            return base not in major_coins
+        except:
+            return True    
+
     def _get_role_prompt(self, volatility_status, is_stable_pair=False):
         if is_stable_pair:
             return "你是一位专注于【稳定币套利】的量化交易员。当前交易对由两种稳定币组成，价格理论上应恒定在 1.0000。请忽略大部分趋势指标，专注于均值回归。你的目标是捕捉极其微小的脱锚波动（如 0.9995 买入，1.0005 卖出）。"
         
-        # [Strategy Update] 趋势增强策略
-        # 当 HIGH_TREND 时，鼓励金字塔加仓，但也必须警惕反转
-        if volatility_status == "HIGH_TREND":
-            return "你是一位激进的趋势猎手。当前市场处于【单边极强趋势】，ADX爆表。原则：顺势而为！\n1. 如果当前持仓方向与趋势一致（如持多且不断创新高），果断 HIGH 信心加仓。\n2. ⚠️ 关键：如果当前持仓与趋势相反（如持多但出现暴跌阴线），立即给出 SELL 信号并建议反手开空（Flip）。不要死扛！\n3. 理由中请明确指出趋势方向（Bullish/Bearish）。"
-        elif volatility_status == "HIGH_CHOPPY":
-            return "你是一位冷静的避险交易员。当前市场处于【剧烈震荡】。优先选择 HOLD。但如果出现【明确的假突破】或【关键位反转】，可以尝试 LOW 信心短线操作，不要过于保守。"
-        elif volatility_status == "LOW":
-            return "你是一位激进的超短线猎手。当前市场【缩量横盘】。请利用布林带轨道进行剥头皮交易！\n1. 价格触碰布林下轨且RSI<35 -> BUY\n2. 价格触碰布林上轨且RSI>65 -> SELL\n不要死等大行情，只要有 0.3% 利润空间即可出手。"
-        else:
-            return "你是一位敏锐的波段交易员。当前市场波动正常。请基于 K 线结构寻找机会。\n1. 顺势交易：如果趋势明确（如连续阴跌），请果断建议顺势开单，不要等待完美回调。\n2. 关键位：如果价格跌破支撑或突破压力，立即发出信号。\n3. 允许 LOW 信心试错：如果不确定性较高但盈亏比划算，可以给出 LOW 信心建议。"
+        # [Strategy Update: Swing Trading]
+        # 转型为稳健的波段交易策略，放弃超短线噪音
+        return """
+你是一位经验丰富的【中线波段交易员 (Swing Trader)】。你的目标是捕捉 15m/1h/4h 级别的趋势行情，而不是 1m 的噪音。
+
+【你的交易哲学】:
+1. **宁缺毋滥**: 只有当趋势非常明确（如突破关键压力位、均线多头排列）时才开仓。如果没有机会，请果断 HOLD。
+2. **拒绝噪音**: 忽略 K 线内部的微小波动。不要因为一两根反向 K 线就惊慌出局，除非趋势结构被破坏。
+3. **盈亏比优先**: 每一笔交易的预期利润必须 > 1.0% (覆盖 10倍手续费)。如果利润空间太小，不要开仓。
+4. **拿得住单**: 趋势一旦形成，往往会持续一段时间。请尽可能持有盈利仓位，直到趋势反转信号出现。
+
+【决策依据】:
+- **趋势**: ADX > 25 且价格在布林中轨之上 -> 多头趋势。
+- **结构**: 关注 "Higher Highs / Higher Lows" (上升趋势) 或 "Lower Lows / Lower Highs" (下降趋势)。
+- **反转**: 只有出现明确的顶部/底部形态（如双顶/底、头肩顶/底）或关键位假突破时，才考虑反手。
+
+【关于止损与反手】:
+- 你的止损应该设置在关键支撑位之下，而不是仅仅看百分比。给波动留出呼吸空间。
+- 只有当趋势发生**本质逆转**时才反手，不要在震荡区间里反复左右挨耳光。
+"""
 
     def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control, current_account_pnl=0.0, current_pos=None, funding_rate=0.0):
         ind = price_data.get('indicators', {})
@@ -200,12 +220,20 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
         5. 止损：极其严格，如果脱锚超过 0.5% (如跌破 0.995) 立即止损。
             """
         else:
-            stable_coin_instruction = f"""
-        ⚠️ **特殊规则 (波动资产)**：
-        1. **稳健第一**：在 1m 周期下，噪音极大。只有当 ADX > 25 且 K 线结构清晰（如突破回踩、双底）时才开单。
-        2. **杠杆警示**：当前杠杆为 {leverage}x。波动 1% = 盈亏 {leverage}%。请根据此放大倍数收紧止损建议。
-        3. **拒绝频繁交易**：如果当前形态模棱两可，或者处于布林带中轨，请果断 HOLD。宁可错过，不要做错。
-            """
+            if self._is_high_volatility_coin(symbol):
+                stable_coin_instruction = f"""
+        ⚠️ **特殊规则 (高波动/山寨币)**：
+        1. **风控优先**：此币种波动极大（High Volatility）。请将止损范围放宽到 3%~5% (甚至更大)，避免被插针扫损。
+        2. **趋势确认**：严禁左侧抄底！必须等待 K 线收盘确认突破或站稳后才进场。
+        3. **利润目标**：波动大意味着机会大，请设定更高的止盈目标 (>5%)。
+                """
+            else:
+                stable_coin_instruction = f"""
+        ⚠️ **特殊规则 (主流币/稳健资产)**：
+        1. **稳健第一**：在 15m/1h 周期下，关注 MA 均线支撑。
+        2. **杠杆警示**：当前杠杆为 {leverage}x。请根据此放大倍数设置合理止损 (建议 1%~2%)。
+        3. **拒绝频繁交易**：如果当前形态模棱两可，或者处于布林带中轨，请果断 HOLD。
+                """
 
         return f"""
         # 角色设定

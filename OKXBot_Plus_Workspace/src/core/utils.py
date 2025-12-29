@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 import aiohttp
 from logging.handlers import RotatingFileHandler
@@ -122,17 +123,30 @@ def setup_logger(name="crypto_oracle"):
 
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
+        
+    # [New] 自动清理旧日志 (保留最近3天)
+    # 虽然改为单文件模式，但为了清理之前残留的时间戳文件，保留此逻辑一次
+    try:
+        now = time.time()
+        retention_days = 3
+        for f in os.listdir(log_dir):
+            if f.endswith(".log") and f.startswith("trading_bot_"):
+                f_path = os.path.join(log_dir, f)
+                if os.stat(f_path).st_mtime < now - (retention_days * 86400):
+                    os.remove(f_path)
+    except Exception:
+        pass
 
-    # [Restored] 使用带时间戳的文件名，每次启动生成新日志
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    log_filename = os.path.join(log_dir, f"trading_bot_{timestamp}.log")
+    # [Fix] 回归单文件模式，避免文件过多
+    log_filename = os.path.join(log_dir, "crypto_oracle.log")
 
     # 强制输出到 stdout，确保控制台可见
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     
-    # 使用 FileHandler，因为每次都是新文件
-    file_handler = logging.FileHandler(log_filename, encoding='utf-8')
+    # 使用 RotatingFileHandler，最大 10MB，保留 3 个备份
+    # 这样既不会无限增长，也不会产生一堆文件
+    file_handler = RotatingFileHandler(log_filename, maxBytes=10*1024*1024, backupCount=3, encoding='utf-8')
     file_handler.setLevel(logging.INFO)
 
     logging.basicConfig(

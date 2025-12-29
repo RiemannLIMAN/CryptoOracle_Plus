@@ -50,6 +50,25 @@ class DeepSeekTrader:
         if hasattr(self, '_update_fee_rate'):
             await self._update_fee_rate()
 
+        # [New] Smart Balance Calibration (智能资金校准)
+        # 解决配置资金与实际资金偏差导致的错误盈亏计算问题
+        try:
+            current_equity = await self.get_account_equity()
+            if current_equity > 0:
+                # 如果 config 中的 initial_balance 明显异常 (偏差 > 10%)
+                # 或者如果它是默认值 (比如 0)
+                # 则自动校准为当前权益，以此作为本次运行的盈亏基准
+                if self.initial_balance <= 0 or abs(self.initial_balance - current_equity) / current_equity > 0.1:
+                    self._log(f"⚖️ 初始资金校准: 配置({self.initial_balance}) vs 实际({current_equity:.2f}) -> 自动修正为实际值", 'warning')
+                    self.initial_balance = current_equity
+                    # 同时更新 risk_control 里的值，确保一致性
+                    if self.risk_control:
+                        self.risk_control['initial_balance_usdt'] = current_equity
+                else:
+                    self._log(f"✅ 初始资金确认: {self.initial_balance} U (实际: {current_equity:.2f} U)")
+        except Exception as e:
+            self._log(f"⚠️ 资金校准失败: {e}", 'warning')
+
     def _log(self, msg, level='info'):
         if level == 'info':
             self.logger.info(f"[{self.symbol}] {msg}")
