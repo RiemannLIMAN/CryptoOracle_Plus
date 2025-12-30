@@ -197,114 +197,95 @@ async def main():
     # 这样可以实现：Timeframe="15m" (看15分钟图)，但每 15秒 (loop_interval) 检查一次
     custom_interval = config['trading'].get('loop_interval')
     if custom_interval and isinstance(custom_interval, (int, float)) and custom_interval > 0:
-        logger.info(f"⚡ [双频模式] K线周期: {timeframe} | 轮询间隔: {custom_interval}s")
+        logger.info(f"⚡ [单频模式] K线周期: {timeframe} | 轮询间隔: {custom_interval}s")
         interval = custom_interval
     else:
         logger.info(f"⏰ 轮询间隔: {interval}秒 (跟随 Timeframe)")
 
-    logger.info(f"⏰ 轮询间隔: {interval}秒")
+    logger.info(f"⏰ 最终轮询间隔: {interval}秒")
     
-    # [New] 双频心跳机制
-    # last_analysis_time 用于控制"重"任务 (AI Analysis) 的频率
-    # 主循环 (Tick Loop) 将以较快频率 (e.g. 1s) 运行，用于执行"轻"任务 (Safety Check)
-    last_analysis_time = 0
-    tick_rate = 1 # 极速心跳 1秒
+    # [New] 单频心跳机制 (Unified Loop)
+    # 移除了旧版的双频模式 (tick_rate + analysis_tick)，现在统一使用 interval 进行轮询
+    # 这样可以避免在"垃圾时间"频繁请求 API，且与"波动率过滤"逻辑更契合
     
     try:
         while True:
             current_ts = time.time()
-            is_analysis_tick = (current_ts - last_analysis_time) >= interval
             
-            # 1. Safety Check (High Frequency)
-            # 每次 Tick 都运行，确保止损/风控能及时触发
-            await risk_manager.check() # 全局风控
-            
-            # 并行执行所有 Traders 的快速安全检查
-            safety_tasks = [trader.run_safety_check() for trader in traders]
-            safety_results = await asyncio.gather(*safety_tasks, return_exceptions=True)
-            
-            # 简单的日志心跳，避免刷屏，仅在整分钟时打印
-            if int(current_ts) % 60 < tick_rate:
-                 # logger.info(f"💓 系统心跳正常 | 活跃交易员: {len(traders)}")
-                 pass
+            # 1. 批次执行开始日志
+            current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            logger.info(f"─" * 60)
+            logger.info(f"⏰ 批次执行开始: {current_time_str}")
+            logger.info(f"─" * 60)
 
-            # 2. Analysis Task (Low Frequency)
-            if is_analysis_tick:
-                last_analysis_time = current_ts
-                
-                # 还原经典分割线样式
-                current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                logger.info(f"─" * 60)
-                logger.info(f"⏰ 批次执行开始: {current_time_str}")
-                logger.info(f"─" * 60)
-
-                # [New] 在每轮交易开始前，打印一次账户监控
-                # 这会让用户在看到"批次执行开始"之前，先看到"账户监控"
-                await risk_manager.check(force_log=True)
-                
-                # Parallel Execution
-                tasks = [trader.run() for trader in traders]
-                results = await asyncio.gather(*tasks)
-                
-                # [Added] 结构化表格输出
-                table_lines = []
-                header = f"📊 MARKET SCAN | {len(results)} Symbols"
-                table_lines.append(header) 
-                table_lines.append("─" * 130)
-                table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
-                table_lines.append("─" * 130)
-                
-                for res in results:
-                    if res:
-                        symbol_str = res['symbol'].split(':')[0]
-                        change_val = res['change']
-                        change_icon = "🟢" if change_val > 0 else "🔴"
-                        change_str = f"{change_val:+.2f}%"
-                        
-                        signal = res['signal']
-                        sig_icon = "✋"
-                        if signal == 'BUY': sig_icon = "🚀"
-                        elif signal == 'SELL': sig_icon = "📉"
-                        signal_display = f"{sig_icon} {signal}"
-                        
-                        conf = res['confidence']
-                        conf_display = conf
-                        if conf == 'HIGH': conf_display = "🔥🔥 HIGH"
-                        elif conf == 'MEDIUM': conf_display = "⚡ MED"
-                        elif conf == 'LOW': conf_display = "💤 LOW"
-
-                        exec_status = res.get('status', 'N/A')
-                        status_icon = "❓"
-                        if exec_status == 'EXECUTED': status_icon = "✅"
-                        elif exec_status == 'HOLD': status_icon = "⏸️"
-                        elif exec_status == 'SKIPPED_FULL': status_icon = "🔒" # 满仓锁
-                        elif 'SKIPPED' in exec_status: status_icon = "🚫"
-                        elif exec_status == 'FAILED': status_icon = "❌"
-                        elif exec_status == 'TEST_MODE': status_icon = "🧪"
-                        
-                        display_status = exec_status.replace('SKIPPED_', '')
-                        if display_status == 'EXECUTED': display_status = 'DONE'
-                        elif display_status == 'FULL': display_status = 'FULL' # 显示 FULL
-                        exec_display = f"{status_icon} {display_status}"
-                        
-                        summary_text = res.get('summary', '')
-                        if not summary_text or len(summary_text) == 0:
-                            reason = res['reason'].replace('\n', ' ')
-                            summary_text = (reason[:40] + '...') if len(reason) > 40 else reason
-                        
-                        price_str = f"${res['price']:,.2f}"
-                        
-                        table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
-                
-                table_lines.append("─" * 130)
-                logger.info("\n".join(table_lines))
-                
-                elapsed = time.time() - current_ts
-                logger.info(f"💤 本轮分析耗时 {elapsed:.4f}s")
+            # 2. 账户监控与风控检查
+            # check() 会打印当前的 PnL 状态
+            await risk_manager.check(force_log=True)
             
-            # 计算 Sleep 时间，确保 Tick 频率稳定
-            # 如果是 Analysis 轮次，可能会花费较长时间，下一次 Tick 应该尽快（或者直接 sleep tick_rate）
-            await asyncio.sleep(tick_rate)
+            # 3. 并行执行所有 Traders 的分析与交易任务
+            tasks = [trader.run() for trader in traders]
+            results = await asyncio.gather(*tasks)
+            
+            # 4. 结构化表格输出
+            table_lines = []
+            header = f"📊 MARKET SCAN | {len(results)} Symbols"
+            table_lines.append(header) 
+            table_lines.append("─" * 130)
+            table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
+            table_lines.append("─" * 130)
+            
+            for res in results:
+                if res:
+                    symbol_str = res['symbol'].split(':')[0]
+                    change_val = res['change']
+                    change_icon = "🟢" if change_val > 0 else "🔴"
+                    change_str = f"{change_val:+.2f}%"
+                    
+                    signal = res['signal']
+                    sig_icon = "✋"
+                    if signal == 'BUY': sig_icon = "🚀"
+                    elif signal == 'SELL': sig_icon = "📉"
+                    signal_display = f"{sig_icon} {signal}"
+                    
+                    conf = res['confidence']
+                    conf_display = conf
+                    if conf == 'HIGH': conf_display = "🔥🔥 HIGH"
+                    elif conf == 'MEDIUM': conf_display = "⚡ MED"
+                    elif conf == 'LOW': conf_display = "💤 LOW"
+
+                    exec_status = res.get('status', 'N/A')
+                    status_icon = "❓"
+                    if exec_status == 'EXECUTED': status_icon = "✅"
+                    elif exec_status == 'HOLD': status_icon = "⏸️"
+                    elif exec_status == 'SKIPPED_FULL': status_icon = "🔒" # 满仓锁
+                    elif 'SKIPPED' in exec_status: status_icon = "🚫"
+                    elif exec_status == 'FAILED': status_icon = "❌"
+                    elif exec_status == 'TEST_MODE': status_icon = "🧪"
+                    
+                    display_status = exec_status.replace('SKIPPED_', '')
+                    if display_status == 'EXECUTED': display_status = 'DONE'
+                    elif display_status == 'FULL': display_status = 'FULL' # 显示 FULL
+                    exec_display = f"{status_icon} {display_status}"
+                    
+                    summary_text = res.get('summary', '')
+                    if not summary_text or len(summary_text) == 0:
+                        reason = res['reason'].replace('\n', ' ')
+                        summary_text = (reason[:40] + '...') if len(reason) > 40 else reason
+                    
+                    price_str = f"${res['price']:,.2f}"
+                    
+                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
+            
+            table_lines.append("─" * 130)
+            logger.info("\n".join(table_lines))
+            
+            elapsed = time.time() - current_ts
+            logger.info(f"💤 本轮分析耗时 {elapsed:.4f}s")
+            
+            # 计算需要休眠的时间，保持 interval 稳定
+            sleep_time = max(1, interval - elapsed)
+            logger.info(f"⏳ 休眠 {sleep_time:.2f}s 等待下一轮...")
+            await asyncio.sleep(sleep_time)
             
     except KeyboardInterrupt:
         logger.info("🛑 停止中...")
