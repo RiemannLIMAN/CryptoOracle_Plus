@@ -35,6 +35,9 @@ class DeepSeekTrader:
         self.risk_control = common_config.get('risk_control', {})
         self.initial_balance = self.risk_control.get('initial_balance_usdt', 0)
         self.notification_config = common_config.get('notification', {})
+        
+        # [New] 获取活跃交易对数量，用于自动资金分配
+        self.active_symbols_count = common_config.get('active_symbols_count', 1)
 
         self.exchange = exchange
         self.agent = agent # DeepSeekAgent instance
@@ -96,10 +99,15 @@ class DeepSeekTrader:
         try:
             quota = 0
             if self.initial_balance > 0:
-                if self.allocation <= 1.0:
-                    quota = self.initial_balance * self.allocation
-                else:
-                    quota = self.allocation
+                if isinstance(self.allocation, str) and self.allocation == 'auto':
+                    # [New] Auto Allocation Logic
+                    if self.active_symbols_count > 0:
+                        quota = self.initial_balance / self.active_symbols_count
+                elif isinstance(self.allocation, (int, float)):
+                    if self.allocation <= 1.0:
+                        quota = self.initial_balance * self.allocation
+                    else:
+                        quota = self.allocation
             
             if quota <= 0:
                 target_usdt = 10.0

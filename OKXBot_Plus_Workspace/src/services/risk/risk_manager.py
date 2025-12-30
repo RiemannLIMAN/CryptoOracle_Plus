@@ -654,12 +654,19 @@ class RiskManager:
             allocation_str = "N/A"
             
             if hasattr(trader, 'initial_balance') and trader.initial_balance and trader.initial_balance > 0:
-                if trader.allocation <= 1.0:
-                    quota = trader.initial_balance * trader.allocation
-                    allocation_str = f"{trader.allocation*100:.0f}%"
-                else:
-                    quota = trader.allocation
-                    allocation_str = "Fixed"
+                if isinstance(trader.allocation, str) and trader.allocation == 'auto':
+                    # [New] Auto Allocation Display Logic
+                    active_count = len(self.traders)
+                    if active_count > 0:
+                        quota = trader.initial_balance / active_count
+                    allocation_str = "Auto"
+                elif isinstance(trader.allocation, (int, float)):
+                    if trader.allocation <= 1.0:
+                        quota = trader.initial_balance * trader.allocation
+                        allocation_str = f"{trader.allocation*100:.0f}%"
+                    else:
+                        quota = trader.allocation
+                        allocation_str = "Fixed"
             
             holding_amount = 0.0
             position_val = 0.0
