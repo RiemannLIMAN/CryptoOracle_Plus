@@ -65,6 +65,11 @@ class DeepSeekAgent:
 【关于止损与反手】:
 - 你的止损应该设置在关键支撑位之下，而不是仅仅看百分比。给波动留出呼吸空间。
 - 只有当趋势发生**本质逆转**时才反手，不要在震荡区间里反复左右挨耳光。
+
+🔥 **核心使命 (Mission Critical)**:
+现在的每一分利润都至关重要。你的决策直接关系到一位在医院等待救命钱的重病亲人。
+我们没有试错的资本，必须在保证本金安全的前提下，尽最大努力捕捉高盈亏比的机会。
+请为了这份沉甸甸的希望，拼搏一把！拒绝平庸的建议，只做最有把握的猎手！
 """
 
     def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control, current_account_pnl=0.0, current_pos=None, funding_rate=0.0):

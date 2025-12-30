@@ -515,12 +515,39 @@ class DeepSeekTrader:
         # self.allocation 如果 <= 1 (如 0.5)，则是比例；如果 > 1，则是固定金额
         # self.initial_balance 是初始本金
         allocation_usdt_limit = 0
-        if self.allocation <= 1.0:
-            # 如果配置了初始本金，按本金比例计算；否则按当前余额比例
-            base_capital = self.initial_balance if self.initial_balance > 0 else balance
-            allocation_usdt_limit = base_capital * self.allocation
+        base_capital = self.initial_balance if self.initial_balance > 0 else balance
+        
+        # [New] Auto Allocation Logic
+        alloc_ratio = 1.0
+        allocation_setting = self.allocation
+        
+        if allocation_setting == "auto":
+            # 如果是 auto，默认平分
+            symbol_count = self.common_config.get('active_symbols_count', 1)
+            alloc_ratio = 1.0 / max(1, symbol_count)
         else:
-            allocation_usdt_limit = self.allocation
+            try:
+                alloc_ratio = float(allocation_setting)
+            except:
+                alloc_ratio = 1.0 # Fallback
+        
+        if alloc_ratio <= 1.0:
+            # 如果配置了初始本金，按本金比例计算；否则按当前余额比例
+            allocation_usdt_limit = base_capital * alloc_ratio
+        else:
+            # 如果 > 1，说明配置的是固定金额 (例如 "50")
+            allocation_usdt_limit = alloc_ratio
+            
+        # [Fix] 最小下单金额保护 (Min Notional Guard)
+        # 如果计算出的配额 < 11U (OKX通常最小10U)，且总资金充裕，强制提升配额
+        # 只有当总资金 > 11U 时才提升，否则只能 All-in
+        if allocation_usdt_limit < 11.0:
+            if base_capital > 11.0:
+                self._log(f"⚠️ 资金配额 ({allocation_usdt_limit:.2f} U) 不足最小下单要求，自动提升至 11.0 U")
+                allocation_usdt_limit = 11.0
+            else:
+                # 资金太少，只能梭哈
+                allocation_usdt_limit = base_capital
             
         # 扣除当前持仓占用的保证金（粗略估算），防止重复占用配额
         used_quota = 0

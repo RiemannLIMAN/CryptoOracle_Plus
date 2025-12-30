@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.3.3 (Fix: Full-Lock Logic for Short Side)"
+SYSTEM_VERSION = "v3.3.5 (Swing Trading & Smart Baseline)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -135,6 +135,10 @@ async def main():
     
     # Init Traders
     traders = []
+    
+    # [New] 注入总币种数量，用于 Auto Allocation
+    config['trading']['active_symbols_count'] = len(config['symbols'])
+    
     for symbol_conf in config['symbols']:
         trader = DeepSeekTrader(symbol_conf, config['trading'], exchange, agent)
         await trader.initialize()
