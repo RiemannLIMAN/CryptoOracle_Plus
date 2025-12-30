@@ -228,6 +228,20 @@ class DeepSeekTrader:
         except Exception as e:
             self._log(f"计算技术指标失败: {e}", 'error')
             return df
+            
+    def get_market_volatility_value(self, df, lookback=10):
+        """计算近期平均波动率 (百分比)"""
+        try:
+            if df.empty: return 0.0
+            # 使用最近 N 根 K 线
+            recent = df.tail(lookback)
+            # 计算每根 K 线的振幅 (High - Low) / Open
+            # 这里用 Open 作为分母比较合理，代表这根 K 线开始时的价格基准
+            amplitudes = (recent['high'] - recent['low']) / recent['open']
+            avg_amp = amplitudes.mean() * 100 # 转为百分比
+            return float(avg_amp)
+        except:
+            return 0.0
 
     async def get_ohlcv(self):
         try:
@@ -292,6 +306,21 @@ class DeepSeekTrader:
             # 确保至少有 10 条数据，防止过少
             feed_limit = max(10, self.history_limit)
             
+            # [New] 波动率过滤与成本计算
+            avg_volatility = self.get_market_volatility_value(df)
+            
+            # 估算硬性交易成本 (双倍杠杆手续费，因为一开一平)
+            # 如果是合约，手续费是基于名义价值，所以 leverage 会放大成本相对于本金的比例，
+            # 但这里我们只关心价格波动幅度是否覆盖费率本身
+            # 价格变动 % 必须 > (Taker + Maker) % 才能回本
+            transaction_cost_pct = self.taker_fee_rate + self.maker_fee_rate
+            break_even_point = transaction_cost_pct * 1.2 # 加上 20% 的滑点/缓冲
+            
+            # 波动率过滤器：如果最近平均振幅 < 成本的 1.5 倍，说明市场死水，直接 HOLD
+            if avg_volatility < break_even_point * 1.5:
+                self._log(f"💤 市场波动极低 ({avg_volatility:.4f}%) < 成本阈值 ({break_even_point*1.5:.4f}%)，强制跳过 AI 决策", 'info')
+                return None # 返回 None 表示不进行 AI 请求
+            
             return {
                 'price': current_data['close'],
                 'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -304,7 +333,10 @@ class DeepSeekTrader:
                 'kline_data': df[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'vol_ratio', 'obv']].tail(feed_limit).to_dict('records'),
                 'indicators': indicators,
                 'min_limit_info': min_limit_info,
-                'min_notional_info': min_notional_info
+                'min_notional_info': min_notional_info,
+                # [New] 注入成本信息
+                'break_even_cost': f"{break_even_point:.4f}%",
+                'avg_volatility': f"{avg_volatility:.4f}%"
             }
         except Exception as e:
             self._log(f"获取K线数据失败: {e}", 'error')
@@ -338,6 +370,20 @@ class DeepSeekTrader:
         except Exception as e:
             self._log(f"获取持仓失败: {e}", 'error')
             return None
+
+    def get_market_volatility_value(self, df, lookback=10):
+        """计算近期平均波动率 (百分比)"""
+        try:
+            if df.empty: return 0.0
+            # 使用最近 N 根 K 线
+            recent = df.tail(lookback)
+            # 计算每根 K 线的振幅 (High - Low) / Open
+            # 这里用 Open 作为分母比较合理，代表这根 K 线开始时的价格基准
+            amplitudes = (recent['high'] - recent['low']) / recent['open']
+            avg_amp = amplitudes.mean() * 100 # 转为百分比
+            return float(avg_amp)
+        except:
+            return 0.0
 
     def get_market_volatility(self, kline_data, adx_value=None):
         try:
