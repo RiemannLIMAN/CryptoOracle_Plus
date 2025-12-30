@@ -5,6 +5,24 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.4.0] - 2025-12-30 (Crypto Sniper Mode)
+### 🚀 策略升级 (Strategy Upgrade)
+- **Crypto Sniper 模式**: 
+  - 将 AI 角色从通用的 "Alpha Hunter" 升级为 "Crypto Sniper" (狙击手)。
+  - **原则升级**: 引入 "不见兔子不撒鹰" (90% 把握) 和 "极速决策" 两大铁律，专注于高胜率的确定性机会。
+- **单位语义统一 (Unit Unification)**:
+  - 彻底解决了 AI 建议数量与交易所执行单位不一致的顽疾。
+  - **强制约束**: 在 Prompt 中明确规定 `amount` 必须为 **标的货币数量** (如 0.1 BTC)，严禁输出合约张数或 USDT 金额。
+  - **执行层适配**: 执行器自动读取合约面值 (Contract Size) 进行换算，确保 0.1 BTC 能正确转换为对应的张数 (如 10 张)。
+
+### ⚡ 性能优化 (Performance)
+- **网络零阻塞**: 
+  - 在 DeepSeek API 客户端中禁用了自动重试 (`max_retries=0`)。
+  - **收益**: 遇到网络抖动或 API 错误时立即失败并释放资源，而不是卡在重试循环中阻塞整个交易线程，显著提升了机器人的响应敏捷度。
+
+### 🐛 Bug 修复 (Fixes)
+- **语法修复**: 修复了 `ai_strategy.py` 中因 f-string 格式错误导致的 JSON 解析异常。
+
 ## [v3.3.4] - 2025-12-28 (Cost Awareness)
 ### 🛡️ 交易防磨损 (Cost Awareness)
 - **交易成本感知 (Cost Awareness)**:
