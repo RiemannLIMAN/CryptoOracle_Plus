@@ -7,6 +7,10 @@
 
 ## [v3.4.2] - 2025-12-30 (Hotfix)
 ### 🐛 Bug 修复 (Bug Fixes)
+- **保证金不足保护 (Margin Insufficiency Protection)**:
+  - 增强了 `Code 51008` (保证金不足) 的错误处理逻辑。
+  - **二次检查**: 在自动提升最小下单数量前，会二次计算所需保证金是否超过当前可用余额 (含手续费缓冲)。如果余额不足，不再盲目尝试下单，而是直接拦截并报警 `SKIPPED_MIN`。
+  - **收益**: 彻底杜绝了因强行提升下单数量而导致的 API 报错，减少了无效请求。
 - **配置属性缺失 (AttributeError Fix)**:
   - 修复了 `DeepSeekTrader` 类在初始化时未正确保存 `common_config` 导致 `risk_manager` 在读取 `loop_interval` 时报错的问题。
   - **影响**: 确保了动态 API 冷却机制和动态止盈配置能正常生效。

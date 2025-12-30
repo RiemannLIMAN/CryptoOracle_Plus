@@ -818,11 +818,20 @@ class DeepSeekTrader:
                          if should_check_min:
                             if min_amount_coins and trade_amount < min_amount_coins:
                                 if max_trade_limit >= min_amount_coins:
-                                    self._log(f"⚠️ 数量 {trade_amount} < 最小限制 {min_amount_coins:.6f} (Coins)，自动提升")
-                                    trade_amount = min_amount_coins
-                                    # 重新计算 final_order_amount
-                                    if self.trade_mode != 'cash':
-                                        final_order_amount = int(trade_amount / contract_size)
+                                    # [Double Check] 再次确认余额是否足以支付最小数量的保证金 (考虑手续费缓冲)
+                                    # max_trade_limit 虽然是基于余额算的，但可能比较极限
+                                    required_margin = (min_amount_coins * current_realtime_price) / self.leverage
+                                    # 获取最新余额 (尽量用传入的 balance，或者再查一次？用传入的 balance 即可，减少请求)
+                                    # 这里用 potential_balance (包含即将释放的)
+                                    if potential_balance > required_margin * 1.02: # 2% buffer
+                                        self._log(f"⚠️ 数量 {trade_amount} < 最小限制 {min_amount_coins:.6f}，自动提升 (需保证金 {required_margin:.2f} U)")
+                                        trade_amount = min_amount_coins
+                                        # 重新计算 final_order_amount
+                                        if self.trade_mode != 'cash':
+                                            final_order_amount = int(trade_amount / contract_size)
+                                    else:
+                                        self._log(f"🚫 余额不足以支付最小数量保证金: 需 {required_margin:.2f} U, 有 {potential_balance:.2f} U", 'warning')
+                                        return "SKIPPED_MIN", f"余额不足最小限额"
                                 else:
                                     # [New] 如果是加仓场景 (Pyramiding) 导致的余额不足，则不算错误，而是满仓保护
                                     is_pyramiding = current_position and (
@@ -1076,7 +1085,7 @@ class DeepSeekTrader:
         except Exception as e:
             msg = str(e)
             if "51008" in msg or "Insufficient" in msg:
-                self._log("❌ 保证金不足 (Code 51008)", 'error')
+                self._log(f"❌ 保证金不足 (Code 51008): 尝试下单 {final_order_amount} 张/币", 'error')
                 return "FAILED", "保证金不足"
             else:
                 self._log(f"下单失败: {e}", 'error')
