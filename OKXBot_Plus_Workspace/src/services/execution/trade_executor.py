@@ -10,6 +10,7 @@ from core.utils import to_float, send_notification_async
 class DeepSeekTrader:
     def __init__(self, symbol_config, common_config, exchange, agent):
         self.symbol = symbol_config['symbol']
+        self.common_config = common_config # [Fix] Store common_config
         self.config_amount = symbol_config.get('amount', 'auto') 
         self.amount = 0
         self.allocation = symbol_config.get('allocation', 1.0)

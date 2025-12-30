@@ -5,6 +5,12 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.4.2] - 2025-12-30 (Hotfix)
+### 🐛 Bug 修复 (Bug Fixes)
+- **配置属性缺失 (AttributeError Fix)**:
+  - 修复了 `DeepSeekTrader` 类在初始化时未正确保存 `common_config` 导致 `risk_manager` 在读取 `loop_interval` 时报错的问题。
+  - **影响**: 确保了动态 API 冷却机制和动态止盈配置能正常生效。
+
 ## [v3.4.1] - 2025-12-30 (ATR & Data Integrity)
 ### 🧠 策略增强 (Strategy Enhancement)
 - **ATR 波动率感知 (ATR Integration)**:
