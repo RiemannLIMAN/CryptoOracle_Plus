@@ -20,7 +20,6 @@
     "min_confidence": "MEDIUM",
 
     "strategy": {
-      "history_limit": 20,
       "signal_limit": 30,
       "dynamic_tp": true
     },

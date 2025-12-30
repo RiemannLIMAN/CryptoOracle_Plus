@@ -92,28 +92,36 @@ class RiskManager:
         final_title = title if title else "🛡️ 风控通知"
         await send_notification_async(webhook_url, message, title=final_title)
 
-    def record_pnl_to_csv(self, total_equity, current_pnl, pnl_percent):
+    async def record_pnl_to_csv(self, total_equity, current_pnl, pnl_percent):
+        """Async 记录 PnL 并生成图表 (非阻塞)"""
         file_exists = os.path.isfile(self.csv_file)
         try:
+            # 1. 写入 CSV (IO操作，很快，可以直接做)
             with open(self.csv_file, 'a', encoding='utf-8') as f:
                 if not file_exists:
                     f.write("timestamp,total_equity,pnl_usdt,pnl_percent\n")
                 timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 f.write(f"{timestamp},{total_equity:.2f},{current_pnl:.2f},{pnl_percent:.2f}\n")
             
+            # 2. 生成图表 (Matplotlib 很慢，必须放到后台线程/进程)
             try:
-                # Need to check plot_pnl import
-                # It is in src/core/plot_pnl.py
-                # We need to make sure we can import it.
-                # Since we added src to sys.path in main.py, 'from core import plotter' should work.
-                from core import plotter
-                plotter.generate_pnl_chart(csv_path=self.csv_file, output_path=self.chart_path, verbose=False)
-                self.logger.info(f"盈亏折线图已更新: {self.chart_path}")
+                # 使用 asyncio.to_thread 将绘图任务扔到后台线程执行
+                # 这样就不会阻塞主循环的 await check()
+                await asyncio.to_thread(self._generate_chart_in_background)
             except Exception as e:
-                self._log(f"生成折线图失败: {e}", 'warning')
+                self._log(f"调度图表生成任务失败: {e}", 'warning')
 
         except Exception as e:
             self._log(f"写入CSV失败: {e}", 'error')
+
+    def _generate_chart_in_background(self):
+        """后台线程执行绘图"""
+        try:
+            from core import plotter
+            plotter.generate_pnl_chart(csv_path=self.csv_file, output_path=self.chart_path, verbose=False)
+            self.logger.info(f"盈亏折线图已更新: {self.chart_path}")
+        except Exception as e:
+            self._log(f"生成折线图失败: {e}", 'warning')
 
     async def close_all_traders(self):
         self._log("🛑 正在执行全局清仓...")
@@ -575,7 +583,7 @@ class RiskManager:
             # [Fix] 限制 CSV 写入和图表更新频率 (例如每分钟一次，而不是每秒)
             current_ts = time.time()
             if current_ts - getattr(self, 'last_csv_record_time', 0) > 60:
-                self.record_pnl_to_csv(current_total_value, current_pnl, pnl_percent)
+                await self.record_pnl_to_csv(current_total_value, current_pnl, pnl_percent)
                 self.last_csv_record_time = current_ts
             
             if time.time() - self.last_chart_display_time > 3600:

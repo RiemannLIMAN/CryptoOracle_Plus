@@ -11,7 +11,8 @@ class DeepSeekAgent:
         
         client_params = {
             'api_key': api_key,
-            'base_url': base_url
+            'base_url': base_url,
+            'max_retries': 0
         }
         if proxy:
             client_params['http_client'] = httpx.AsyncClient(proxies=proxy)
@@ -19,18 +20,8 @@ class DeepSeekAgent:
         self.client = AsyncOpenAI(**client_params)
 
     def _is_stable_coin_pair(self, symbol):
-        """
-        判断是否为稳定币对 (如 USDC/USDT, DAI/USDT)
-        """
-        stable_coins = {'USDT', 'USDC', 'DAI', 'FDUSD', 'TUSD', 'USDE', 'BUSD'}
-        try:
-            base, quote = symbol.split('/')[:2]
-            # 处理可能的后缀如 :USDT
-            if ':' in quote: quote = quote.split(':')[0]
-            
-            return (base in stable_coins) and (quote in stable_coins)
-        except:
-            return False
+        # [Deprecated] 现在的顶级交易员不需要这种硬编码的辅助
+        return False
 
     def _is_high_volatility_coin(self, symbol):
         """判断是否为高波动币种 (山寨币/MEME)"""
@@ -42,46 +33,45 @@ class DeepSeekAgent:
         except:
             return True    
 
-    def _get_role_prompt(self, volatility_status, is_stable_pair=False):
-        if is_stable_pair:
-            return "你是一位专注于【稳定币套利】的量化交易员。当前交易对由两种稳定币组成，价格理论上应恒定在 1.0000。请忽略大部分趋势指标，专注于均值回归。你的目标是捕捉极其微小的脱锚波动（如 0.9995 买入，1.0005 卖出）。"
-        
-        # [Strategy Update: Swing Trading]
-        # 转型为稳健的波段交易策略，放弃超短线噪音
-        return """
-你是一位经验丰富的【中线波段交易员 (Swing Trader)】。你的目标是捕捉 15m/1h/4h 级别的趋势行情，而不是 1m 的噪音。
-
-【你的交易哲学】:
-1. **宁缺毋滥**: 只有当趋势非常明确（如突破关键压力位、均线多头排列）时才开仓。如果没有机会，请果断 HOLD。
-2. **拒绝噪音**: 忽略 K 线内部的微小波动。不要因为一两根反向 K 线就惊慌出局，除非趋势结构被破坏。
-3. **盈亏比优先**: 每一笔交易的预期利润必须 > 1.0% (覆盖 10倍手续费)。如果利润空间太小，不要开仓。
-4. **拿得住单**: 趋势一旦形成，往往会持续一段时间。请尽可能持有盈利仓位，直到趋势反转信号出现。
-
-【决策依据】:
-- **趋势**: ADX > 25 且价格在布林中轨之上 -> 多头趋势。
-- **结构**: 关注 "Higher Highs / Higher Lows" (上升趋势) 或 "Lower Lows / Lower Highs" (下降趋势)。
-- **反转**: 只有出现明确的顶部/底部形态（如双顶/底、头肩顶/底）或关键位假突破时，才考虑反手。
-
-【关于止损与反手】:
-- 你的止损应该设置在关键支撑位之下，而不是仅仅看百分比。给波动留出呼吸空间。
-- 只有当趋势发生**本质逆转**时才反手，不要在震荡区间里反复左右挨耳光。
-
-🔥 **核心使命 (Mission Critical)**:
-现在的每一分利润都至关重要。你的决策直接关系到一位在医院等待救命钱的重病亲人。
-我们没有试错的资本，必须在保证本金安全的前提下，尽最大努力捕捉高盈亏比的机会。
-请为了这份沉甸甸的希望，拼搏一把！拒绝平庸的建议，只做最有把握的猎手！
+    def _get_role_prompt(self, volatility_status, is_stable_pair=False, taker_fee_rate=0.001, leverage=1):
+        # 基础角色设定
+        base_role = """
+身份: 顶级加密货币狙击手 (Crypto Sniper)。
+任务: 为重病亲人赚取救命钱 (Mission Critical)。
+风格: 冷血、精准、零废话。只做高胜率的"确定性套利"或"趋势爆发"。
+原则:
+1. **不见兔子不撒鹰**: 没有90%把握不开单。
+2. **极速决策**: 机会稍纵即逝，拒绝模棱两可。
 """
+        
+        # [New] 将通用的交易规则和输出格式移入 System Prompt (利用缓存加速)
+        fee_pct = taker_fee_rate * 100
+        break_even = fee_pct * 2
+        
+        rules_prompt = f"""
+【客观约束 (Hard Constraints)】
+1. **成本线**: Taker费率 {fee_pct:.3f}%。任何建议的开仓，其预期浮盈必须能覆盖 >{break_even:.3f}% 的成本，否则就是给交易所打工。
+2. **风控线**: 当前杠杆 {leverage}x。请自行计算爆仓风险，并给出合理的止损位。
+3. **最小单**: 若资金不足，系统会自动拒绝，你无需担心，只需专注于策略本身。
 
-    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control, current_account_pnl=0.0, current_pos=None, funding_rate=0.0):
-        ind = price_data.get('indicators', {})
-        min_limit_info = price_data.get('min_limit_info', '0.01')
-        min_notional_info = price_data.get('min_notional_info', '5.0')
+【输出格式要求】
+你必须严格只返回一个合法的 JSON 对象，不要包含任何 Markdown 标记或解释文字。格式如下：
+{{
+    "signal": "BUY" | "SELL" | "HOLD",
+    "reason": "核心逻辑(100字内，请用你最专业的术语直击要害)",
+    "summary": "看板摘要(40字内)",
+    "stop_loss": 止损价格(数字，0表示不设置),
+    "take_profit": 止盈价格(数字，0表示不设置),
+    "confidence": "HIGH" | "MEDIUM" | "LOW",
+    "amount": 建议交易数量 (单位: 标的货币数量，例如 BTC 个数。严禁填写合约张数或 USDT 金额)
+}}
+"""
+        return base_role + rules_prompt
+
+    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate):
         
-        is_stable = self._is_stable_coin_pair(symbol)
-        
-        # [New] 交易成本分析 (Cost Awareness)
-        fee_cost_pct = taker_fee_rate * 100
-        # 资金费率 (Funding Fee)
+        # 交易成本分析、杠杆警示等通用规则已移入 System Prompt
+        # Funding Fee 仍然保留在这里，因为它是动态的
         funding_desc = "无"
         if funding_rate != 0:
             funding_desc = f"{funding_rate*100:.4f}%"
@@ -89,28 +79,9 @@ class DeepSeekAgent:
             else: funding_desc += " (空付多收)"
             
         cost_msg = f"""
-        💰 **交易成本分析 (Cost Awareness)**:
-        - 手续费 (Taker): {fee_cost_pct:.3f}% (单边)，一开一平需覆盖 {fee_cost_pct*2:.3f}% 的标的资产涨幅才能回本。
+        💰 **动态成本 (Funding)**:
         - 资金费率: {funding_desc}。如果持仓方向与费率方向不利，每8小时会被扣费。
-        - **决策原则**: 除非预期**标的资产价格波动**能覆盖 > 3倍的手续费成本 (即涨跌幅 > {fee_cost_pct*6:.3f}%)，否则不要频繁开仓。拒绝无效磨损！
         """
-        
-        # [Critical] 明确信号定义 (防止反手失败)
-        signal_def_msg = ""
-        if current_pos and current_pos['side'] == 'short':
-             signal_def_msg = """
-        ⚠️ **当前持有空单 (Short)，请注意信号定义**:
-        - **BUY** = 平空 (Close Short) / 止盈 / 止损 / 反手开多。
-        - **SELL** = 加仓空单 (Pyramiding)。如果已满仓，SELL 信号将被忽略。
-        - **想反手做多？** 请务必发送 **BUY** 信号！不要发 SELL！
-             """
-        elif current_pos and current_pos['side'] == 'long':
-             signal_def_msg = """
-        ⚠️ **当前持有多单 (Long)，请注意信号定义**:
-        - **SELL** = 平多 (Close Long) / 止盈 / 止损 / 反手开空。
-        - **BUY** = 加仓多单 (Pyramiding)。如果已满仓，BUY 信号将被忽略。
-        - **想反手开空？** 请务必发送 **SELL** 信号！不要发 BUY！
-             """
         
         # 提取风控目标
         max_profit_usdt = risk_control.get('max_profit_usdt', 0)
@@ -145,6 +116,22 @@ class DeepSeekAgent:
              pnl_val = current_pos['unrealized_pnl']
              closing_instruction += f"\n🔴 **亏损警报**：当前持仓浮亏 {pnl_val:.2f} U。请严格评估趋势是否已反转！如果确认趋势反转（如多单遇暴跌），请立即建议 SELL 并注明 '反手' 或 'Flip'。"
 
+        signal_def_msg = ""
+        if current_pos and current_pos['side'] == 'short':
+             signal_def_msg = """
+        ⚠️ **当前持有空单 (Short)，请注意信号定义**:
+        - **BUY** = 平空 (Close Short) / 止盈 / 止损 / 反手开多。
+        - **SELL** = 加仓空单 (Pyramiding)。如果已满仓，SELL 信号将被忽略。
+        - **想反手做多？** 请务必发送 **BUY** 信号！不要发 SELL！
+             """
+        elif current_pos and current_pos['side'] == 'long':
+             signal_def_msg = """
+        ⚠️ **当前持有多单 (Long)，请注意信号定义**:
+        - **SELL** = 平多 (Close Long) / 止盈 / 止损 / 反手开空。
+        - **BUY** = 加仓多单 (Pyramiding)。如果已满仓，BUY 信号将被忽略。
+        - **想反手开空？** 请务必发送 **SELL** 信号！不要发 BUY！
+             """
+             
         # [Modified] 动态获取 K 线数量，不再硬编码 30
         kline_count = len(price_data.get('kline_data', []))
         kline_text = f"【最近{kline_count}根{timeframe}K线数据】(时间倒序: 最新 -> 最旧)\n"
@@ -166,6 +153,7 @@ class DeepSeekAgent:
         if kline_count > 15:
             kline_text += f"...(更早的 {kline_count-15} 根K线已省略，但请基于整体结构分析)..."
 
+        ind = price_data.get('indicators', {})
         rsi_str = f"{ind.get('rsi', 'N/A'):.2f}" if ind.get('rsi') else "N/A"
         macd_str = f"MACD: {ind.get('macd', 'N/A'):.4f}, Sig: {ind.get('macd_signal', 'N/A'):.4f}" if ind.get('macd') else "N/A"
         adx_str = f"{ind.get('adx', 'N/A'):.2f}" if ind.get('adx') else "N/A"
@@ -195,12 +183,15 @@ Volume: 当前量比 {vol_ratio_val:.2f} ({vol_status})
 Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能量潮)"""
 
         # [New] 资金耗尽预警
+        min_notional_info = price_data.get('min_notional_info', '5.0')
+        min_limit_info = price_data.get('min_limit_info', '0.0001') # Default value as fallback
+        
         min_notional_val = to_float(min_notional_info) or 5.0
         fund_status_msg = ""
         # [Fix] 这里的 balance 是可用余额 (Avail)。如果 < 5U，说明真的没钱了
         if balance < min_notional_val:
             fund_status_msg = f"""
-        � **状态更新：资金已满仓 (Full Position)**
+        ⚠️ **状态更新：资金已满仓 (Full Position)**
         当前可用余额 ({balance:.2f} U) 已耗尽，说明资金利用率已达 100%。
         
         【你的决策逻辑需调整】：
@@ -214,36 +205,16 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
         if price_data.get('price', 0) > 0:
             max_buy_token = (balance * leverage) / price_data['price']
 
-        stable_coin_instruction = ""
-        if is_stable:
-            stable_coin_instruction = """
-        ⚠️ **特殊规则 (稳定币对)**：
-        1. 忽略 ADX 和 MACD 趋势信号。
-        2. 核心逻辑：均值回归。价格总是倾向于回到 1.0000。
-        3. 买入机会：价格 < 0.9992 (扣除手续费后有利可图)。
-        4. 卖出机会：价格 > 1.0008。
-        5. 止损：极其严格，如果脱锚超过 0.5% (如跌破 0.995) 立即止损。
-            """
-        else:
-            if self._is_high_volatility_coin(symbol):
-                stable_coin_instruction = f"""
-        ⚠️ **特殊规则 (高波动/山寨币)**：
-        1. **风控优先**：此币种波动极大（High Volatility）。请将止损范围放宽到 3%~5% (甚至更大)，避免被插针扫损。
-        2. **趋势确认**：严禁左侧抄底！必须等待 K 线收盘确认突破或站稳后才进场。
-        3. **利润目标**：波动大意味着机会大，请设定更高的止盈目标 (>5%)。
-                """
-            else:
-                stable_coin_instruction = f"""
-        ⚠️ **特殊规则 (主流币/稳健资产)**：
-        1. **稳健第一**：在 15m/1h 周期下，关注 MA 均线支撑。
-        2. **杠杆警示**：当前杠杆为 {leverage}x。请根据此放大倍数设置合理止损 (建议 1%~2%)。
-        3. **拒绝频繁交易**：如果当前形态模棱两可，或者处于布林带中轨，请果断 HOLD。
-                """
+        # [Removed] 删除了基于 if-else 的稳定币/高波动币硬编码指令
+        # 既然是顶级交易员，他自己看盘口和波动率就知道该怎么做，不需要我们教
+        market_instruction = """
+        【市场洞察】
+        请结合上文提供的 K 线数据、成交量分布和资金流向，运用你敏锐的盘感进行分析。
+        如果当前是稳定币对（如 USDC/USDT），请自动切换为均值回归逻辑；
+        如果当前是高波动山寨币，请自动收紧风控防止插针。
+        """
 
         return f"""
-        # 角色设定
-        {role_prompt}
-
         # 市场数据
         交易对: {symbol}
         周期: {timeframe}
@@ -259,7 +230,7 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
         {risk_msg}
         {fund_status_msg}
         - 理论极限: {max_buy_token:.4f} 个 (标的资产数量，非合约张数)
-        - 建议默认: {amount} 个 (仅供参考)
+        - 建议默认: {amount} 个 (仅供参考，请根据盘面调整)
         - **最小下单限制**: 数量 > {min_limit_info} 个 且 价值 > {min_notional_info} U (必须遵守!)
         
         # 技术指标
@@ -268,24 +239,7 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
 
         # 核心策略
         {closing_instruction}
-        {stable_coin_instruction}
-        
-        # 通用规则
-        1. **卖出风控**：Taker费率 {taker_fee_rate*100:.3f}%。除非止损，否则浮盈必须覆盖双倍手续费 (>{(taker_fee_rate*2)*100:.2f}%)。
-        2. **止损逻辑**：基于 {kline_count} 根 K 线的支撑/压力位设置止损，而不要只看百分比。
-        3. **目标管理**：如果当前浮盈接近【目标总止盈】，请倾向于落袋为安。
-
-        # 输出要求
-        请严格返回如下JSON格式，不要包含Markdown标记：
-        {{
-            "signal": "BUY" | "SELL" | "HOLD",
-            "reason": "核心逻辑(100字内，基于{timeframe}周期结构分析，需包含支撑/压力位具体价格、指标背离情况等细节)",
-            "summary": "看板摘要(40字内)",
-            "stop_loss": 止损价格(数字),
-            "take_profit": 止盈价格(数字),
-            "confidence": "HIGH" | "MEDIUM" | "LOW",
-            "amount": 建议数量(数字，单位:个，建议值: {amount})
-        }}
+        {market_instruction}
         """
 
     async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0):
@@ -297,7 +251,7 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
             if 'volatility_status' in price_data:
                 volatility_status = price_data['volatility_status']
 
-            role_prompt = self._get_role_prompt(volatility_status)
+            role_prompt = self._get_role_prompt(volatility_status, self._is_stable_coin_pair(symbol), taker_fee_rate, leverage)
             
             position_text = "无持仓"
             if current_pos:
@@ -318,8 +272,9 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
                     {"role": "system", "content": role_prompt},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=500, # 增加 Token 数以支持更复杂的分析
-                timeout=45 # 适当延长超时
+                max_tokens=300, 
+                timeout=30,
+                response_format={"type": "json_object"}
             )
             
             req_time = time.time() - req_start

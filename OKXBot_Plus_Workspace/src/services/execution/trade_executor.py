@@ -22,7 +22,7 @@ class DeepSeekTrader:
         self.min_confidence = common_config.get('min_confidence', 'MEDIUM')
         
         strategy_config = common_config.get('strategy', {})
-        self.history_limit = strategy_config.get('history_limit', 20)
+        # self.history_limit is deprecated, using internal defaults
         self.signal_limit = strategy_config.get('signal_limit', 30)
         
         self.taker_fee_rate = 0.001
@@ -229,14 +229,30 @@ class DeepSeekTrader:
             self._log(f"计算技术指标失败: {e}", 'error')
             return df
             
-    def get_market_volatility_value(self, df, lookback=10):
-        """计算近期平均波动率 (百分比)"""
+
+
+
+    def get_market_volatility_value(self, df, lookback=None):
+        """计算近期平均波动率 (百分比) - Dynamic Lookback"""
         try:
             if df.empty: return 0.0
+            
+            # [New] 根据 Timeframe 动态调整 Lookback
+            if lookback is None:
+                tf = self.timeframe
+                if tf == '1m': lookback = 30
+                elif tf == '3m': lookback = 20
+                elif tf == '5m': lookback = 20
+                elif tf == '15m': lookback = 15
+                elif tf == '30m': lookback = 10
+                elif tf == '1h': lookback = 10
+                elif tf == '4h': lookback = 6
+                elif tf == '1d': lookback = 5
+                else: lookback = 10 
+
             # 使用最近 N 根 K 线
             recent = df.tail(lookback)
             # 计算每根 K 线的振幅 (High - Low) / Open
-            # 这里用 Open 作为分母比较合理，代表这根 K 线开始时的价格基准
             amplitudes = (recent['high'] - recent['low']) / recent['open']
             avg_amp = amplitudes.mean() * 100 # 转为百分比
             return float(avg_amp)
@@ -264,8 +280,8 @@ class DeepSeekTrader:
             # 维护历史 K 线记录
             self.price_history = df.tail(100).to_dict('records')
             
-            # 使用配置中的 history_limit 进行预热检查（虽然主要逻辑已改为直接使用 API 的 limit）
-            if not self.price_history and len(df) > self.history_limit:
+            # 使用默认值进行预热检查（不再依赖 config 中的 history_limit）
+            if not self.price_history and len(df) > 50:
                 self._log(f"🔥 正在预热历史数据...")
                 pass
             
@@ -302,9 +318,23 @@ class DeepSeekTrader:
             except:
                 pass
 
-            # [Modified] 动态使用配置文件中的 history_limit 截取 K 线数据投喂给 AI
-            # 确保至少有 10 条数据，防止过少
-            feed_limit = max(10, self.history_limit)
+            # [Modified] 动态计算投喂给 AI 的 K 线数量 (feed_limit)
+            # 即使配置文件写死，这里也优先使用动态逻辑，以适应不同 Timeframe
+            feed_limit = 24 # Default
+            tf = self.timeframe
+            if tf == '1m': feed_limit = 60    # 1h context
+            elif tf == '3m': feed_limit = 40  # 2h context
+            elif tf == '5m': feed_limit = 36  # 3h context
+            elif tf == '15m': feed_limit = 32 # 8h context
+            elif tf == '30m': feed_limit = 24 # 12h context
+            elif tf == '1h': feed_limit = 24  # 24h context
+            elif tf == '4h': feed_limit = 24  # 4d context
+            elif tf == '1d': feed_limit = 14  # 2w context
+            
+            # 如果配置文件特别指定了极大的值 (例如为了 debug)，可以保留 override 逻辑，
+            # 但这里我们默认采用动态逻辑覆盖配置，除非配置值为 "auto" (目前代码里是 int)
+            # 简单起见，直接使用上述动态值，并确保不低于 10
+            feed_limit = max(10, feed_limit)
             
             # [New] 波动率过滤与成本计算
             avg_volatility = self.get_market_volatility_value(df)
@@ -371,19 +401,7 @@ class DeepSeekTrader:
             self._log(f"获取持仓失败: {e}", 'error')
             return None
 
-    def get_market_volatility_value(self, df, lookback=10):
-        """计算近期平均波动率 (百分比)"""
-        try:
-            if df.empty: return 0.0
-            # 使用最近 N 根 K 线
-            recent = df.tail(lookback)
-            # 计算每根 K 线的振幅 (High - Low) / Open
-            # 这里用 Open 作为分母比较合理，代表这根 K 线开始时的价格基准
-            amplitudes = (recent['high'] - recent['low']) / recent['open']
-            avg_amp = amplitudes.mean() * 100 # 转为百分比
-            return float(avg_amp)
-        except:
-            return 0.0
+
 
     def get_market_volatility(self, kline_data, adx_value=None):
         try:
