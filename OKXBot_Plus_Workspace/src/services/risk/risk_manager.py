@@ -129,10 +129,45 @@ class RiskManager:
         await asyncio.gather(*tasks, return_exceptions=True)
 
     async def calculate_realized_performance(self):
-        """基于交易所历史订单计算已实现盈亏与胜率"""
+        """基于交易所历史订单计算已实现盈亏与胜率 (Parallel with Configured Cooldown)"""
+        # [Cooldown] 防止过于频繁调用交易所 API
+        # 默认冷却时间为 5 分钟，但如果 loop_interval 更长，则跟随 loop_interval
+        # 或者我们可以在 config.json 的 trading 部分添加一个 'stats_interval'
+        # 这里暂时使用 loop_interval 的 5 倍作为默认值，或者硬编码 300s
+        
+        # 获取配置的 loop_interval
+        loop_interval = 60
+        if self.traders and hasattr(self.traders[0], 'common_config'):
+             loop_interval = self.traders[0].common_config.get('loop_interval', 60)
+        
+        # 冷却时间严格跟随 loop_interval，不再强制最低 60s
+        # 用户既然配置了高频，说明他能接受高频的 API 消耗
+        cooldown_seconds = loop_interval
+        
+        current_time = time.time()
+        if hasattr(self, 'last_realized_calc_time'):
+            if current_time - self.last_realized_calc_time < cooldown_seconds:
+                return
+
         try:
+            self.last_realized_calc_time = current_time
             sep_line = "=" * 80
             
+            # 使用 asyncio.gather 并行获取所有交易员的历史订单
+            # tasks = [trader.exchange.fetch_my_trades(trader.symbol, limit=100) for trader in self.traders]
+            # results = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # 为了保留 trader 信息，我们构造一个辅助函数
+            async def fetch_trader_stats(trader):
+                try:
+                    trades = await trader.exchange.fetch_my_trades(trader.symbol, limit=100)
+                    return {'trader': trader, 'trades': trades, 'error': None}
+                except Exception as e:
+                    return {'trader': trader, 'trades': None, 'error': str(e)}
+
+            fetch_tasks = [fetch_trader_stats(t) for t in self.traders]
+            results = await asyncio.gather(*fetch_tasks)
+
             total_realized_pnl = 0.0
             total_trades = 0
             win_trades = 0
@@ -140,50 +175,44 @@ class RiskManager:
             has_data = False
             report_body = ""
             
-            for trader in self.traders:
-                try:
-                    # 获取最近 100 条成交
-                    trades = await trader.exchange.fetch_my_trades(trader.symbol, limit=100)
-                    if not trades:
-                        continue
+            for res in results:
+                trader = res['trader']
+                if res['error']:
+                    self._log(f"计算 {trader.symbol} 绩效失败: {res['error']}", 'warning')
+                    continue
                     
-                    symbol_pnl = 0.0
-                    symbol_wins = 0
-                    symbol_count = 0
+                trades = res['trades']
+                if not trades:
+                    continue
+                
+                symbol_pnl = 0.0
+                symbol_wins = 0
+                symbol_count = 0
+                
+                for trade in trades:
+                    # 仅统计有 PnL 的订单 (通常是合约平仓单)
+                    pnl = 0.0
+                    if 'info' in trade and 'pnl' in trade['info']:
+                        try:
+                            pnl = float(trade['info']['pnl'])
+                        except:
+                            pnl = 0.0
                     
-                    for trade in trades:
-                        # 仅统计有 PnL 的订单 (通常是合约平仓单)
-                        # 现货交易通常没有直接的 PnL 字段，需要更复杂的匹配逻辑，暂只统计合约
-                        pnl = 0.0
-                        if 'info' in trade and 'pnl' in trade['info']:
-                            try:
-                                pnl = float(trade['info']['pnl'])
-                            except:
-                                pnl = 0.0
-                        
-                        # 如果 API 没返回 PnL (如现货)，暂时跳过统计，避免误导
-                        if pnl != 0:
-                            symbol_pnl += pnl
-                            symbol_count += 1
-                            if pnl > 0:
-                                symbol_wins += 1
+                    if pnl != 0:
+                        symbol_pnl += pnl
+                        symbol_count += 1
+                        if pnl > 0:
+                            symbol_wins += 1
+                
+                if symbol_count > 0:
+                    has_data = True
+                    win_rate = (symbol_wins / symbol_count) * 100
+                    pnl_icon = "🟢" if symbol_pnl > 0 else "🔴"
+                    report_body += f"\n{trader.symbol:<15} | 交易: {symbol_count:<3} | 胜率: {win_rate:>5.1f}% | 累计盈亏: {symbol_pnl:+.2f} U {pnl_icon}"
                     
-                    if symbol_count > 0:
-                        has_data = True
-                        win_rate = (symbol_wins / symbol_count) * 100
-                        pnl_icon = "🟢" if symbol_pnl > 0 else "🔴"
-                        report_body += f"\n{trader.symbol:<15} | 交易: {symbol_count:<3} | 胜率: {win_rate:>5.1f}% | 累计盈亏: {symbol_pnl:+.2f} U {pnl_icon}"
-                        
-                        total_realized_pnl += symbol_pnl
-                        total_trades += symbol_count
-                        win_trades += symbol_wins
-                    else:
-                        # 只有在有数据时才显示这一行，如果完全没数据就不显示了，免得占地方
-                        # report_body += f"\n{trader.symbol:<15} | 暂无已实现盈亏记录 (仅统计合约平仓)"
-                        pass
-                        
-                except Exception as e:
-                    self._log(f"计算 {trader.symbol} 绩效失败: {e}", 'warning')
+                    total_realized_pnl += symbol_pnl
+                    total_trades += symbol_count
+                    win_trades += symbol_wins
             
             if has_data:
                  report = f"\n{sep_line}\n📊 实盘数据统计 (Performance Stats)\n{sep_line}"
@@ -199,7 +228,6 @@ class RiskManager:
                  report += f"\n{sep_line}"
                  self.logger.info(report)
             else:
-                # 没数据就不打印了，清爽一点
                 self.realized_pnl_cache = 0.0
             
         except Exception as e:

@@ -224,6 +224,11 @@ class DeepSeekTrader:
             df['minus_di'] = 100 * (df['minus_dm'].rolling(window=window).mean() / df['tr_smooth'])
             df['dx'] = 100 * abs(df['plus_di'] - df['minus_di']) / (df['plus_di'] + df['minus_di'])
             df['adx'] = df['dx'].rolling(window=window).mean()
+            
+            # [New] ATR (Average True Range) Calculation
+            # tr_smooth is basically ATR (Wilder's Smoothing)
+            df['atr'] = df['tr_smooth']
+            
             return df
         except Exception as e:
             self._log(f"计算技术指标失败: {e}", 'error')
@@ -302,6 +307,7 @@ class DeepSeekTrader:
                 'vol_ratio': float(current_data['vol_ratio']) if pd.notna(current_data.get('vol_ratio')) else None,
                 'obv': float(current_data['obv']) if pd.notna(current_data.get('obv')) else None,
                 'buy_prop': float(current_data['buy_vol_prop_5']) if pd.notna(current_data.get('buy_vol_prop_5')) else None,
+                'atr': float(current_data['atr']) if pd.notna(current_data.get('atr')) else None, # [New]
             }
             
             # 显式传递最小交易单位给 AI
@@ -591,11 +597,13 @@ class DeepSeekTrader:
         
         # [New] Auto Allocation Logic
         alloc_ratio = 1.0
-        allocation_setting = self.allocation
+        # self.allocation 如果 <= 1 (如 0.5)，则是比例；如果 > 1，则是固定金额
+        # 优先使用 symbol_config 中的 allocation，如果为 auto，则使用 active_symbols_count 计算
+        allocation_setting = self.allocation 
         
         if allocation_setting == "auto":
             # 如果是 auto，默认平分
-            symbol_count = self.common_config.get('active_symbols_count', 1)
+            symbol_count = self.active_symbols_count
             alloc_ratio = 1.0 / max(1, symbol_count)
         else:
             try:
@@ -1245,7 +1253,8 @@ class DeepSeekTrader:
             self.leverage, # 传入杠杆
             self.risk_control, # 传入风控配置
             current_pnl, # [New] 传入当前账户总盈亏
-            funding_rate # [New] 传入资金费率
+            funding_rate, # [New] 传入资金费率
+            self.common_config.get('strategy', {}).get('dynamic_tp', True) # [New] 传入动态止盈开关
         )
         
         if signal_data:

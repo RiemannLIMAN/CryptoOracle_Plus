@@ -23,17 +23,7 @@ class DeepSeekAgent:
         # [Deprecated] 现在的顶级交易员不需要这种硬编码的辅助
         return False
 
-    def _is_high_volatility_coin(self, symbol):
-        """判断是否为高波动币种 (山寨币/MEME)"""
-        # 主流币定义 (相对稳健)
-        major_coins = {'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'DOGE', 'TRX', 'LINK', 'LTC'}
-        try:
-            base = symbol.split('/')[0]
-            return base not in major_coins
-        except:
-            return True    
-
-    def _get_role_prompt(self, volatility_status, is_stable_pair=False, taker_fee_rate=0.001, leverage=1):
+    def _get_role_prompt(self, taker_fee_rate=0.001, leverage=1):
         # 基础角色设定
         base_role = """
 身份: 顶级加密货币狙击手 (Crypto Sniper)。
@@ -68,7 +58,7 @@ class DeepSeekAgent:
 """
         return base_role + rules_prompt
 
-    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate):
+    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True):
         
         # 交易成本分析、杠杆警示等通用规则已移入 System Prompt
         # Funding Fee 仍然保留在这里，因为它是动态的
@@ -102,9 +92,9 @@ class DeepSeekAgent:
         if max_loss_usdt > 0: # 注意配置里通常是正数表示亏损额度，或者0禁用。这里假设配置是正数
             risk_msg += f"- 强制总止损: -{max_loss_usdt} U\n"
         
-        # 动态生成止盈策略提示
+        # 动态生成止盈策略提示 (仅当 dynamic_tp=True 时生效)
         closing_instruction = ""
-        if max_profit_usdt > 0:
+        if dynamic_tp and max_profit_usdt > 0:
             progress = current_account_pnl / max_profit_usdt
             if progress >= 1.0:
                  closing_instruction = "🔴 **最高优先级指令**：目标已达成！请立即建议 SELL (平仓) 或 HOLD (空仓)，严禁开新仓。"
@@ -148,7 +138,7 @@ class DeepSeekAgent:
                 elif vr > 1.2: vol_str += f"(放量 x{vr:.1f})"
                 elif vr < 0.6: vol_str += f"(缩量 x{vr:.1f})"
             
-            kline_text += f"T-{i}: {trend} C:{kline['close']:.4f} ({change:+.2f}%) {vol_str}\n"
+            kline_text += f"T-{i}: {trend} O:{kline['open']:.4f} H:{kline['high']:.4f} L:{kline['low']:.4f} C:{kline['close']:.4f} ({change:+.2f}%) {vol_str}\n"
         
         if kline_count > 15:
             kline_text += f"...(更早的 {kline_count-15} 根K线已省略，但请基于整体结构分析)..."
@@ -157,6 +147,7 @@ class DeepSeekAgent:
         rsi_str = f"{ind.get('rsi', 'N/A'):.2f}" if ind.get('rsi') else "N/A"
         macd_str = f"MACD: {ind.get('macd', 'N/A'):.4f}, Sig: {ind.get('macd_signal', 'N/A'):.4f}" if ind.get('macd') else "N/A"
         adx_str = f"{ind.get('adx', 'N/A'):.2f}" if ind.get('adx') else "N/A"
+        atr_str = f"{ind.get('atr', 'N/A'):.4f}" if ind.get('atr') else "N/A"
         bb_str = f"Up: {ind.get('bb_upper', 'N/A'):.2f}, Low: {ind.get('bb_lower', 'N/A'):.2f}"
         
         # [New] 成交量概况
@@ -175,12 +166,12 @@ class DeepSeekAgent:
         elif buy_prop < 0.4: flow_status = "🔴 卖盘主导"
         
         indicator_text = f"""【技术指标】
-RSI(14): {rsi_str}
-MACD: {macd_str}
-Bollinger: {bb_str}
-ADX(14): {adx_str} (趋势强度 >25为强)
-Volume: 当前量比 {vol_ratio_val:.2f} ({vol_status})
-Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能量潮)"""
+        RSI(14): {rsi_str}
+        MACD: {macd_str}
+        Bollinger: {bb_str}
+        ADX(14): {adx_str} (趋势强度 >25为强) | ATR(14): {atr_str} (波动率，建议止损参考: Entry ± 2*ATR)
+        Volume: 当前量比 {vol_ratio_val:.2f} ({vol_status})
+        Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能量潮)"""
 
         # [New] 资金耗尽预警
         min_notional_info = price_data.get('min_notional_info', '5.0')
@@ -208,10 +199,11 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
         # [Removed] 删除了基于 if-else 的稳定币/高波动币硬编码指令
         # 既然是顶级交易员，他自己看盘口和波动率就知道该怎么做，不需要我们教
         market_instruction = """
-        【市场洞察】
-        请结合上文提供的 K 线数据、成交量分布和资金流向，运用你敏锐的盘感进行分析。
-        如果当前是稳定币对（如 USDC/USDT），请自动切换为均值回归逻辑；
-        如果当前是高波动山寨币，请自动收紧风控防止插针。
+        【市场洞察 (Sniper Scope)】
+        请结合上文数据，运用你作为狙击手的直觉进行分析：
+        1. **寻找猎物**: 是否出现明确的形态突破、量价背离或关键位支撑/阻力？
+        2. **确认扳机**: ADX 是否支持当前趋势？成交量是否配合？
+        3. **扣动/等待**: 如果机会不够完美（胜率 < 90%），请果断建议 HOLD，不要浪费子弹。
         """
 
         return f"""
@@ -242,7 +234,7 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
         {market_instruction}
         """
 
-    async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0):
+    async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0, dynamic_tp=True):
         """
         调用 DeepSeek 进行市场分析
         """
@@ -251,7 +243,7 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
             if 'volatility_status' in price_data:
                 volatility_status = price_data['volatility_status']
 
-            role_prompt = self._get_role_prompt(volatility_status, self._is_stable_coin_pair(symbol), taker_fee_rate, leverage)
+            role_prompt = self._get_role_prompt(taker_fee_rate, leverage)
             
             position_text = "无持仓"
             if current_pos:
@@ -259,7 +251,7 @@ Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能�
                 position_text = f"{current_pos['side']}仓, 数量:{current_pos['size']}, 浮盈:{pnl:.2f}U"
 
             prompt = self._build_user_prompt(
-                symbol, timeframe, price_data, balance, position_text, role_prompt, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate
+                symbol, timeframe, price_data, balance, position_text, role_prompt, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp
             )
 
             # self.logger.info(f"[{symbol}] ⏳ 请求 DeepSeek (Async)...")

@@ -5,6 +5,24 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.4.1] - 2025-12-30 (ATR & Data Integrity)
+### 🧠 策略增强 (Strategy Enhancement)
+- **ATR 波动率感知 (ATR Integration)**:
+  - 引入 `ATR` (平均真实波幅) 指标计算，并将其透传给 AI。
+  - 在 System Prompt 中新增 "止损参考: Entry ± 2*ATR" 指令，引导 AI 做出更科学的动态止损决策。
+- **K线数据完整性 (Full OHLC)**:
+  - 向 AI 投喂完整的 **OHLC** (Open, High, Low, Close) 数据，而不仅仅是收盘价。
+  - 这使 AI 能够识别 "插针 (Wicks)"、"锤子线" 等关键价格行为形态，大幅提升反转识别能力。
+
+### ⚡ 性能与逻辑优化 (Performance & Logic)
+- **实盘统计并行化 (Parallel Stats)**:
+  - 重构 `risk_manager.py` 中的实盘战绩统计逻辑，使用 `asyncio.gather` 并行请求交易所 API。
+  - **智能冷却**: 引入动态冷却机制，冷却时间严格跟随 `loop_interval` 配置。既不阻塞高频交易，也不滥用 API 配额。
+- **资金分配一致性**:
+  - 修复了 `trade_executor.py` 中自动资金分配 (`amount: auto`) 的逻辑缺陷，确保其正确读取 `active_symbols_count` 并执行平分策略。
+- **代码瘦身**:
+  - 移除了 `ai_strategy.py` 中过时的硬编码逻辑 (如 `is_stable_pair`)，将决策权完全归还给 AI 大脑。
+
 ## [v3.4.0] - 2025-12-30 (Crypto Sniper Mode)
 ### 🚀 策略升级 (Strategy Upgrade)
 - **Crypto Sniper 模式**: 
