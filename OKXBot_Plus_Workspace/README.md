@@ -1,12 +1,12 @@
 # OKXBot Plus (CryptoOracle)
 
-![Version](https://img.shields.io/badge/version-3.3.5-blue.svg)
+![Version](https://img.shields.io/badge/version-3.4.4-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.8+-yellow.svg)
 
 **OKXBot Plus** (CryptoOracle) 是一个基于 **DeepSeek AI** 大模型的智能加密货币交易机器人。它结合了传统技术指标与 AI 的逻辑推理能力，能够像人类分析师一样进行市场分析、趋势判断和风险控制。
 
-> **核心更新 (v3.3.5)**: 现已全面升级为 **Swing Trading (中线波段)** 策略，拒绝高频磨损，专注捕捉大趋势。
+> **核心更新 (v3.4.4)**: 引入 **Sniper Recovery Mode** 和 **Trailing Stop (移动止盈)**，既能毫秒级锁定利润，又能通过 AI 狙击手策略在波动中精准捕获机会。
 
 ---
 

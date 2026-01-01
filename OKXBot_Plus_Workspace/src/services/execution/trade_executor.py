@@ -26,6 +26,10 @@ class DeepSeekTrader:
         # self.history_limit is deprecated, using internal defaults
         self.signal_limit = strategy_config.get('signal_limit', 30)
         
+        # [New] Trailing Stop Configuration
+        self.trailing_config = strategy_config.get('trailing_stop', {})
+        self.trailing_max_pnl = 0.0 # High watermark for current position
+        
         self.taker_fee_rate = 0.001
         self.maker_fee_rate = 0.0008
         self.is_swap = ':' in self.symbol
@@ -1226,6 +1230,7 @@ class DeepSeekTrader:
             # 2. 获取持仓
             pos = await self.get_current_position()
             if not pos:
+                self.trailing_max_pnl = 0.0 # 重置水位线
                 return None # 空仓无需监控
                 
             # 3. 计算 PnL
@@ -1237,6 +1242,36 @@ class DeepSeekTrader:
                 elif pos['side'] == 'short':
                     pnl_pct = (entry - current_price) / entry
             
+            # [New] 移动止盈 (Trailing Stop)
+            if self.trailing_config.get('enabled', False):
+                activation = self.trailing_config.get('activation_pnl', 0.01) # 默认 1% 激活
+                callback = self.trailing_config.get('callback_rate', 0.003)   # 默认 0.3% 回撤
+                
+                # 更新最高水位线 (仅当 PnL 为正时)
+                if pnl_pct > self.trailing_max_pnl:
+                    self.trailing_max_pnl = pnl_pct
+                
+                # 检查触发条件
+                # 1. 当前水位必须超过激活阈值 (已进入盈利区)
+                # 2. 当前 PnL 相比最高水位回撤了 callback 幅度
+                if self.trailing_max_pnl >= activation:
+                    if pnl_pct <= (self.trailing_max_pnl - callback):
+                        self._log(f"📉 [TRAILING] 触发移动止盈: 最高 {self.trailing_max_pnl*100:.2f}% -> 当前 {pnl_pct*100:.2f}% (回撤 > {callback*100}%)", 'info')
+                        
+                        fake_signal = {
+                            'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
+                            'confidence': 'HIGH', 
+                            'amount': 0, 
+                            'reason': f"移动止盈触发: Peak {self.trailing_max_pnl*100:.2f}% -> Now {pnl_pct*100:.2f}%"
+                        }
+                        
+                        await self.execute_trade(fake_signal)
+                        return {
+                            'symbol': self.symbol,
+                            'type': 'TRAILING_STOP',
+                            'pnl': pnl_pct
+                        }
+
             # 4. 检查硬止损 (Hard Stop Loss) & 止盈 (Take Profit) - [Fixed] 双向监控
             # [New] 添加止盈监控
             # 注意: AI 可能会在 analyze() 中给出动态止盈建议，但这里我们先检查配置的硬性止盈
