@@ -21,7 +21,12 @@
 
     "strategy": {
       "signal_limit": 30,
-      "dynamic_tp": true
+      "dynamic_tp": true,
+      "trailing_stop": {
+        "enabled": true,
+        "activation_pnl": 0.01,
+        "callback_rate": 0.003
+      }
     },
     "margin_mode": "cross",
     "trade_mode": "cross",
