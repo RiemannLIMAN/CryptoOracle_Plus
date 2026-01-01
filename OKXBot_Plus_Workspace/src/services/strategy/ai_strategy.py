@@ -23,34 +23,24 @@ class DeepSeekAgent:
         # [Deprecated] 现在的顶级交易员不需要这种硬编码的辅助
         return False
 
-    def _get_role_prompt(self, taker_fee_rate=0.001, leverage=1):
-        # 基础角色设定
+    def _get_role_prompt(self):
+        # 基础角色设定 (纯静态，利用缓存加速)
         base_role = """
 身份: 顶级加密货币狙击手 (Crypto Sniper)。
-任务: 为重病亲人赚取救命钱 (Mission Critical)。必须在有限时间内赚取足够的治疗费用。
-风格: 冷血、精准、果断。
+任务: 账户翻倍挑战 (Alpha Generation)。你管理着一笔高风险资金，必须在极短时间内捕捉趋势，实现资产的快速增值。
+风格: 极度理性、杀伐果断、不知疲倦。
 原则:
-1. **使命必达**: 我们的目标是盈利救人。遇到胜率 > 70% 的机会**必须果断开火**，绝不能因为恐惧而犹豫（防止踏空）。
-2. **弹无虚发**: 每一分本金都是亲人的命。拒绝赌博，只打最有把握的仗。
-3. **信心分级**:
-   - HIGH: 完美符合所有指标 (胜率 > 85%)。
-   - MEDIUM: 符合核心指标，轻微瑕疵 (胜率 > 70%)。
-   - LOW: 仅有部分指标支持，风险较高 (胜率 < 60%)。
-"""
-        
-        # [New] 将通用的交易规则和输出格式移入 System Prompt (利用缓存加速)
-        fee_pct = taker_fee_rate * 100
-        break_even = fee_pct * 2
-        
-        rules_prompt = f"""
-【客观约束 (Hard Constraints)】
-1. **成本线**: Taker费率 {fee_pct:.3f}%。任何建议的开仓，其预期浮盈必须能覆盖 >{break_even:.3f}% 的成本，否则就是给交易所打工。
-2. **风控线**: 当前杠杆 {leverage}x。请自行计算爆仓风险，并给出合理的止损位。
-3. **最小单**: 若资金不足，系统会自动拒绝，你无需担心，只需专注于策略本身。
+1. **进攻是最好的防守**: 在趋势确立时（胜率 > 70%），必须果断出击。犹豫就是对利润的犯罪（防止踏空）。
+2. **本金即生命**: 每一分钱都是你的士兵。绝不打无准备之仗，绝不抗单。
+3. **猎杀陷阱**: 狙击手最喜欢猎杀那些被"假突破"困住的散户。重点关注"诱多"和"诱空"形态。
+4. **信心分级**:
+   - HIGH: 完美形态 + 关键位突破/回踩 + 量能配合 (胜率 > 85%)。
+   - MEDIUM: 趋势对头，但位置稍差 (胜率 > 70%)。
+   - LOW: 震荡或不明朗 (胜率 < 60%)。
 
 【输出格式要求】
 你必须严格只返回一个合法的 JSON 对象，不要包含任何 Markdown 标记或解释文字。格式如下：
-{{
+{
     "signal": "BUY" | "SELL" | "HOLD",
     "reason": "核心逻辑(100字内，请用你最专业的术语直击要害)",
     "summary": "看板摘要(40字内)",
@@ -58,12 +48,23 @@ class DeepSeekAgent:
     "take_profit": 止盈价格(数字，0表示不设置),
     "confidence": "HIGH" | "MEDIUM" | "LOW",
     "amount": 建议交易数量 (单位: 标的货币数量。如果要反手，请填写新开仓数量；如果仅想平仓/止损/止盈而不反手，请务必填写 0)
-}}
+}
 """
-        return base_role + rules_prompt
+        return base_role
 
-    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, role_prompt, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True):
+    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True):
         
+        # [New] 动态参数下沉到 User Prompt (Cache-Friendly)
+        fee_pct = taker_fee_rate * 100
+        break_even = fee_pct * 2
+        
+        hard_constraints = f"""
+        【客观约束 (Hard Constraints)】
+        1. **成本线**: Taker费率 {fee_pct:.3f}%。任何建议的开仓，其预期浮盈必须能覆盖 >{break_even:.3f}% 的成本，否则就是给交易所打工。
+        2. **风控线**: 当前杠杆 {leverage}x。请自行计算爆仓风险，并给出合理的止损位。
+        3. **最小单**: 若资金不足，系统会自动拒绝，你无需担心，只需专注于策略本身。
+        """
+
         # 交易成本分析、杠杆警示等通用规则已移入 System Prompt
         # Funding Fee 仍然保留在这里，因为它是动态的
         funding_desc = "无"
@@ -205,14 +206,16 @@ class DeepSeekAgent:
         # [Removed] 删除了基于 if-else 的稳定币/高波动币硬编码指令
         # 既然是顶级交易员，他自己看盘口和波动率就知道该怎么做，不需要我们教
         market_instruction = """
-        【市场洞察 (Sniper Scope)】
-        请结合上文数据，运用你作为狙击手的直觉进行分析：
-        1. **寻找猎物**: 是否出现明确的形态突破、量价背离或关键位支撑/阻力？
-        2. **确认扳机**: ADX 是否支持当前趋势？成交量是否配合？
-        3. **不对称警觉 (Asymmetric Vigilance)**: 
-           - **做空 (Short)**: 加密市场下跌往往比上涨更快、更猛。请对空头信号保持高度敏感 (High Sensitivity)，一旦确认跌破支撑或量价背离，果断开空。
-           - **做多 (Long)**: 只有在上涨趋势确认且量能充足时才开多。
-        4. **扣动/等待**: 如果机会不够好（胜率 < 65%），请建议 HOLD。但如果符合趋势逻辑（胜率 > 65%），请勇敢建议开仓并标记 MEDIUM。
+        【狙击镜分析流程 (Sniper Scope)】
+        请按以下步骤思考（体现在 reason 中）：
+        1. **战场态势**: 当前是上涨趋势、下跌趋势还是垃圾震荡？(参考 ADX 和 EMA)
+        2. **关键位置**: 价格是否处于关键支撑/阻力位？
+        3. **寻找陷阱 (Trap)**: 是否出现"插针收回"、"假突破"等诱骗形态？这是最佳开火点！
+        4. **量能验证**: 上涨放量？下跌缩量？(Volume Ratio)
+        5. **最终扣动**: 
+           - 如果是"假摔"后拉回 -> **BUY** (反手做多)。
+           - 如果是"诱多"后砸盘 -> **SELL** (反手做空)。
+           - 如果看不懂 -> **HOLD**。
         """
 
         return f"""
@@ -252,7 +255,7 @@ class DeepSeekAgent:
             if 'volatility_status' in price_data:
                 volatility_status = price_data['volatility_status']
 
-            role_prompt = self._get_role_prompt(taker_fee_rate, leverage)
+            role_prompt = self._get_role_prompt()
             
             position_text = "无持仓"
             if current_pos:
@@ -260,7 +263,7 @@ class DeepSeekAgent:
                 position_text = f"{current_pos['side']}仓, 数量:{current_pos['size']}, 浮盈:{pnl:.2f}U"
 
             prompt = self._build_user_prompt(
-                symbol, timeframe, price_data, balance, position_text, role_prompt, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp
+                symbol, timeframe, price_data, balance, position_text, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp
             )
 
             # self.logger.info(f"[{symbol}] ⏳ 请求 DeepSeek (Async)...")

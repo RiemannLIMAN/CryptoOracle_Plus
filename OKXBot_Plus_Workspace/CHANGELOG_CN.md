@@ -5,6 +5,21 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.4.5] - 2026-01-02 (Prompt Engineering & Cache)
+### 🧠 AI 决策核心升级 (AI Decision Core)
+- **Prompt 缓存加速 (Prompt Cache Optimization)**:
+  - **机制**: 将 `taker_fee_rate` (费率) 和 `leverage` (杠杆) 等动态参数从 System Prompt 移至 User Prompt。
+  - **收益**: 使 System Prompt 成为纯静态字符串，完美命中 DeepSeek 的前缀缓存 (Context Cache)，显著降低首字延迟 (TTFT) 并减少 Token 消耗。
+- **职业操盘手人设 (Professional Persona)**:
+  - **人设重塑**: 从“救命钱”升级为 **"账户翻倍挑战 (Alpha Generation)"**。移除了可能导致 AI 情绪化（恐惧/犹豫）的描述，转而强调职业交易员的“理性”与“进攻性”。
+  - **原则升级**:
+    - **进攻即防守**: 明确“犹豫就是对利润的犯罪”，防止踏空。
+    - **猎杀陷阱 (Trap Hunting)**: 新增专门针对“假突破”和“插针”的猎杀逻辑。
+- **链式思考 (Chain-of-Thought)**:
+  - 在 `market_instruction` 中强制植入 **Sniper Scope** 思考流程：
+    1.  **态势** (ADX/EMA) -> 2. **位置** (Support/Resist) -> 3. **陷阱** (Trap) -> 4. **量能** (Volume) -> 5. **扣动** (Action)。
+  - 杜绝了 AI“看图说话”式的泛泛而谈，迫使其逻辑闭环。
+
 ## [v3.4.4] - 2026-01-02 (Trailing Stop)
 ### 💰 利润保护 (Profit Protection)
 - **移动止盈 (Trailing Stop)**:
