@@ -113,7 +113,9 @@ class DeepSeekTrader:
             if quota <= 0:
                 target_usdt = 10.0
             else:
-                target_usdt = quota * 0.1
+                # [Adjusted] 默认允许单次使用 100% 配额 (而不是 10%)
+                # 既然已经根据 symbols 数量做了平分 (quota)，那么单次开仓理应可以使用该币种的全额配额
+                target_usdt = quota * 1.0
             
             market = self.exchange.market(self.symbol)
             min_cost = market.get('limits', {}).get('cost', {}).get('min')
@@ -353,9 +355,10 @@ class DeepSeekTrader:
             transaction_cost_pct = self.taker_fee_rate + self.maker_fee_rate
             break_even_point = transaction_cost_pct * 1.2 # 加上 20% 的滑点/缓冲
             
-            # 波动率过滤器：如果最近平均振幅 < 成本的 1.5 倍，说明市场死水，直接 HOLD
-            if avg_volatility < break_even_point * 1.5:
-                self._log(f"💤 市场波动极低 ({avg_volatility:.4f}%) < 成本阈值 ({break_even_point*1.5:.4f}%)，强制跳过 AI 决策", 'info')
+            # 波动率过滤器：如果最近平均振幅 < 成本的 0.8 倍 (适当回调)，说明市场死水，直接 HOLD
+            # [Adjusted] 之前是 0.6 倍，现在改为 0.8 倍，过滤掉更多无效震荡，保护本金
+            if avg_volatility < break_even_point * 0.8:
+                self._log(f"💤 市场波动极低 ({avg_volatility:.4f}%) < 成本阈值 ({break_even_point*0.8:.4f}%)，强制跳过 AI 决策", 'info')
                 return None # 返回 None 表示不进行 AI 请求
             
             return {
@@ -485,11 +488,12 @@ class DeepSeekTrader:
         ]
         await self.send_notification("\n".join(report))
 
-    async def execute_trade(self, signal_data):
+    async def execute_trade(self, signal_data, current_price=None, current_position=None, balance=None):
         """执行交易 (Async - Enhanced Logic)"""
         
         # [Moved Up] 提前获取持仓信息，供信心过滤逻辑使用
-        current_position = await self.get_current_position()
+        if current_position is None:
+            current_position = await self.get_current_position()
 
         # 1. 信心过滤
         confidence_levels = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
@@ -542,19 +546,45 @@ class DeepSeekTrader:
             return "TEST_MODE", f"模拟执行 {signal_data['signal']}"
 
         # 2. 价格滑点检查
-        ticker = await self.exchange.fetch_ticker(self.symbol)
-        current_realtime_price = ticker['last']
-        try:
-            analysis_price = (await self.get_ohlcv())['price']
+        if current_price is None:
+            ticker = await self.exchange.fetch_ticker(self.symbol)
+            current_realtime_price = ticker['last']
+        else:
+            current_realtime_price = current_price
             
-            price_gap_percent = abs(current_realtime_price - analysis_price) / analysis_price * 100
-            if price_gap_percent > self.max_slippage:
-                self._log(f"⚠️ 价格波动过大: 偏差 {price_gap_percent:.2f}% > {self.max_slippage}%，取消交易", 'warning')
-                await self.send_notification(
-                    f"**价格滑点保护**\n当前偏差: `{price_gap_percent:.2f}%` (阈值: `{self.max_slippage}%`)", 
-                    title=f"⚠️ 交易取消 | {self.symbol}"
-                )
-                return "SKIPPED_SLIPPAGE", f"滑点 {price_gap_percent:.2f}%"
+        try:
+            # [Revised Slippage Logic]
+            # analysis_price = 传入的 current_price (即 AI 分析时的 K 线 Close)
+            # real_price = fetch_ticker() (当前最新成交价)
+            
+            analysis_price = current_price
+            if analysis_price is None:
+                 # 如果没有传入价格，尝试获取一次 (虽然慢)
+                 try:
+                     analysis_price = (await self.get_ohlcv())['price']
+                 except:
+                     pass
+
+            # 无论如何，获取最新的实时 Ticker 用于对比和下单
+            ticker = await self.exchange.fetch_ticker(self.symbol)
+            real_exec_price = ticker['last']
+            
+            # 更新后续逻辑使用的价格为最新成交价
+            current_realtime_price = real_exec_price 
+
+            if analysis_price:
+                 price_gap_percent = abs(real_exec_price - analysis_price) / analysis_price * 100
+                 
+                 if price_gap_percent > self.max_slippage:
+                    self._log(f"⚠️ 价格波动过大: 偏差 {price_gap_percent:.2f}% > {self.max_slippage}%，取消交易", 'warning')
+                    await self.send_notification(
+                        f"**价格滑点保护**\n当前偏差: `{price_gap_percent:.2f}%` (阈值: `{self.max_slippage}%`)", 
+                        title=f"⚠️ 交易取消 | {self.symbol}"
+                    )
+                    return "SKIPPED_SLIPPAGE", f"滑点 {price_gap_percent:.2f}%"
+                 elif price_gap_percent > 0.5:
+                    self._log(f"⚠️ 价格轻微波动: 偏差 {price_gap_percent:.2f}%，继续执行 (使用最新价)", 'info')
+            
         except Exception as e:
             self._log(f"滑点检查失败: {e}", 'warning')
 
@@ -588,7 +618,8 @@ class DeepSeekTrader:
         config_amt = self.amount
         
         # 获取余额
-        balance = await self.get_account_balance()
+        if balance is None:
+             balance = await self.get_account_balance()
         
         # [Fix] 计算基于配额的硬性资金上限 (USDT)
         # self.allocation 如果 <= 1 (如 0.5)，则是比例；如果 > 1，则是固定金额
@@ -651,6 +682,26 @@ class DeepSeekTrader:
         max_trade_limit = 0
         # [Fix] 余额也需要加上即将释放的保证金
         potential_balance = balance + margin_to_release
+        
+        # [Fix] 反手/平仓时，实际可用余额需加上未实现盈亏 (PnL) 并扣除平仓手续费
+        # 如果亏损，potential_balance 会减少；如果盈利，会增加
+        if margin_to_release > 0 and current_position:
+             # 估算平仓手续费 (Taker)
+             close_fee = (current_position['size'] * current_realtime_price) * self.taker_fee_rate
+             
+             # [Fix] 区分全仓 (Cross) 和逐仓 (Isolated) 的资金计算逻辑
+             # 全仓: availBal 已经实时反映了 PnL (Total Equity = Avail + Used)。平仓释放的是 Used。
+             # 逐仓: availBal 不受 PnL 影响。平仓释放的是 Used + PnL。
+             if self.margin_mode == 'isolated':
+                 pnl = current_position.get('unrealized_pnl', 0)
+                 potential_balance += (pnl - close_fee)
+             else:
+                 # 全仓模式下，balance (availBal) 已经包含了浮亏的影响
+                 # 所以不需要再加 PnL，只需要扣除手续费
+                 potential_balance -= close_fee
+                 
+             # 确保不小于 0 (极端亏损情况)
+             potential_balance = max(0, potential_balance)
 
         if signal_data['signal'] == 'BUY':
              if self.trade_mode == 'cash':
@@ -703,9 +754,23 @@ class DeepSeekTrader:
                 if signal_data['signal'] == 'SELL' and current_position['side'] == 'long': is_potential_flip = True
             
             if is_potential_flip:
-                # 将当前保证金加回可用资金 (保守起见暂不计算未实现盈利)
+                # 将当前保证金加回可用资金
                 available_capital += used_margin
-                self._log(f"🔄 检测到反手信号，预估释放保证金: {used_margin:.2f} U")
+                
+                # [Fix] 同样需要加上 PnL 并扣除手续费 (区分全仓/逐仓)
+                if current_position:
+                     close_fee = (current_position['size'] * current_realtime_price) * self.taker_fee_rate
+                     
+                     if self.margin_mode == 'isolated':
+                         pnl = current_position.get('unrealized_pnl', 0)
+                         available_capital += (pnl - close_fee)
+                     else:
+                         # 全仓模式下，effective_balance (基于 Balance) 已经包含了浮亏影响
+                         available_capital -= close_fee
+                         
+                     available_capital = max(0, available_capital)
+                     
+                self._log(f"🔄 检测到反手信号，预估释放资金: {available_capital:.2f} U")
             
             # 计算物理最大可开仓数量 (Physical Max)
             max_physical_token = 0
@@ -1093,46 +1158,50 @@ class DeepSeekTrader:
 
         return "SKIPPED", "逻辑未覆盖"
 
-    async def get_account_balance(self):
+    async def get_account_info(self):
+        """获取账户余额和权益 (一次请求)"""
         try:
             params = {}
             if self.test_mode:
                 params = {'simulated': True}
-                
+            
             balance = await self.exchange.fetch_balance(params)
-            if 'USDT' in balance: return float(balance['USDT']['free'])
-            # 统一账户
-            if 'info' in balance and 'data' in balance['info']:
+            
+            free_usdt = 0.0
+            total_equity = 0.0
+            
+            # 1. 解析可用余额 (Free USDT)
+            if 'USDT' in balance: 
+                free_usdt = float(balance['USDT']['free'])
+            elif 'info' in balance and 'data' in balance['info']:
                 for asset in balance['info']['data'][0]['details']:
                     if asset['ccy'] == 'USDT':
-                        return float(asset['availBal'])
-            return 0.0
-        except: return 0.0
-
-    async def get_account_equity(self):
-        """获取账户总权益 (USDT)"""
-        try:
-            params = {}
-            if self.test_mode:
-                params = {'simulated': True}
+                        free_usdt = float(asset['availBal'])
+                        break
             
-            balance = await self.exchange.fetch_balance(params)
-            
-            # 1. 优先尝试统一账户 Total Equity
+            # 2. 解析总权益 (Total Equity)
             if 'info' in balance and 'data' in balance['info']:
                 data0 = balance['info']['data'][0]
                 if 'totalEq' in data0:
-                    return float(data0['totalEq'])
-            
-            # 2. 尝试经典账户 USDT Equity
-            if 'USDT' in balance:
-                if 'equity' in balance['USDT']: return float(balance['USDT']['equity'])
-                if 'total' in balance['USDT']: return float(balance['USDT']['total'])
+                    total_equity = float(data0['totalEq'])
+            elif 'USDT' in balance:
+                if 'equity' in balance['USDT']: total_equity = float(balance['USDT']['equity'])
+                elif 'total' in balance['USDT']: total_equity = float(balance['USDT']['total'])
                 
-            return 0.0
+            return free_usdt, total_equity
         except Exception as e:
-            self._log(f"获取账户权益失败: {e}", 'warning')
-            return 0.0
+            self._log(f"获取账户信息失败: {e}", 'warning')
+            return 0.0, 0.0
+
+    async def get_account_balance(self):
+        # 保留兼容性，但建议使用 get_account_info
+        b, _ = await self.get_account_info()
+        return b
+
+    async def get_account_equity(self):
+        # 保留兼容性
+        _, e = await self.get_account_info()
+        return e
 
     async def close_all_positions(self):
         try:
@@ -1168,7 +1237,11 @@ class DeepSeekTrader:
                 elif pos['side'] == 'short':
                     pnl_pct = (entry - current_price) / entry
             
-            # 4. 检查硬止损 (Hard Stop Loss) - [Fixed] 双向监控
+            # 4. 检查硬止损 (Hard Stop Loss) & 止盈 (Take Profit) - [Fixed] 双向监控
+            # [New] 添加止盈监控
+            # 注意: AI 可能会在 analyze() 中给出动态止盈建议，但这里我们先检查配置的硬性止盈
+            max_profit_rate = float(self.risk_control.get('max_profit_rate', 0))
+            
             if self.risk_control.get('max_loss_rate'):
                 max_loss = float(self.risk_control['max_loss_rate'])
                 if pnl_pct <= -max_loss:
@@ -1176,19 +1249,7 @@ class DeepSeekTrader:
                     
                     # 构造一个伪造的 SELL 信号立即平仓
                     fake_signal = {
-                        'signal': 'SELL' if pos['side'] == 'long' else 'BUY', # 这里的逻辑稍显混乱，execute_trade 中 SELL 涵盖了平多和开空
-                        # 实际上 execute_trade 里：
-                        # if signal == 'BUY' and pos.side == 'short' -> 平空
-                        # if signal == 'SELL' and pos.side == 'long' -> 平多
-                        # 所以这里我们需要根据持仓方向给反向信号
-                        
-                        # 但 wait，execute_trade 的逻辑是：
-                        # BUY = 平空 + 开多
-                        # SELL = 平多 + 开空
-                        # 所以如果我是 Long，我要平仓，我应该发 SELL
-                        # 如果我是 Short，我要平仓，我应该发 BUY
-                        'signal': 'SELL' if pos['side'] == 'long' else 'BUY',
-                        
+                        'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
                         'confidence': 'HIGH', # 强制最高信心
                         'amount': 0, # amount 0 在平仓逻辑中会被忽略，直接全平
                         'reason': f"硬止损触发: Loss {pnl_pct*100:.2f}%"
@@ -1198,6 +1259,25 @@ class DeepSeekTrader:
                     return {
                         'symbol': self.symbol,
                         'type': 'STOP_LOSS',
+                        'pnl': pnl_pct
+                    }
+            
+            # [New] 硬止盈逻辑
+            if max_profit_rate > 0:
+                if pnl_pct >= max_profit_rate:
+                    self._log(f"💰 [WATCHDOG] 触发硬止盈: 当前盈利 {pnl_pct*100:.2f}% (阈值 +{max_profit_rate*100}%)", 'info')
+                    
+                    fake_signal = {
+                        'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
+                        'confidence': 'HIGH', 
+                        'amount': 0, 
+                        'reason': f"硬止盈触发: Profit {pnl_pct*100:.2f}%"
+                    }
+                    
+                    await self.execute_trade(fake_signal)
+                    return {
+                        'symbol': self.symbol,
+                        'type': 'TAKE_PROFIT',
                         'pnl': pnl_pct
                     }
             
@@ -1232,12 +1312,11 @@ class DeepSeekTrader:
 
         # Call Agent
         current_pos = await self.get_current_position()
-        balance = await self.get_account_balance()
+        balance, equity = await self.get_account_info()
         
         # [New] 获取账户总权益并计算 PnL
         current_pnl = 0.0
         if self.initial_balance > 0:
-            equity = await self.get_account_equity()
             if equity > 0:
                 current_pnl = equity - self.initial_balance
 
@@ -1282,7 +1361,14 @@ class DeepSeekTrader:
             
             exec_status, exec_msg = "UNKNOWN", ""
             try:
-                result = await self.execute_trade(signal_data)
+                # [Optimization] Pass cached data to execute_trade
+                result = await self.execute_trade(
+                    signal_data, 
+                    current_price=price_data['price'], 
+                    current_position=current_pos, 
+                    balance=balance
+                )
+                
                 if isinstance(result, tuple) and len(result) == 2:
                     exec_status, exec_msg = result
                 elif result is None:
@@ -1303,6 +1389,9 @@ class DeepSeekTrader:
                 'reason': reason,
                 'summary': signal_data.get('summary', ''),
                 'status': exec_status,
-                'status_msg': exec_msg
+                'status_msg': exec_msg,
+                'volatility': volatility_status, # [New]
+                'adx': adx_val, # [New]
+                'rsi': ind.get('rsi'), # [New]
             }
         return None

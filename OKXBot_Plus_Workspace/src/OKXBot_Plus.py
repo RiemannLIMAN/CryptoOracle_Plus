@@ -230,9 +230,9 @@ async def main():
             table_lines = []
             header = f"📊 MARKET SCAN | {len(results)} Symbols"
             table_lines.append(header) 
-            table_lines.append("─" * 130)
-            table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
-            table_lines.append("─" * 130)
+            table_lines.append("─" * 150)
+            table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'VOL/RSI':<10} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
+            table_lines.append("─" * 150)
             
             for res in results:
                 if res:
@@ -241,6 +241,16 @@ async def main():
                     change_icon = "🟢" if change_val > 0 else "🔴"
                     change_str = f"{change_val:+.2f}%"
                     
+                    # [New] 添加关键技术指标概览 (Volatility + RSI)
+                    vol_val = res.get('volatility', 'N/A')
+                    vol_icon = "🌊"
+                    if vol_val == 'HIGH_TREND': vol_icon = "🔥"
+                    elif vol_val == 'LOW': vol_icon = "💤"
+                    
+                    rsi_val = res.get('rsi')
+                    rsi_str = f"{int(rsi_val)}" if rsi_val is not None else "N/A"
+                    tech_str = f"{vol_icon} R:{rsi_str}"
+
                     signal = res['signal']
                     sig_icon = "✋"
                     if signal == 'BUY': sig_icon = "🚀"
@@ -274,9 +284,9 @@ async def main():
                     
                     price_str = f"${res['price']:,.2f}"
                     
-                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
+                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {tech_str:<10} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
             
-            table_lines.append("─" * 130)
+            table_lines.append("─" * 150)
             logger.info("\n".join(table_lines))
             
             elapsed = time.time() - current_ts

@@ -1,4 +1,7 @@
 import pandas as pd
+import matplotlib
+# 设置非交互式后端，防止在非主线程中报错
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import os
@@ -10,16 +13,28 @@ logging.getLogger("matplotlib").setLevel(logging.ERROR)
 logging.getLogger("matplotlib.font_manager").setLevel(logging.ERROR)
 
 # 设置中文字体 (优先尝试 Linux 常见字体，然后是 Windows 字体)
-# 注意：图表主要为英文，使用 DejaVu Sans 即可避免 "Generic family not found" 警告
-plt.rcParams['font.sans-serif'] = [
-    'DejaVu Sans',      # Linux/Docker 默认
-    'Liberation Sans',  # Linux
-    'Arial',            # Windows
-    'SimHei',           # Windows 中文
-    'Microsoft YaHei',  # Windows 中文
-    'SimSun',           # Windows 中文
-    'sans-serif'        # 兜底
+import matplotlib.font_manager as fm
+
+# 1. 定义候选字体列表 (中文优先)
+font_candidates = [
+    'Microsoft YaHei', 'SimHei', 'SimSun', # Windows
+    'WenQuanYi Micro Hei', 'Droid Sans Fallback', 'Noto Sans CJK SC', # Linux
+    'PingFang SC', 'Heiti SC', # MacOS
+    'DejaVu Sans', 'Liberation Sans', 'Arial' # English Fallback
 ]
+
+# 2. 动态检测可用字体
+def get_available_font():
+    available_fonts = set(f.name for f in fm.fontManager.ttflist)
+    for font in font_candidates:
+        if font in available_fonts:
+            return font
+    return 'sans-serif'
+
+selected_font = get_available_font()
+# print(f"Plotter using font: {selected_font}")
+
+plt.rcParams['font.sans-serif'] = [selected_font] + font_candidates
 plt.rcParams['axes.unicode_minus'] = False  # 解决负号显示问题
 
 def generate_pnl_chart(csv_path=None, output_path=None, verbose=True):
@@ -29,6 +44,20 @@ def generate_pnl_chart(csv_path=None, output_path=None, verbose=True):
     # 智能推断路径
     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     
+    # 检查是否使用了支持中文的字体
+    has_chinese_font = any(f in selected_font for f in ['YaHei', 'SimHei', 'SimSun', 'WenQuanYi', 'Droid', 'CJK', 'PingFang', 'Heiti'])
+    
+    # 如果没有中文字体，强制回退到英文标签，防止乱码报错
+    labels = {
+        'title1': 'CryptoOracle 账户权益曲线' if has_chinese_font else 'CryptoOracle Account Equity Curve',
+        'ylabel1': '总权益 (USDT)' if has_chinese_font else 'Total Equity (USDT)',
+        'label1': '账户总权益 (USDT)' if has_chinese_font else 'Total Equity (USDT)',
+        'title2': '累计盈亏率 (%)' if has_chinese_font else 'Cumulative PnL Rate (%)',
+        'ylabel2': '盈亏率 (%)' if has_chinese_font else 'PnL Rate (%)',
+        'xlabel2': '时间' if has_chinese_font else 'Time',
+        'label2': '盈亏率 (%)' if has_chinese_font else 'PnL Rate (%)'
+    }
+
     if csv_path is None:
         csv_path = os.path.join(project_root, "data", "pnl_history.csv")
         # 回退兼容：如果 data 下没有，但根目录有，则使用根目录的 (迁移过渡期)
@@ -62,9 +91,9 @@ def generate_pnl_chart(csv_path=None, output_path=None, verbose=True):
         plt.subplots_adjust(hspace=0.3)
 
         # === 子图 1: 总权益曲线 ===
-        ax1.plot(df['timestamp'], df['total_equity'], color='#1f77b4', linewidth=2, label='Total Equity (USDT)')
-        ax1.set_title('CryptoOracle Account Equity Curve', fontsize=14, fontweight='bold')
-        ax1.set_ylabel('Total Equity (USDT)', fontsize=12)
+        ax1.plot(df['timestamp'], df['total_equity'], color='#1f77b4', linewidth=2, label=labels['label1'])
+        ax1.set_title(labels['title1'], fontsize=14, fontweight='bold')
+        ax1.set_ylabel(labels['ylabel1'], fontsize=12)
         ax1.grid(True, linestyle='--', alpha=0.7)
         ax1.legend(loc='upper left')
         
@@ -80,11 +109,11 @@ def generate_pnl_chart(csv_path=None, output_path=None, verbose=True):
         
         # 使用 plot 绘制连线，使用 scatter 绘制点
         ax2.plot(df['timestamp'], df['pnl_percent'], color='gray', alpha=0.5, linewidth=1)
-        sc = ax2.scatter(df['timestamp'], df['pnl_percent'], c=colors, s=20, label='PnL Rate (%)')
+        sc = ax2.scatter(df['timestamp'], df['pnl_percent'], c=colors, s=20, label=labels['label2'])
         
-        ax2.set_title('Cumulative PnL Rate (%)', fontsize=14, fontweight='bold')
-        ax2.set_ylabel('PnL Rate (%)', fontsize=12)
-        ax2.set_xlabel('Time', fontsize=12)
+        ax2.set_title(labels['title2'], fontsize=14, fontweight='bold')
+        ax2.set_ylabel(labels['ylabel2'], fontsize=12)
+        ax2.set_xlabel(labels['xlabel2'], fontsize=12)
         ax2.grid(True, linestyle='--', alpha=0.7)
         
         # 添加 0% 基准线
