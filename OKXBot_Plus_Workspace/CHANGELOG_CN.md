@@ -15,6 +15,21 @@
     - **触发**: 记录最高浮盈水位，一旦回撤超过 0.3%，立即市价止盈。
   - **配置**: 新增 `config.json` -> `strategy.trailing_stop` 字段，可自定义激活阈值和回撤比例。
 
+### 🧠 策略调整 (Sniper Recovery)
+- **狙击手回归 (Mission Critical Sniper)**:
+  - 将 AI 人设重塑为 "救命钱狙击手"，解决了之前版本过于佛系或因恐惧踏空而亏损的问题。
+  - **原则新增**:
+    - **"使命必达"**: 胜率 > 70% 必须开火。
+    - **"不对称警觉"**: 做空要比做多更敏感。
+  - **置信度调整**: HIGH (>85%), MEDIUM (>70%)。
+
+### 🛡️ 波动率过滤 (Volatility Filter)
+- **阈值优化**: 将拦截阈值从 `1.5x Cost` 降至 `0.8x Cost`。
+- **目的**: 避免过于严格的过滤导致错过潜在的突破机会，同时仍能拦截死鱼盘。
+
+### 📚 文档更新 (Docs)
+- 全面更新了 `PROJECT_EXECUTION_LOGIC.md` (架构图重绘)、`CONFIG_README.md` 和 `SCRIPT_USAGE.md`，确保文档与代码逻辑完全同步。
+
 ## [v3.4.3] - 2026-01-02 (Sniper Recovery Mode)
 ### 🧠 策略调整 (Strategy Tuning)
 - **狙击手人设回归 (Sniper Persona Returns)**:
