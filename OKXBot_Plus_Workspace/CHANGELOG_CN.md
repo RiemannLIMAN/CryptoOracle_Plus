@@ -5,6 +5,23 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.4.3] - 2026-01-02 (Sniper Recovery Mode)
+### 🧠 策略调整 (Strategy Tuning)
+- **狙击手人设回归 (Sniper Persona Returns)**:
+  - 将 AI 人设回滚至经典的 "Crypto Sniper" (狙击手)，并赋予 "救命钱" (Mission Critical) 的紧迫感。
+  - **原则重塑**:
+    - **使命必达**: 强调 "防止踏空" (FOMO Prevention)，在胜率 > 70% 时果断出手。
+    - **弹无虚发**: 强调 "本金第一"，拒绝低胜率的赌博。
+  - **收益**: 在震荡市中找回了 "敢于开枪" 与 "绝不乱开枪" 之间的微妙平衡。
+
+### 🛡️ 风控与参数 (Risk & Config)
+- **波动率过滤器 (Volatility Filter)**:
+  - 恢复并提升波动率过滤阈值至 `0.8` (此前为 0.6)。
+  - **目的**: 过滤掉更多无效的微小震荡，只在市场真正活跃时唤醒 AI，减少磨损。
+- **节奏降频 (Pacing)**:
+  - 将轮询间隔 (`loop_interval`) 调整为 `60s`，K线周期 (`timeframe`) 调整为 `15m`。
+  - **目的**: 进入 "回血防御模式"，放慢节奏，减少高频噪音干扰，专注于捕捉 15 分钟级别的确定性趋势。
+
 ## [v3.4.2] - 2025-12-30 (Hotfix)
 ### 🐛 Bug 修复 (Bug Fixes)
 - **保证金不足保护 (Margin Insufficiency Protection)**:
@@ -257,7 +274,7 @@
 ### 🎨 体验与通知
 - **消息颜色分级**:
   - **止盈 (🎉)**: 启用 **洋红/胭脂红 (Carmine)**，与普通卖出区分，增加庆祝感。
-  - **警告 (⚠️)**: 改为更醒目的 **黄色 (Yellow)**。
+  - **警告 (⚠️)**: 改为 **黄色 (Yellow)**。
   - **失败 (❌)**: 明确使用 **红色 (Red)** 警示严重错误。
 
 ## [v3.1.5] - 2025-12-21 (Multi-Instance)
