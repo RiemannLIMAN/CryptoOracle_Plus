@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.4.6 (Prompt Cache & Tactical Sniper)"
+SYSTEM_VERSION = "v3.5.0 (Execution Hardening)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -208,6 +208,13 @@ async def main():
     # 移除了旧版的双频模式 (tick_rate + analysis_tick)，现在统一使用 interval 进行轮询
     # 这样可以避免在"垃圾时间"频繁请求 API，且与"波动率过滤"逻辑更契合
     
+    # [Dynamic Interval Support]
+    # 如果发现处于 LOW volatility (Grid Mode)，我们可能希望加快轮询速度 (例如 15s)，
+    # 因为网格交易需要捕捉微小的回调。
+    # 默认 interval 通常跟随 Timeframe (如 15m=900s)，这对于 Grid Mode 来说太慢了。
+    
+    current_interval = interval
+    
     try:
         while True:
             current_ts = time.time()
@@ -234,6 +241,11 @@ async def main():
             table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'VOL/RSI':<10} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
             table_lines.append("─" * 150)
             
+            # [Dynamic Interval Logic]
+            # 统计所有交易对的波动率状态，如果任何一个处于 LOW 或 HIGH_TREND，
+            # 说明市场有需要密集关注的机会，加速轮询。
+            has_active_opportunity = False
+            
             for res in results:
                 if res:
                     symbol_str = res['symbol'].split(':')[0]
@@ -244,8 +256,12 @@ async def main():
                     # [New] 添加关键技术指标概览 (Volatility + RSI)
                     vol_val = res.get('volatility', 'N/A')
                     vol_icon = "🌊"
-                    if vol_val == 'HIGH_TREND': vol_icon = "🔥"
-                    elif vol_val == 'LOW': vol_icon = "💤"
+                    if vol_val == 'HIGH_TREND': 
+                        vol_icon = "🔥"
+                        has_active_opportunity = True
+                    elif vol_val == 'LOW': 
+                        vol_icon = "💤"
+                        has_active_opportunity = True # 网格模式也需要高频监控回调
                     
                     rsi_val = res.get('rsi')
                     rsi_str = f"{int(rsi_val)}" if rsi_val is not None else "N/A"
@@ -293,9 +309,29 @@ async def main():
             logger.info(f"💤 本轮分析耗时 {elapsed:.4f}s")
             
             # 计算需要休眠的时间，保持 interval 稳定
-            sleep_time = max(1, interval - elapsed)
+            # [Dynamic Interval] 如果发现机会，加速到 15s；否则使用默认 interval
+            target_interval = interval
+            if has_active_opportunity and interval > 30:
+                 logger.info(f"⚡ 检测到活跃行情/网格机会 (Active Mode)，临时加速轮询: {interval}s -> 30s")
+                 target_interval = 30
+            
+            sleep_time = max(1, target_interval - elapsed)
             logger.info(f"⏳ 休眠 {sleep_time:.2f}s 等待下一轮...")
-            await asyncio.sleep(sleep_time)
+            
+            # [Fix] 安全心跳微循环 (Safety Heartbeat Micro-loop)
+            # 为了防止在长休眠期间 (如 15m) 发生黑天鹅事件导致无法止损
+            # 我们将长休眠拆分为多个 5s 的短休眠，并在期间持续进行风控检查
+            
+            wake_up_time = time.time() + sleep_time
+            while time.time() < wake_up_time:
+                # 每次小睡 5s
+                chunk_sleep = min(5, wake_up_time - time.time())
+                await asyncio.sleep(chunk_sleep)
+                
+                # 在休眠期间执行轻量级风控检查 (不打印日志，除非触发风控)
+                # 这样即使主循环是 1h 一次，止损也能在 5s 内触发
+                await risk_manager.check(force_log=False)
+            
             
     except KeyboardInterrupt:
         logger.info("🛑 停止中...")

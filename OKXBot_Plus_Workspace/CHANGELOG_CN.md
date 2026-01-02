@@ -5,6 +5,20 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.5.0] - 2026-01-02 (Execution Hardening)
+### 🛠️ 交易引擎重构 (Execution Engine Overhaul)
+- **合约精度与单位修复 (Contract Precision)**:
+  - **强制取整**: 在所有合约下单逻辑中，强制执行 `int(amount / contract_size + 1e-9)`。
+  - **精度保护**: 引入 `1e-9` 偏移量，彻底修复了浮点数除法（如 `0.99999`）被截断为 0 导致下单失败的问题。
+  - **模式隔离**: 严格区分现货与合约的 API 参数（如 `reduceOnly`, `tgtCcy`），杜绝了现货模式下发送合约参数导致的 API 报错。
+- **资金逻辑闭环 (Fund Logic Fix)**:
+  - **反手死锁修复 (Flip Protection)**: 修复了“反手开仓”时的资金计算逻辑。现在系统能正确预估“平旧仓”释放的保证金，允许在满仓状态下直接反手，不再误报“余额不足”。
+  - **激进模式增强**: 在 `HIGH` 信心模式下，允许突破单币种配额限制，但严格受限于全局 `initial_balance`，既保证了进攻性又守住了总资金安全底线。
+  - **余额双重确认**: 在自动提升最小下单数量时，增加了二次余额检查（含手续费 Buffer），防止因强制提升导致资金透支。
+- **健壮性提升 (Robustness)**:
+  - **异常熔断**: 当合约模式下获取市场信息失败时，直接熔断交易，防止错误的降级（误判为现货）导致巨额下单事故。
+  - **防崩修复**: 修复了 SELL 侧逻辑中潜在的 `UnboundLocalError`，确保在网络异常时程序能优雅降级而非崩溃。
+
 ## [v3.4.5] - 2026-01-02 (Prompt Engineering & Cache)
 ### 🧠 AI 决策核心升级 (AI Decision Core)
 - **Prompt 缓存加速 (Prompt Cache Optimization)**:

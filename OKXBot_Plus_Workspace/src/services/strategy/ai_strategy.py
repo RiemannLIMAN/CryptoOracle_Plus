@@ -23,10 +23,21 @@ class DeepSeekAgent:
         # [Deprecated] 现在的顶级交易员不需要这种硬编码的辅助
         return False
 
-    def _get_role_prompt(self):
+    def _get_role_prompt(self, volatility_status="NORMAL"):
         # 基础角色设定 (纯静态，利用缓存加速)
-        base_role = """
-身份: 顶级加密货币狙击手 (Crypto Sniper)。
+        base_role = "身份: 顶级加密货币狙击手 (Crypto Sniper)。\n"
+        
+        # [New] 动态人格注入 (Dynamic Persona Injection) - 复刻 V2 经典逻辑
+        if volatility_status == "HIGH_TREND":
+            base_role += "【当前模式: 趋势猎人 (Trend Hunter)】\n市场处于单边剧烈波动，ADX显示趋势极强。请紧咬趋势，果断追涨杀跌，不要轻易猜顶猜底。\n"
+        elif volatility_status == "HIGH_CHOPPY":
+            base_role += "【当前模式: 避险专家 (Risk Averse)】\n市场处于剧烈震荡，无明显方向。请极度谨慎，优先选择观望，或在布林带极端位置做超短线反转。\n"
+        elif volatility_status == "LOW":
+            base_role += "【当前模式: 网格交易员 (Grid Trader)】\n市场横盘震荡 (垃圾时间)。请寻找区间低买高卖的机会，切勿追涨杀跌。利用微小波动积累利润。\n"
+        else:
+            base_role += "【当前模式: 波段交易员 (Swing Trader)】\n市场波动正常。请平衡风险与收益，寻找确定性高的形态信号。\n"
+            
+        base_role += """
 任务: 账户翻倍挑战 (Alpha Generation)。你管理着一笔高风险资金，必须在极短时间内捕捉趋势，实现资产的快速增值。
 风格: 极度理性、杀伐果断、不知疲倦。
 原则:
@@ -57,7 +68,7 @@ class DeepSeekAgent:
 """
         return base_role
 
-    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True):
+    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True, volatility_status="NORMAL"):
         
         # [New] 动态参数下沉到 User Prompt (Cache-Friendly)
         fee_pct = taker_fee_rate * 100
@@ -68,6 +79,27 @@ class DeepSeekAgent:
         1. **成本线**: Taker费率 {fee_pct:.3f}%。任何建议的开仓，其预期浮盈必须能覆盖 >{break_even:.3f}% 的成本，否则就是给交易所打工。
         2. **风控线**: 当前杠杆 {leverage}x。请自行计算爆仓风险，并给出合理的止损位。
         3. **最小单**: 若资金不足，系统会自动拒绝，你无需担心，只需专注于策略本身。
+        """
+
+        # [New] 盈利优先指令 (Profit First Instruction)
+        # 用户反馈: "我是想实现盈利的，但是现在不盈利反而亏啊"
+        # 针对: 避免频繁止损反手 (Double Slap) 和无效磨损
+        
+        # [Dynamic Strategy Adjustment]
+        # 如果是网格模式 (LOW Volatility)，我们需要允许"吃小肉" (Scalping)，否则 AI 会一直观望
+        if volatility_status == "LOW":
+             profit_first_instruction = """
+        【盈利优先原则 (Profit First) - 网格模式】
+        1. **区间套利**: 当前市场处于震荡期，请利用微小波动积累利润。不要期待大趋势。
+        2. **积少成多**: 允许赚取 0.5% - 1.0% 的小幅利润 (Scalping)。只要覆盖成本 ({break_even:.3f}%) 即可获利了结。
+        3. **高抛低吸**: 在布林带下轨/支撑位买入，在上轨/压力位卖出。
+        """
+        else:
+             profit_first_instruction = """
+        【盈利优先原则 (Profit First) - 趋势模式】
+        1. **严禁频繁反手 (No Flip Flop)**: 如果你在做"止损"(Stop Loss)，请优先建议 **amount=0** (仅平仓观望)。除非你有 90% 以上的把握确信这是"假突破+真反转"，否则严禁立即反手开新仓！
+        2. **拒绝小肉 (No Scalping)**: 不要为了赚 0.5% 的波动去冒 1% 的风险。我们是狙击手，不是高频刷单机器。
+        3. **趋势共振**: 在开新仓前，必须确认 大周期(趋势) 与 小周期(入场点) 共振。逆势接飞刀必须有极强的背离信号。
         """
 
         # 交易成本分析、杠杆警示等通用规则已移入 System Prompt
@@ -247,6 +279,7 @@ class DeepSeekAgent:
         {indicator_text}
 
         # 核心策略
+        {profit_first_instruction}
         {closing_instruction}
         {market_instruction}
         """
@@ -260,7 +293,7 @@ class DeepSeekAgent:
             if 'volatility_status' in price_data:
                 volatility_status = price_data['volatility_status']
 
-            role_prompt = self._get_role_prompt()
+            role_prompt = self._get_role_prompt(volatility_status)
             
             position_text = "无持仓"
             if current_pos:
@@ -268,7 +301,7 @@ class DeepSeekAgent:
                 position_text = f"{current_pos['side']}仓, 数量:{current_pos['size']}, 浮盈:{pnl:.2f}U"
 
             prompt = self._build_user_prompt(
-                symbol, timeframe, price_data, balance, position_text, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp
+                symbol, timeframe, price_data, balance, position_text, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp, volatility_status
             )
 
             # self.logger.info(f"[{symbol}] ⏳ 请求 DeepSeek (Async)...")

@@ -125,8 +125,22 @@ class RiskManager:
 
     async def close_all_traders(self):
         self._log("🛑 正在执行全局清仓...")
+        # [Fix] 使用 gather(return_exceptions=True) 确保所有清仓任务都被尝试，即使部分失败
+        # 并且检查结果，记录失败的任务
         tasks = [trader.close_all_positions() for trader in self.traders]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        failures = []
+        for i, res in enumerate(results):
+            if isinstance(res, Exception):
+                trader_name = self.traders[i].symbol
+                failures.append(f"{trader_name}: {res}")
+                
+        if failures:
+            self._log(f"⚠️ 部分清仓失败: {'; '.join(failures)}", 'error')
+            # 可以在这里加入重试逻辑，或者至少发通知
+            fail_msg = '\n'.join(failures)
+            await self.send_notification(f"⚠️ 全局清仓部分失败!\n{fail_msg}", title="🚑 清仓异常")
 
     async def calculate_realized_performance(self):
         """基于交易所历史订单计算已实现盈亏与胜率 (Parallel with Configured Cooldown)"""
@@ -504,17 +518,23 @@ class RiskManager:
             
             # [New] 保守回流逻辑: 仅在检测到明显的“Offset 误判”时才回流
             # 判定标准: 如果 Offset 占据了太多的资金，导致有效资金连配置的 95% 都不到，那可能是之前把卖币回来的钱误判为充值了。
-            if self.deposit_offset > 0 and adjusted_equity < self.initial_balance * 0.95:
-                 gap = self.initial_balance - adjusted_equity
-                 recoverable = min(gap, self.deposit_offset)
-                 
-                 if recoverable > 0:
-                     self._log(f"💧 资金异常回流: 有效资金 ({adjusted_equity:.2f}) 严重偏离配置 ({self.initial_balance})，判定为Offset误判，释放 {recoverable:.2f} U")
-                     self.deposit_offset -= recoverable
-                     self.save_state()
-                     # 重新计算
-                     adjusted_equity = current_total_value - self.deposit_offset
-                     raw_pnl = adjusted_equity - self.smart_baseline
+            # [Reverted] 移除此逻辑。用户反馈 "想看到真实亏损"。
+            # 如果我们在这里自动减少 Offset，会导致 "Adjusted Equity" 回升，从而掩盖真实的亏损 (PnL 归零)。
+            # 例如: 初始100(配80, Off20). 亏损5 -> 总95. Adj=75. PnL=-5.
+            # 如果触发回流: Off->15. Adj->80. PnL->0. 亏损被掩盖了！
+            # 因此，必须禁用此逻辑，让亏损如实反映。
+            
+            # if self.deposit_offset > 0 and adjusted_equity < self.initial_balance * 0.95:
+            #      gap = self.initial_balance - adjusted_equity
+            #      recoverable = min(gap, self.deposit_offset)
+            #      
+            #      if recoverable > 0:
+            #          self._log(f"💧 资金异常回流: 有效资金 ({adjusted_equity:.2f}) 严重偏离配置 ({self.initial_balance})，判定为Offset误判，释放 {recoverable:.2f} U")
+            #          self.deposit_offset -= recoverable
+            #          self.save_state()
+            #          # 重新计算
+            #          adjusted_equity = current_total_value - self.deposit_offset
+            #          raw_pnl = adjusted_equity - self.smart_baseline
             
             # [Fix] 逻辑补丁：如果当前计算出的 PnL 与“实盘交易统计”里的 PnL 差异巨大，说明 Baseline 错了
             # 这是一个自我纠错机制。
@@ -772,10 +792,10 @@ class RiskManager:
             # 如果 实际权益 > 初始配置 (说明有额外充值)，则强制维持 初始配置 作为基准
             # 只有当 实际权益 < 初始配置 * 0.9 (说明亏损严重或提现)，才向下校准
             
-            if real_total_equity < self.initial_balance * 0.9:
+            if real_total_equity < self.initial_balance * 0.5:
                 self.smart_baseline = real_total_equity
                 self.deposit_offset = 0.0 # 缩水了，清空抵扣
-                self._log(f"⚠️ 资产缩水校准: 配置 {self.initial_balance} -> 实际 {real_total_equity:.2f} (缩水 >10%)")
+                self._log(f"⚠️ 资产缩水校准: 配置 {self.initial_balance} -> 实际 {real_total_equity:.2f} (缩水 >50%)")
             else:
                 # 即使实际权益远大于配置，也坚持使用配置值，实现"专款专用"
                 self.smart_baseline = self.initial_balance
