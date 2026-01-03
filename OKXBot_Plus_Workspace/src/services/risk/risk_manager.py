@@ -351,6 +351,62 @@ class RiskManager:
         except Exception as e:
             self._log(f"显示历史战绩失败: {e}", 'warning')
 
+    async def _verify_funding_flow(self, pnl_delta):
+        """查询交易所流水，核实是否为充提币 (Fact-based Check)"""
+        try:
+            if not self.traders: return False
+            
+            # 使用第一个 trader 的 exchange 实例
+            exchange = self.traders[0].exchange
+            
+            # 查询最近 5 条流水 (USDT)
+            # 注意：OKX 的 bill type 很多，ccxt 会统一映射
+            ledger = await exchange.fetch_ledger('USDT', limit=5)
+            
+            # 过滤最近 2 分钟内的记录
+            now_ms = time.time() * 1000
+            recent_flows = [
+                entry for entry in ledger 
+                if (now_ms - entry['timestamp']) < 120 * 1000
+            ]
+            
+            confirmed_amount = 0.0
+            flow_found = False
+            
+            for entry in recent_flows:
+                amount = float(entry['amount'])
+                flow_type = entry['type'] # deposit, withdrawal, transfer
+                
+                # 匹配充值
+                if pnl_delta > 0 and flow_type in ['deposit', 'transfer']:
+                    # transfer 只有当 amount > 0 时才算转入
+                    if amount > 0:
+                        confirmed_amount += amount
+                        flow_found = True
+                        self._log(f"🧾 账本核实: 发现充值/转入 +{amount} U (ID: {entry['id']})")
+
+                # 匹配提现
+                elif pnl_delta < 0 and flow_type in ['withdrawal', 'transfer']:
+                    # transfer 只有当 amount < 0 时才算转出
+                    # ccxt withdrawal amount is usually negative
+                    if amount < 0:
+                        confirmed_amount += amount # amount is negative
+                        flow_found = True
+                        self._log(f"🧾 账本核实: 发现提现/转出 {amount} U (ID: {entry['id']})")
+            
+            if flow_found:
+                self.deposit_offset += confirmed_amount
+                self._log(f"🔄 自动校准 Offset: {self.deposit_offset:.2f} U (基于账本)")
+                self.save_state()
+                return True
+                
+        except Exception as e:
+            # 某些 API Key 可能没有权限查账单，或者 fetch_ledger 不支持
+            # self._log(f"查账失败 (可能是权限不足): {e}", 'debug')
+            pass
+            
+        return False
+
     async def check(self, force_log=False):
         """执行风控检查 (Async)"""
         try:
@@ -455,20 +511,21 @@ class RiskManager:
             pnl_delta = raw_pnl - self.last_known_pnl
             
             # 阈值: 瞬间增长 > 10 U 且 > 5% 本金 (防止正常大波动误判)
-            # 正常交易很难在 10秒内(check间隔) 赚这么多
             threshold_val = max(10.0, self.smart_baseline * 0.05)
             
-            if pnl_delta > threshold_val:
-                self._log(f"💸 检测到资金瞬间增加 (+{pnl_delta:.2f} U)，判定为外部充值")
-                # 调整 offset，吃掉这部分增量，保持 PnL 不变
-                # New_Offset = Old_Offset + Delta
-                self.deposit_offset += pnl_delta
-                self._log(f"🔄 自动增加抵扣额: {self.deposit_offset:.2f} U (维持 PnL 连续)")
-                self.save_state()
-                # 重新计算 PnL
-                adjusted_equity = current_total_value - self.deposit_offset
-                raw_pnl = adjusted_equity - self.smart_baseline
+            # [New] 查账模式 (Fact-based Funding Check)
+            # 只有当资金变动显著时，才调用 API 查流水
+            if abs(pnl_delta) > threshold_val:
+                has_flow = await self._verify_funding_flow(pnl_delta)
+                if has_flow:
+                    # 如果确认了流水，Offset 已更新
+                    # 重新计算 PnL
+                    adjusted_equity = current_total_value - self.deposit_offset
+                    raw_pnl = adjusted_equity - self.smart_baseline
             
+            if hasattr(self, 'realized_pnl_cache'):
+                self.last_realized_pnl = self.realized_pnl_cache
+
             # [Fix] 充值后的资金回补检测 (反向充值/资产恢复)
             # 场景: 账户有100U，20U买了币(剩余80U)，配置100U，机器人按80U跑(错误) -> 实际上机器人应该始终按100U跑
             # 场景: 初始80U，配置100U(锁定)，Offset=0。突然卖了币回来20U，总资产变100U。

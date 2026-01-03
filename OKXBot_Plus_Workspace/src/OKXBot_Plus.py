@@ -320,17 +320,40 @@ async def main():
             
             # [Fix] 安全心跳微循环 (Safety Heartbeat Micro-loop)
             # 为了防止在长休眠期间 (如 15m) 发生黑天鹅事件导致无法止损
-            # 我们将长休眠拆分为多个 5s 的短休眠，并在期间持续进行风控检查
+            # 我们将长休眠拆分为多个 1s 的短休眠，并在期间持续进行风控检查和移动止盈
             
             wake_up_time = time.time() + sleep_time
             while time.time() < wake_up_time:
-                # 每次小睡 5s
-                chunk_sleep = min(5, wake_up_time - time.time())
+                # 每次小睡 1s (实现快慢分离：AI分析慢，止盈止损快)
+                chunk_sleep = min(1, wake_up_time - time.time())
                 await asyncio.sleep(chunk_sleep)
                 
-                # 在休眠期间执行轻量级风控检查 (不打印日志，除非触发风控)
-                # 这样即使主循环是 1h 一次，止损也能在 5s 内触发
+                # 1. 快速检查移动止盈 (Trailing Stop)
+                # 根据监控币种数量动态调整频率，平衡响应速度与 API 限制
+                # <= 3 个币: 每 1s 查一次 (极速)
+                # <= 6 个币: 每 2s 查一次 (均衡)
+                # > 6 个币: 每 5s 查一次 (安全)
+                symbol_count = len(traders)
+                check_interval = 5
+                if symbol_count <= 3: check_interval = 1
+                elif symbol_count <= 6: check_interval = 2
+                
+                if int(time.time()) % check_interval == 0:
+                     # [Optimization] 并行获取持仓，避免串行阻塞
+                     async def check_single_trader(t):
+                         try:
+                             pos = await t.get_current_position()
+                             if pos: await t.check_trailing_stop(pos)
+                         except: pass
+                     
+                     # 启动所有检查任务
+                     check_tasks = [check_single_trader(t) for t in traders]
+                     await asyncio.gather(*check_tasks, return_exceptions=True)
+
+                # 2. 轻量级全局风控检查 (不打印日志，除非触发风控)
+                # 这样即使主循环是 1h 一次，止损也能在 1s 内触发
                 await risk_manager.check(force_log=False)
+
             
             
     except KeyboardInterrupt:

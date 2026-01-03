@@ -50,6 +50,73 @@ class DeepSeekTrader:
         self.signal_history = []
         self.logger = logging.getLogger("crypto_oracle")
         
+    async def check_trailing_stop(self, current_position=None):
+        """检查并执行移动止盈 (Trailing Stop)"""
+        if not self.trailing_config.get('enabled', False):
+            return False
+
+        if not current_position:
+            # 空仓重置
+            self.trailing_max_pnl = 0.0
+            return False
+
+        try:
+            # 获取当前收益率 (未实现盈亏 %)
+            # OKX 返回的 pnl 是 U 本位金额，我们需要转为百分比
+            # 或者直接用 pnl_ratio (如果 API 返回的话)
+            # OKX v5 position info: `uplRatio` is unrealized pnl ratio
+            pnl_ratio = 0.0
+            if 'uplRatio' in current_position:
+                 pnl_ratio = float(current_position['uplRatio'])
+            elif 'percentage' in current_position:
+                 pnl_ratio = float(current_position['percentage']) / 100.0
+            else:
+                 # Fallback calculate
+                 # 暂时无法计算，跳过
+                 return False
+
+            activation_pnl = self.trailing_config.get('activation_pnl', 0.01) # 默认 1%
+            callback_rate = self.trailing_config.get('callback_rate', 0.003) # 默认 0.3%
+
+            # 1. 更新最高水位线
+            if pnl_ratio > self.trailing_max_pnl:
+                self.trailing_max_pnl = pnl_ratio
+                # 只有当创新高且超过激活线时，才记录日志(减少刷屏)
+                if pnl_ratio > activation_pnl:
+                     # self._log(f"📈 移动止盈新高: {pnl_ratio*100:.2f}% (激活线: {activation_pnl*100:.2f}%)", 'debug')
+                     pass
+
+            # 2. 检查是否激活
+            if self.trailing_max_pnl >= activation_pnl:
+                # 3. 检查回撤
+                drawdown = self.trailing_max_pnl - pnl_ratio
+                if drawdown >= callback_rate:
+                    self._log(f"⚡ 触发移动止盈! 最高: {self.trailing_max_pnl*100:.2f}%, 当前: {pnl_ratio*100:.2f}%, 回撤: {drawdown*100:.2f}%")
+                    
+                    # 执行平仓
+                    close_params = {}
+                    if self.trade_mode != 'cash':
+                        close_params['reduceOnly'] = True
+                        close_params['tdMode'] = self.trade_mode
+                    
+                    # 使用当前持仓数量平仓
+                    size = current_position['size'] # Contract size or coin amount
+                    side = 'buy' if current_position['side'] == 'short' else 'sell'
+                    
+                    await self.exchange.create_market_order(self.symbol, side, size, params=close_params)
+                    
+                    msg = f"⚡ 移动止盈触发 ({self.symbol})\n锁定收益: {pnl_ratio*100:.2f}%\n最高浮盈: {self.trailing_max_pnl*100:.2f}%"
+                    await self.send_notification(msg)
+                    
+                    # 重置
+                    self.trailing_max_pnl = 0.0
+                    return True # Executed
+
+        except Exception as e:
+            self._log(f"移动止盈检查出错: {e}", 'error')
+        
+        return False
+
     async def initialize(self):
         """Async Initialization"""
         await self.setup_leverage()
@@ -587,6 +654,12 @@ class DeepSeekTrader:
         # [Moved Up] 提前获取持仓信息，供信心过滤逻辑使用
         if current_position is None:
             current_position = await self.get_current_position()
+
+        # [New] 优先检查移动止盈 (Trailing Stop)
+        # 如果触发了止盈，直接结束本次交易循环，防止 AI 再次开仓
+        if await self.check_trailing_stop(current_position):
+            self._log("⚡ 移动止盈已执行，跳过本次 AI 信号处理")
+            return "EXECUTED", "移动止盈触发"
 
         # 1. 信心过滤
         confidence_levels = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
