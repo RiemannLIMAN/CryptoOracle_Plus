@@ -578,7 +578,8 @@ class DeepSeekTrader:
             "- 是否已达到最大持仓配额？",
             "- 最小下单金额是否满足？"
         ]
-        await self.send_notification("\n".join(report))
+        # await self.send_notification("\n".join(report))
+        self._log("\n".join(report), level='warning') # 改为日志输出，防止消息轰炸
 
     async def execute_trade(self, signal_data, current_price=None, current_position=None, balance=None):
         """执行交易 (Async - Enhanced Logic)"""
@@ -964,6 +965,11 @@ class DeepSeekTrader:
                  else:
                       avail_margin = min(potential_balance, full_quota_usdt)
                       effective_limit = (avail_margin * self.leverage * 0.99) / current_realtime_price
+            
+            # [Fix] 如果不是反手，是纯开仓，也要确保 trade_amount 不小于 min_amount_coins (在余额允许范围内)
+            # trade_amount 之前是 min(ai_suggest, config_amt, max_trade_limit)
+            # 如果 ai_suggest 很小，这里就取了小的，后面会被拦截
+            # 但如果 max_trade_limit 本身就比 min_amount 小 (比如渣渣钱)，那也没办法
             
             trade_amount = min(ai_suggest, config_amt, effective_limit)
             
