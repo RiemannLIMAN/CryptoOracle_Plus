@@ -1,12 +1,12 @@
 # OKXBot Plus (CryptoOracle)
 
-![Version](https://img.shields.io/badge/version-3.4.4-blue.svg)
+![Version](https://img.shields.io/badge/version-3.5.1-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Python](https://img.shields.io/badge/python-3.8+-yellow.svg)
 
 **OKXBot Plus** (CryptoOracle) 是一个基于 **DeepSeek AI** 大模型的智能加密货币交易机器人。它结合了传统技术指标与 AI 的逻辑推理能力，能够像人类分析师一样进行市场分析、趋势判断和风险控制。
 
-> **核心更新 (v3.4.4)**: 引入 **Sniper Recovery Mode** 和 **Trailing Stop (移动止盈)**，既能毫秒级锁定利润，又能通过 AI 狙击手策略在波动中精准捕获机会。
+> **核心更新 (v3.5.1)**: 引入 **Persona Optimization (人格显性化)** 和 **Trend Hunter (趋势猎人)** 阈值优化，修复了低波动率下的趋势误判问题。
 
 ---
 
@@ -14,12 +14,14 @@
 
 请阅读 `doc/` 目录下的详细文档以快速上手：
 
-*   📖 **[OKXBot Plus 项目说明书 (推荐)](doc/OKXBot_Plus_CryptoOracle_项目说明书.md)**
+*   📖 **[项目白皮书 (推荐)](PROJECT_WHITEPAPER.md)**
     *   *必读！包含完整的环境搭建、配置说明、启动教程。*
 *   ⚙️ **[配置文件详解](doc/CONFIG_README.md)**
     *   *详细解释 config.json 中的每一个参数。*
 *   🧠 **[核心执行逻辑](doc/PROJECT_EXECUTION_LOGIC.md)**
     *   *深入了解 AI 是如何决策的。*
+*   🛠️ **[架构分析](doc/ARCHITECTURE_ANALYSIS.md)**
+    *   *系统模块与数据流向。*
 
 ---
 

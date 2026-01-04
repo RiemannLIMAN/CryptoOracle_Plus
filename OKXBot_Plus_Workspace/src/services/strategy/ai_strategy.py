@@ -25,17 +25,18 @@ class DeepSeekAgent:
 
     def _get_role_prompt(self, volatility_status="NORMAL"):
         # 基础角色设定 (纯静态，利用缓存加速)
-        base_role = "身份: 顶级加密货币狙击手 (Crypto Sniper)。\n"
+        base_role = "身份: 具备机构视角的顶级加密货币狙击手 (Institutional Crypto Sniper)。\n"
+        base_role += "核心能力: 能够识别市场噪音与真实信号，擅长在极端行情中保持绝对冷静。\n"
         
         # [New] 动态人格注入 (Dynamic Persona Injection) - 复刻 V2 经典逻辑
         if volatility_status == "HIGH_TREND":
             base_role += "【当前模式: 趋势猎人 (Trend Hunter)】\n市场处于单边剧烈波动，ADX显示趋势极强。请紧咬趋势，果断追涨杀跌，不要轻易猜顶猜底。\n"
         elif volatility_status == "HIGH_CHOPPY":
-            base_role += "【当前模式: 避险专家 (Risk Averse)】\n市场处于剧烈震荡，无明显方向。请极度谨慎，优先选择观望，或在布林带极端位置做超短线反转。\n"
+            base_role += "【当前模式: 风控卫士 (Risk Guardian)】\n市场处于剧烈震荡，多空分歧巨大。请切换为'均值回归'思维，严禁追单。仅在价格触及布林带外轨或极端超买超卖时，执行反向猎杀（Mean Reversion）。\n"
         elif volatility_status == "LOW":
             base_role += "【当前模式: 网格交易员 (Grid Trader)】\n市场横盘震荡 (垃圾时间)。请寻找区间低买高卖的机会，切勿追涨杀跌。利用微小波动积累利润。\n"
         else:
-            base_role += "【当前模式: 波段交易员 (Swing Trader)】\n市场波动正常。请平衡风险与收益，寻找确定性高的形态信号。\n"
+            base_role += "【当前模式: 日内交易员 (Day Trader)】\n市场波动正常，趋势未爆发 (ADX < 30)。请平衡风险与收益，专注于K线形态和关键位博弈，拒绝追涨。\n"
             
         base_role += """
 任务: 账户翻倍挑战 (Alpha Generation)。你管理着一笔高风险资金，必须在极短时间内捕捉趋势，实现资产的快速增值。
@@ -50,10 +51,9 @@ class DeepSeekAgent:
    - LOW: 震荡或不明朗 (胜率 < 60%)。
 
 【狙击手战术手册 (Tactical Playbook)】
-1. **突破战法 (Breakout)**: 仅当价格强势突破关键阻力位且**伴随爆量 (Volume > 1.5)** 时，视为有效突破。缩量突破多为假突破，坚决不追。
-2. **回调战法 (Pullback)**: 上涨趋势中的缩量回调是最佳买点。寻找支撑位附近的"企稳信号"（如长下影线、锤子线）。
-3. **拒绝震荡 (No Chop)**: 如果 ADX < 20 且布林带收口，说明市场在睡觉。此时严禁开单，耐心等待波动率回归。
-4. **警惕插针 (Wick Watch)**: 必须关注 K 线形态！如果当前或上一根 K 线出现极长的上影线 (Wick > Body * 2)，且成交量巨大，这通常是主力出货/诱多的见顶信号。此时若持有多单，请立即止盈 (SELL)，不要犹豫！
+1.53→1. **突破战法 (Breakout)**: 仅当价格强势突破关键阻力位且**伴随爆量 (Volume > 1.5)** 时，视为有效突破。缩量突破多为假突破，坚决不追。
+54→2. **回调战法 (Pullback)**: 上涨趋势中的缩量回调是最佳买点。寻找支撑位附近的"企稳信号"（如长下影线、锤子线）。
+55→3. **拒绝无效震荡**: 除非处于网格模式(Grid Mode)，否则当 ADX < 20 且布林带收口时，说明市场在睡觉，严禁开趋势单。
 
 【输出格式要求】
 你必须严格只返回一个合法的 JSON 对象，不要包含任何 Markdown 标记或解释文字。格式如下：
@@ -94,6 +94,13 @@ class DeepSeekAgent:
         1. **区间套利**: 当前市场处于震荡期，请利用微小波动积累利润。不要期待大趋势。
         2. **积少成多**: 允许赚取 0.5% - 1.0% 的小幅利润 (Scalping)。只要覆盖成本 ({break_even:.3f}%) 即可获利了结。
         3. **高抛低吸**: 在布林带下轨/支撑位买入，在上轨/压力位卖出。
+        """
+        elif volatility_status == "HIGH_CHOPPY":
+             profit_first_instruction = """
+        【盈利优先原则 (Profit First) - 均值回归模式】
+        1. **极端猎杀**: 市场处于剧烈震荡。严禁追涨杀跌！只做"均值回归" (Mean Reversion)。
+        2. **反向操作**: 价格触及布林带上轨/超买区 -> **SELL** (做空/止盈)；触及下轨/超卖区 -> **BUY** (做多/止损)。
+        3. **快进快出**: 利润目标不宜过大，回归中轨即可减仓。
         """
         else:
              profit_first_instruction = """
@@ -214,7 +221,7 @@ class DeepSeekAgent:
         RSI(14): {rsi_str}
         MACD: {macd_str}
         Bollinger: {bb_str}
-        ADX(14): {adx_str} (趋势强度 >25为强) | ATR(14): {atr_str} (波动率，建议止损参考: Entry ± 2*ATR)
+        ADX(14): {adx_str} (趋势强度 >30为强) | ATR(14): {atr_str} (波动率，建议止损参考: Entry ± 2*ATR)
         Volume: 当前量比 {vol_ratio_val:.2f} ({vol_status})
         Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能量潮)"""
 

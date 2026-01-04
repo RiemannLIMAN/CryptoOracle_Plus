@@ -1,7 +1,7 @@
 import time
 import logging
 import asyncio
-import emoji
+# import emoji # [Fix] Removed unsafe dependency
 import pandas as pd
 from datetime import datetime
 from core.utils import to_float, send_notification_async
@@ -50,6 +50,15 @@ class DeepSeekTrader:
         self.signal_history = []
         self.logger = logging.getLogger("crypto_oracle")
         
+        # [New] Dynamic Risk Parameters (from AI)
+        self.dynamic_stop_loss = 0.0
+        self.dynamic_take_profit = 0.0
+        self.dynamic_sl_side = None # 'long' or 'short'
+        
+        # [New] Circuit Breaker (Cool-down)
+        self.last_stop_loss_time = 0
+        self.cool_down_seconds = 60 # [Optimized] Reduced from 300s to 60s to avoid missing opportunities
+
     async def check_trailing_stop(self, current_position=None):
         """检查并执行移动止盈 (Trailing Stop)"""
         if not self.trailing_config.get('enabled', False):
@@ -244,9 +253,12 @@ class DeepSeekTrader:
         try:
             if self.trade_mode == 'cash': return
             await self.exchange.set_leverage(self.leverage, self.symbol, {'mgnMode': self.margin_mode})
-            self._log(emoji.emojize(f":gear: 设置杠杆: {self.leverage}x ({self.margin_mode})"))
+            # [Fix] Remove emoji dependency to prevent runtime errors if package missing
+            # self._log(emoji.emojize(f":gear: 设置杠杆: {self.leverage}x ({self.margin_mode})"))
+            self._log(f"⚙️ 设置杠杆: {self.leverage}x ({self.margin_mode})")
         except Exception as e:
-            self._log(emoji.emojize(f":no_entry: 杠杆设置失败: {e}"), 'error')
+            # self._log(emoji.emojize(f":no_entry: 杠杆设置失败: {e}"), 'error')
+            self._log(f"🚫 杠杆设置失败: {e}", 'error')
 
     def calculate_indicators(self, df):
         try:
@@ -576,15 +588,25 @@ class DeepSeekTrader:
             elif tf == '1d': low_thresh, high_thresh = 2.00, 5.0
             
             is_trending = False
-            # [Reverted] 恢复默认趋势判断阈值，保持稳健
-            if adx_value is not None and adx_value > 25:
+            # [Optimized] 提高趋势判断阈值 (25 -> 30)
+            # 用户反馈: 避免在弱趋势或震荡市中误判为单边趋势，导致频繁止损
+            if adx_value is not None and adx_value > 30:
                 is_trending = True
                 
             if avg_volatility > high_thresh:
+                # 只有当趋势足够强 (ADX>30) 且 波动足够大时，才进入 Trend Hunter
                 return "HIGH_TREND" if is_trending else "HIGH_CHOPPY"
             elif avg_volatility < low_thresh: 
+                # [Optimization] 如果波动率低，但是趋势极强 (ADX>40)，这是一种极其罕见的"静默爬升"
+                # 此时不应该进入网格模式 (做反转)，而应该进入趋势模式
+                if adx_value is not None and adx_value > 40:
+                    return "HIGH_TREND"
                 return "LOW"
             else:
+                # [Fix] 如果波动率正常但在强趋势中 (ADX > 30)，应归类为趋势模式，而非日内震荡
+                # 确保 AI Prompt 中的 "ADX < 30" 描述与实际逻辑一致
+                if is_trending:
+                    return "HIGH_TREND"
                 return "NORMAL"
         except Exception:
             return "NORMAL"
@@ -613,6 +635,10 @@ class DeepSeekTrader:
                     return float(balance[base_currency]['total'])
                 return float(balance[base_currency]['free'])
             elif 'info' in balance and 'data' in balance['info']:
+                # [Fix] Check if 'data' list is empty
+                if not balance['info']['data']:
+                     return 0.0
+                     
                 for asset in balance['info']['data'][0]['details']:
                     if asset['ccy'] == base_currency:
                         if total:
@@ -660,6 +686,23 @@ class DeepSeekTrader:
         if await self.check_trailing_stop(current_position):
             self._log("⚡ 移动止盈已执行，跳过本次 AI 信号处理")
             return "EXECUTED", "移动止盈触发"
+
+        # [New] Cool-down Check (Circuit Breaker)
+        # 如果最近刚触发过止损，强制暂停开新仓 (Closing 操作除外)
+        # 防止在震荡市中反复止损 (Whipsaw)
+        is_opening = False
+        if signal_data['signal'] == 'BUY':
+             if not current_position or current_position['side'] == 'long': is_opening = True
+             # 如果是 Short -> Buy，那是 Closing/Flip，Flip 部分在后面有逻辑，这里先看 Opening
+        elif signal_data['signal'] == 'SELL':
+             if self.trade_mode != 'cash' and (not current_position or current_position['side'] == 'short'): is_opening = True
+        
+        # 准确判断是否是纯开仓/加仓 (非平仓)
+        # 简单的逻辑: 如果不是 is_closing (后面定义的)，那就有可能是 Opening
+        # 但 is_closing 在后面定义。我们这里先用一个简单的预判。
+        
+        # 更好的位置是在 is_closing 确定之后，但在执行下单之前。
+        # 让我们往下找 is_closing 的定义处 (Line ~1062)
 
         # 1. 信心过滤
         confidence_levels = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
@@ -718,12 +761,38 @@ class DeepSeekTrader:
             return "SKIPPED_CONF", f"信心不足 {signal_data.get('confidence')}"
 
         if signal_data['signal'] == 'HOLD':
+            # [New] Update Dynamic Risk Params even on HOLD
+            if current_position:
+                sl = float(signal_data.get('stop_loss', 0) or 0)
+                tp = float(signal_data.get('take_profit', 0) or 0)
+                # Only update if AI provides a non-zero value
+                if sl > 0: 
+                    self.dynamic_stop_loss = sl
+                    self.dynamic_sl_side = current_position['side']
+                if tp > 0: 
+                    self.dynamic_take_profit = tp
+                    self.dynamic_sl_side = current_position['side']
+
             return "HOLD", "AI建议观望"
 
         if self.test_mode:
             self._log(f"🧪 测试模式: {signal_data['signal']} {signal_data['amount']} (不执行)")
             return "TEST_MODE", f"模拟执行 {signal_data['signal']}"
 
+        # [New] Update Dynamic Risk Params for Active Trades
+        # We do this before price check to ensure we capture the latest AI advice
+        sl = float(signal_data.get('stop_loss', 0) or 0)
+        tp = float(signal_data.get('take_profit', 0) or 0)
+        
+        target_side = 'long' if signal_data['signal'] == 'BUY' else 'short'
+        
+        if sl > 0:
+            self.dynamic_stop_loss = sl
+            self.dynamic_sl_side = target_side
+        if tp > 0:
+            self.dynamic_take_profit = tp
+            self.dynamic_sl_side = target_side
+            
         # 2. 价格滑点检查
         if current_price is None:
             ticker = await self.exchange.fetch_ticker(self.symbol)
@@ -1060,7 +1129,22 @@ class DeepSeekTrader:
         # [New] 如果是 BUY 平空 (Short -> Flat)
         if signal_data['signal'] == 'BUY' and current_position and current_position['side'] == 'short':
             is_closing = True
-            
+
+        # [New] Circuit Breaker Logic (Cool-down)
+        # 如果不是平仓操作 (即 Opening 或 Pyramiding)，检查冷静期
+        if not is_closing:
+            time_since_sl = time.time() - self.last_stop_loss_time
+            if time_since_sl < self.cool_down_seconds:
+                # [Optimized] High Confidence Override
+                # 如果 AI 信心为 HIGH，说明出现了极佳的形态 (如 V型反转)，允许豁免冷静期
+                is_high_conf = (signal_data.get('confidence', '').upper() == 'HIGH')
+                if is_high_conf:
+                    self._log(f"🔥 冷静期豁免: 信心 HIGH，允许立即重返战场！", 'warning')
+                else:
+                    remaining = int(self.cool_down_seconds - time_since_sl)
+                    self._log(f"🧊 止损冷静期: 刚触发止损不久，暂停开仓/加仓 (剩余 {remaining}s)", 'warning')
+                    return "SKIPPED_COOL", f"冷静期 {remaining}s"
+
         # [New] 如果是加仓 (Pyramiding) 且信心为 HIGH，也跳过最小金额检查
         # 因为我们是想把剩余的一点点钱 (渣渣钱) 或者是大钱加进去
         # 但如果是加仓，trade_amount 可能是剩下的所有钱，如果这笔钱太少 (<5U)，会被 min_notional 拦截
@@ -1102,7 +1186,34 @@ class DeepSeekTrader:
                     
                     await self.exchange.create_market_order(self.symbol, 'buy', current_position['size'], params=close_params)
                     self._log("🔄 平空仓成功")
-                    await self.send_notification(f"🔄 平空仓成功 {self.symbol}\n数量: {current_position['size']}\n理由: {signal_data['reason']}")
+                    # [New] Reset Dynamic Risk Params on New Entry (Short)
+                    # Wait, this is Close Short logic (BUY).
+                    # If we close short, we reset risk params to 0.
+                    self.dynamic_stop_loss = 0.0
+                    self.dynamic_take_profit = 0.0
+
+                    # [New] Record Stop Loss Event
+                    # 如果这确实是一个止损操作 (PnL < 0)，更新冷却时间
+                    # 注意: current_position 是平仓前的快照
+                    if current_position:
+                         # 计算已实现盈亏 (Realized PnL)
+                         # 简单的估算: (Close - Entry) * Size
+                         # 但我们这里没有成交均价，只能用 current_realtime_price 估算
+                         entry_p = current_position.get('entry_price', 0)
+                         is_loss = False
+                         if entry_p > 0:
+                             if current_position['side'] == 'long':
+                                 if current_realtime_price < entry_p: is_loss = True
+                             else: # short
+                                 if current_realtime_price > entry_p: is_loss = True
+                         
+                         # 或者检查 reason 是否包含 "止损" / "Loss"
+                         reason_str = signal_data.get('reason', '')
+                         if "止损" in reason_str or "Loss" in reason_str or "STOP" in reason_str.upper() or is_loss:
+                             self.last_stop_loss_time = time.time()
+                             self._log(f"🛑 止损已触发，启动 60s 冷静期...", 'warning')
+
+                    await self.send_notification(f"🔄 平多仓成功 {self.symbol}\n数量: {size_to_sell}\n理由: {signal_data['reason']}")
                     await asyncio.sleep(1)
                 
                 # 开多/买入
@@ -1298,6 +1409,13 @@ class DeepSeekTrader:
 
                 await self.exchange.create_market_order(self.symbol, 'buy', final_order_amount, params=buy_params)
                 self._log(f"🚀 买入成功: {final_order_amount} (模式: {self.trade_mode})")
+                
+                # [New] Reset Dynamic Risk Params on New Entry
+                new_sl = float(signal_data.get('stop_loss', 0) or 0)
+                new_tp = float(signal_data.get('take_profit', 0) or 0)
+                
+                if new_sl == 0: self.dynamic_stop_loss = 0.0
+                if new_tp == 0: self.dynamic_take_profit = 0.0
                 
                 msg = f"🚀 **买入执行 (BUY)**\n"
                 msg += f"• 交易对: {self.symbol}\n"
@@ -1554,6 +1672,13 @@ class DeepSeekTrader:
                     await self.exchange.create_market_order(self.symbol, 'sell', final_order_amount, params={'tdMode': self.trade_mode})
                     self._log(f"📉 开空成功: {trade_amount} Coins ({final_order_amount} sz)")
                     
+                    # [New] Reset Dynamic Risk Params on New Entry (Short)
+                    new_sl = float(signal_data.get('stop_loss', 0) or 0)
+                    new_tp = float(signal_data.get('take_profit', 0) or 0)
+                    
+                    if new_sl == 0: self.dynamic_stop_loss = 0.0
+                    if new_tp == 0: self.dynamic_take_profit = 0.0
+                    
                     post_balance = await self.get_account_balance()
                     est_cost = trade_amount * current_realtime_price
                     
@@ -1594,16 +1719,19 @@ class DeepSeekTrader:
             if 'USDT' in balance: 
                 free_usdt = float(balance['USDT']['free'])
             elif 'info' in balance and 'data' in balance['info']:
-                for asset in balance['info']['data'][0]['details']:
-                    if asset['ccy'] == 'USDT':
-                        free_usdt = float(asset['availBal'])
-                        break
+                # [Fix] Handle empty data list for Unified Account
+                if balance['info']['data']:
+                    for asset in balance['info']['data'][0]['details']:
+                        if asset['ccy'] == 'USDT':
+                            free_usdt = float(asset['availBal'])
+                            break
             
             # 2. 解析总权益 (Total Equity)
             if 'info' in balance and 'data' in balance['info']:
-                data0 = balance['info']['data'][0]
-                if 'totalEq' in data0:
-                    total_equity = float(data0['totalEq'])
+                if balance['info']['data']:
+                    data0 = balance['info']['data'][0]
+                    if 'totalEq' in data0:
+                        total_equity = float(data0['totalEq'])
             elif 'USDT' in balance:
                 if 'equity' in balance['USDT']: total_equity = float(balance['USDT']['equity'])
                 elif 'total' in balance['USDT']: total_equity = float(balance['USDT']['total'])
@@ -1638,18 +1766,23 @@ class DeepSeekTrader:
         except Exception as e:
             self._log(f"平仓失败: {e}", 'error')
 
-    async def run_safety_check(self):
+    async def run_safety_check(self, current_position=None, current_price=None):
         """
         高频安全检查 (每 5秒 运行)
         仅检查止损/止盈，不进行复杂分析
         """
         try:
             # 1. 获取最新价格 (Ticker) - 速度快，消耗资源少
-            ticker = await self.exchange.fetch_ticker(self.symbol)
-            current_price = ticker['last']
+            # [Optimization] 支持从外部传入 current_price 以减少 API 调用
+            if current_price is None:
+                ticker = await self.exchange.fetch_ticker(self.symbol)
+                current_price = ticker['last']
             
             # 2. 获取持仓
-            pos = await self.get_current_position()
+            pos = current_position
+            if pos is None:
+                pos = await self.get_current_position()
+            
             if not pos:
                 self.trailing_max_pnl = 0.0 # 重置水位线
                 return None # 空仓无需监控
@@ -1694,6 +1827,47 @@ class DeepSeekTrader:
                         }
 
             # 4. 检查硬止损 (Hard Stop Loss) & 止盈 (Take Profit) - [Fixed] 双向监控
+            # [New] Dynamic Stop Loss / Take Profit Check
+            # Check if AI provided a specific price level for SL/TP
+            if self.dynamic_sl_side == pos['side']:
+                # Dynamic Stop Loss
+                if self.dynamic_stop_loss > 0:
+                    should_stop = False
+                    if pos['side'] == 'long' and current_price <= self.dynamic_stop_loss:
+                        should_stop = True
+                    elif pos['side'] == 'short' and current_price >= self.dynamic_stop_loss:
+                        should_stop = True
+                    
+                    if should_stop:
+                        self._log(f"🚨 [WATCHDOG] 触发 AI 动态止损: Price {current_price} hit SL {self.dynamic_stop_loss}", 'warning')
+                        fake_signal = {
+                            'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
+                            'confidence': 'HIGH', 
+                            'amount': 0, 
+                            'reason': f"AI动态止损触发: {current_price} vs {self.dynamic_stop_loss}"
+                        }
+                        await self.execute_trade(fake_signal)
+                        return {'symbol': self.symbol, 'type': 'STOP_LOSS_AI', 'price': current_price}
+
+                # Dynamic Take Profit
+                if self.dynamic_take_profit > 0:
+                    should_tp = False
+                    if pos['side'] == 'long' and current_price >= self.dynamic_take_profit:
+                        should_tp = True
+                    elif pos['side'] == 'short' and current_price <= self.dynamic_take_profit:
+                        should_tp = True
+                    
+                    if should_tp:
+                        self._log(f"💰 [WATCHDOG] 触发 AI 动态止盈: Price {current_price} hit TP {self.dynamic_take_profit}", 'info')
+                        fake_signal = {
+                            'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
+                            'confidence': 'HIGH', 
+                            'amount': 0, 
+                            'reason': f"AI动态止盈触发: {current_price} vs {self.dynamic_take_profit}"
+                        }
+                        await self.execute_trade(fake_signal)
+                        return {'symbol': self.symbol, 'type': 'TAKE_PROFIT_AI', 'price': current_price}
+
             # [New] 添加止盈监控
             # 注意: AI 可能会在 analyze() 中给出动态止盈建议，但这里我们先检查配置的硬性止盈
             max_profit_rate = float(self.risk_control.get('max_profit_rate', 0))
@@ -1745,113 +1919,121 @@ class DeepSeekTrader:
 
     async def run(self):
         """Async 单次运行 - 返回结果给调用者进行统一打印"""
-        # self._log(f"🚀 开始分析...")
-        
-        if not hasattr(self, 'last_fee_update_time'):
-            await self._update_fee_rate()
-            self.last_fee_update_time = time.time()
-        
-        price_data = await self.get_ohlcv()
-        if not price_data: return None
-
-        # [Optimized] 获取实时余额用于动态资金计算
-        balance, equity = await self.get_account_info()
-        await self._update_amount_auto(price_data['price'], balance)
-        
-        # Calculate volatility status
-        ind = price_data.get('indicators', {})
-        adx_val = ind.get('adx')
-        volatility_status = self.get_market_volatility(price_data['kline_data'], adx_val)
-        price_data['volatility_status'] = volatility_status
-        
-        # [Log Cleanup] 这里的日志移交给上层统一打印
-        # icon = "🟢" if price_data['price_change'] > 0 else "🔴"
-        # self._log(f"📊 当前价格: ${price_data['price']:,.2f} {icon} ({price_data['price_change']:+.2f}%)")
-
-        # Call Agent
-        current_pos = await self.get_current_position()
-        
-        # [New] 获取账户总权益并计算 PnL
-        current_pnl = 0.0
-        if self.initial_balance > 0:
-            if equity > 0:
-                current_pnl = equity - self.initial_balance
-
-        # [New] 获取资金费率 (Funding Rate)
-        funding_rate = 0.0
         try:
-             # 仅合约模式需要获取资金费率
-             if self.trade_mode != 'cash':
-                 fr_data = await self.exchange.fetch_funding_rate(self.symbol)
-                 if fr_data:
-                     funding_rate = float(fr_data.get('fundingRate', 0))
-        except:
-             pass
+            # self._log(f"🚀 开始分析...")
+            
+            if not hasattr(self, 'last_fee_update_time'):
+                await self._update_fee_rate()
+                self.last_fee_update_time = time.time()
+            
+            price_data = await self.get_ohlcv()
+            if not price_data: return None
 
-        signal_data = await self.agent.analyze(
-            self.symbol, 
-            self.timeframe, 
-            price_data, 
-            current_pos, 
-            balance, 
-            self.amount,
-            self.taker_fee_rate,
-            self.leverage, # 传入杠杆
-            self.risk_control, # 传入风控配置
-            current_pnl, # [New] 传入当前账户总盈亏
-            funding_rate, # [New] 传入资金费率
-            self.common_config.get('strategy', {}).get('dynamic_tp', True) # [New] 传入动态止盈开关
-        )
-        
-        if signal_data:
-            # [Fix] 注入波动率状态，供 execution 阶段做信心豁免
-            signal_data['volatility_status'] = volatility_status
+            # [Optimized] 获取实时余额用于动态资金计算
+            balance, equity = await self.get_account_info()
+            await self._update_amount_auto(price_data['price'], balance)
+            
+            # Calculate volatility status
+            ind = price_data.get('indicators', {})
+            adx_val = ind.get('adx')
+            volatility_status = self.get_market_volatility(price_data['kline_data'], adx_val)
+            price_data['volatility_status'] = volatility_status
             
             # [Log Cleanup] 这里的日志移交给上层统一打印
-            reason = signal_data.get('reason', '无理由')
-            signal = signal_data.get('signal', 'UNKNOWN')
-            confidence = signal_data.get('confidence', 'LOW')
-            
-            # icon = "🤔"
-            # if signal == 'BUY': icon = "🟢"
-            # elif signal == 'SELL': icon = "🔴"
-            # elif signal == 'HOLD': icon = "✋"
-            
-            # self._log(f"{icon} AI决策: {signal} ({confidence}) | 理由: {reason}")
-            
-            exec_status, exec_msg = "UNKNOWN", ""
-            try:
-                # [Optimization] Pass cached data to execute_trade
-                result = await self.execute_trade(
-                    signal_data, 
-                    current_price=price_data['price'], 
-                    current_position=current_pos, 
-                    balance=balance
-                )
-                
-                if isinstance(result, tuple) and len(result) == 2:
-                    exec_status, exec_msg = result
-                elif result is None:
-                    # execute_trade might return None if it just returned without value in some paths (legacy)
-                    # But we covered all paths now
-                    pass
-            except Exception as e:
-                exec_status = "ERROR"
-                exec_msg = str(e)
+            # icon = "🟢" if price_data['price_change'] > 0 else "🔴"
+            # self._log(f"📊 当前价格: ${price_data['price']:,.2f} {icon} ({price_data['price_change']:+.2f}%)")
 
-            # 返回结构化结果给上层打印表格
-            return {
-                'symbol': self.symbol,
-                'price': price_data['price'],
-                'change': price_data['price_change'],
-                'signal': signal,
-                'confidence': confidence,
-                'reason': reason,
-                'summary': signal_data.get('summary', ''),
-                'status': exec_status,
-                'status_msg': exec_msg,
-                'volatility': volatility_status, # [New]
-                'adx': adx_val, # [New]
-                'rsi': ind.get('rsi'), # [New]
-            }
-        return None
+            # Call Agent
+            current_pos = await self.get_current_position()
+            
+            # [New] 获取账户总权益并计算 PnL
+            current_pnl = 0.0
+            if self.initial_balance > 0:
+                if equity > 0:
+                    current_pnl = equity - self.initial_balance
+
+            # [New] 获取资金费率 (Funding Rate)
+            funding_rate = 0.0
+            try:
+                 # 仅合约模式需要获取资金费率
+                 if self.trade_mode != 'cash':
+                     fr_data = await self.exchange.fetch_funding_rate(self.symbol)
+                     if fr_data:
+                         funding_rate = float(fr_data.get('fundingRate', 0))
+            except:
+                 pass
+
+            signal_data = await self.agent.analyze(
+                self.symbol, 
+                self.timeframe, 
+                price_data, 
+                current_pos, 
+                balance, 
+                self.amount,
+                self.taker_fee_rate,
+                self.leverage, # 传入杠杆
+                self.risk_control, # 传入风控配置
+                current_pnl, # [New] 传入当前账户总盈亏
+                funding_rate, # [New] 传入资金费率
+                self.common_config.get('strategy', {}).get('dynamic_tp', True) # [New] 传入动态止盈开关
+            )
+            
+            if signal_data:
+                # [Fix] 注入波动率状态，供 execution 阶段做信心豁免
+                signal_data['volatility_status'] = volatility_status
+                
+                # [Log Cleanup] 这里的日志移交给上层统一打印
+                reason = signal_data.get('reason', '无理由')
+                signal = signal_data.get('signal', 'UNKNOWN')
+                confidence = signal_data.get('confidence', 'LOW')
+                
+                exec_status, exec_msg = "UNKNOWN", ""
+                try:
+                    # [Optimization] Pass cached data to execute_trade
+                    result = await self.execute_trade(
+                        signal_data, 
+                        current_price=price_data['price'], 
+                        current_position=current_pos, 
+                        balance=balance
+                    )
+                    
+                    if isinstance(result, tuple) and len(result) == 2:
+                        exec_status, exec_msg = result
+                    elif result is None:
+                        # execute_trade might return None if it just returned without value in some paths (legacy)
+                        pass
+                except Exception as e:
+                    exec_status = "ERROR"
+                    exec_msg = str(e)
+                    self._log(f"执行交易失败: {e}", 'error')
+
+                # 映射为用户友好的 "交易人格"
+                persona_map = {
+                    'HIGH_TREND': 'Trend Hunter (趋势猎人)',
+                    'LOW': 'Grid Trader (网格交易)',
+                    'HIGH_CHOPPY': 'Risk Guardian (风控卫士)',
+                    'NORMAL': 'Day Trader (波段交易)'
+                }
+                persona = persona_map.get(volatility_status, volatility_status)
+
+                # 返回结构化结果给上层打印表格
+                return {
+                    'symbol': self.symbol,
+                    'price': price_data['price'],
+                    'change': price_data['price_change'],
+                    'signal': signal,
+                    'confidence': confidence,
+                    'reason': reason,
+                    'summary': signal_data.get('summary', ''),
+                    'status': exec_status,
+                    'status_msg': exec_msg,
+                    'volatility': volatility_status, # [New]
+                    'persona': persona, # [New] Display Name
+                    'adx': adx_val, # [New]
+                    'rsi': ind.get('rsi'), # [New]
+                }
+            return None
+            
+        except Exception as e:
+            self._log(f"Run loop failed: {e}", 'error')
+            return None

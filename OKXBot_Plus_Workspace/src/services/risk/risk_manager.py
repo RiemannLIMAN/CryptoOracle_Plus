@@ -416,18 +416,20 @@ class RiskManager:
             used_total_eq = False
 
             if 'info' in balance and 'data' in balance['info']:
-                data0 = balance['info']['data'][0]
-                # [优化] 优先使用 totalEq (统一账户总权益，已折算为 USD/USDT)
-                if 'totalEq' in data0:
-                    total_equity = float(data0['totalEq'])
-                    found_usdt = True
-                    used_total_eq = True
-                else:
-                    for asset in data0['details']:
-                        if asset['ccy'] == 'USDT':
-                            total_equity = float(asset['eq'])
-                            found_usdt = True
-                            break
+                # [Fix] Handle empty data list for Unified Account
+                if balance['info']['data']:
+                    data0 = balance['info']['data'][0]
+                    # [优化] 优先使用 totalEq (统一账户总权益，已折算为 USD/USDT)
+                    if 'totalEq' in data0:
+                        total_equity = float(data0['totalEq'])
+                        found_usdt = True
+                        used_total_eq = True
+                    else:
+                        for asset in data0['details']:
+                            if asset['ccy'] == 'USDT':
+                                total_equity = float(asset['eq'])
+                                found_usdt = True
+                                break
             
             if not found_usdt:
                 if 'USDT' in balance and 'equity' in balance['USDT']:
@@ -683,7 +685,12 @@ class RiskManager:
             self.last_known_pnl = raw_pnl # 更新记录
             
             current_pnl = raw_pnl
-            pnl_percent = (current_pnl / self.smart_baseline) * 100
+            
+            # [Fix] Prevent Division by Zero if smart_baseline is 0 (e.g. startup failed)
+            if self.smart_baseline > 0:
+                pnl_percent = (current_pnl / self.smart_baseline) * 100
+            else:
+                pnl_percent = 0.0
             
             # [Fix] 限制 CSV 写入和图表更新频率 (例如每分钟一次，而不是每秒)
             current_ts = time.time()
