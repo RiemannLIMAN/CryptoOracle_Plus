@@ -112,6 +112,27 @@ NOTIFICATION_WEBHOOK="https://open.feishu.cn/open-apis/bot/v2/hook/..."
     2.  日志显示 `✅ 初始本金确认: 1000.00 U`。
     3.  控制台开始每分钟刷新 `MARKET SCAN` 表格。
 
+### 3.4 读懂市场扫描表格 (Market Scan Dashboard)
+控制台每轮扫描会输出如下表格，各项含义如下：
+
+```text
+SYMBOL         | PRICE      | 24H%     | PERSONA         | RSI  | ATR  | VOL  | SIGNAL   | CONF     | EXECUTION
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+DOGE/USDT      | $0.15      | 🔴 -0.22% | Risk Guardian   | 32   | 0.8  | 0.9  | ✋ HOLD   | 💤 LOW   | 🚫 CONF
+```
+
+| 字段 | 含义 | 判读技巧 |
+| :--- | :--- | :--- |
+| **PRICE** | 当前最新成交价 | - |
+| **24H%** | 24小时涨跌幅 | 🟢 上涨 / 🔴 下跌 |
+| **PERSONA** | **AI当前人格** | AI 根据行情自动切换的模式：<br>• **Trend Hunter**: 趋势猎人 (追涨杀跌)<br>• **Reversal Sniper**: 反转狙击手 (抄底摸顶)<br>• **Risk Guardian**: 风控守卫 (空仓观望)<br>• **Sleepy Cat**: 沉睡猫 (死鱼盘) |
+| **RSI** | 相对强弱指标 | • `>70`: 超买 (可能回调)<br>• `<30`: 超卖 (可能反弹) |
+| **ATR** | **波动率比率** | • `< 0.6`: 死鱼盘 (适合网格或观望)<br>• `> 1.5`: 巨浪 (适合趋势策略，风险高) |
+| **VOL** | **量比 (Volume Ratio)** | • `> 1.0`: 放量 (成交活跃)<br>• `< 0.8`: 缩量 (人气低迷)<br>• `> 2.0`: 爆量 (可能变盘) |
+| **SIGNAL** | AI 交易信号 | `🚀 BUY` (买入), `📉 SELL` (卖出/平仓), `✋ HOLD` (持有/观望) |
+| **CONF** | AI 信心指数 | • `🔥 HIGH`: 强烈建议 (可能重仓)<br>• `⚡ MED`: 一般建议<br>• `💤 LOW`: 犹豫不决 (通常不操作) |
+| **EXECUTION** | 执行状态 | • `✅ DONE`: 交易成功<br>• `🚫 CONF`: 信心不足，放弃交易<br>• `🔒 FULL`: 仓位已满，无法加仓<br>• `⏸️ HOLD`: 无操作 |
+
 ---
 
 ## 4. 交易逻辑实战 (Trading Logic in Action)

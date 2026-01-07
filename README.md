@@ -124,24 +124,31 @@ OKXBot_Plus_Workspace/
 
 **Linux/Mac:**
 ```bash
-# 1. 创建虚拟环境
+# 1. 进入项目目录
+cd OKXBot_Plus_Workspace
+
+# 2. 创建虚拟环境
 python3 -m venv okx_ds
 
-# 2. 激活环境
+# 3. 激活环境
 source okx_ds/bin/activate
 ```
 
 **Windows:**
 ```powershell
-# 1. 创建虚拟环境
+# 1. 进入项目目录
+cd OKXBot_Plus_Workspace
+
+# 2. 创建虚拟环境
 python -m venv okx_ds
 
-# 2. 激活环境
+# 3. 激活环境
 .\okx_ds\Scripts\activate
 ```
 
 **Conda (可选):**
 ```bash
+cd OKXBot_Plus_Workspace
 conda create -n okx_ds python=3.10
 conda activate okx_ds
 ```
@@ -152,7 +159,7 @@ pip install -r requirements.txt
 ```
 
 ### 2. 配置密钥
-在项目根目录创建 `.env` 文件：
+在项目根目录 (`OKXBot_Plus_Workspace`) 创建 `.env` 文件：
 
 ```bash
 cp .env.example .env

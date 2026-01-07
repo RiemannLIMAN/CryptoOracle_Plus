@@ -16,7 +16,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.5.1 (Trend Hunter Optimization)"
+SYSTEM_VERSION = "v3.6.0 (Spot/Swap Hybrid Edition)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -94,7 +94,9 @@ async def main():
 
     # 将启动脚本中的提示信息也记录到日志
     logger.info("=" * 60)
-    logger.info(f"💡 [实时日志] tail -f log/crypto_oracle.log")
+    # [Fix] 日志路径动态化
+    today_str = datetime.now().strftime('%Y%m%d')
+    logger.info(f"💡 [实时日志] tail -f log/crypto_oracle_{today_str}.log")
     logger.info(f"💡 [后台进程] ps -ef | grep OKXBot_Plus.py")
     logger.info(f"💡 [停止指令] kill -9 {os.getpid()}")
     logger.info("=" * 60)
@@ -240,8 +242,9 @@ async def main():
             header = f"📊 MARKET SCAN | {len(results)} Symbols"
             table_lines.append(header) 
             table_lines.append("─" * 160)
-            table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'PERSONA':<15} | {'RSI':<4} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
-            table_lines.append("─" * 160)
+            table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'PERSONA':<15} | {'RSI':<4} | {'ATR':<4} | {'VOL':<4} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
+            # [Fix] 增加表头分隔线的长度以覆盖所有列
+            table_lines.append("─" * 180) 
             
             # [Dynamic Interval Logic]
             # 统计所有交易对的波动率状态，如果任何一个处于 LOW 或 HIGH_TREND，
@@ -251,6 +254,9 @@ async def main():
             for res in results:
                 if res:
                     symbol_str = res['symbol'].split(':')[0]
+                    # [Fix] 截断过长的 symbol 名称，防止破坏表格结构
+                    if len(symbol_str) > 14: symbol_str = symbol_str[:11] + "..."
+                    
                     change_val = res['change']
                     change_icon = "🟢" if change_val > 0 else "🔴"
                     change_str = f"{change_val:+.2f}%"
@@ -267,6 +273,13 @@ async def main():
                     
                     rsi_val = res.get('rsi')
                     rsi_str = f"{int(rsi_val)}" if rsi_val is not None else "N/A"
+                    
+                    # [New] Show ATR Ratio & Vol Ratio
+                    atr_ratio = res.get('atr_ratio')
+                    atr_str = f"{atr_ratio:.1f}" if atr_ratio is not None else "-"
+                    
+                    vol_ratio = res.get('vol_ratio')
+                    vol_str = f"{vol_ratio:.1f}" if vol_ratio is not None else "-"
 
                     signal = res['signal']
                     sig_icon = "✋"
@@ -301,100 +314,33 @@ async def main():
                     
                     price_str = f"${res['price']:,.2f}"
                     
-                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {persona_short:<15} | {rsi_str:<4} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
+                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {persona_short:<15} | {rsi_str:<4} | {atr_str:<4} | {vol_str:<4} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
             
-            table_lines.append("─" * 160)
-            logger.info("\n".join(table_lines))
+            table_lines.append("─" * 180)
             
+            for line in table_lines:
+                logger.info(line)
+            
+            # [Dynamic Interval]
+            # 如果市场活跃，将轮询时间缩短到 30s
+            # 如果是死鱼盘或普通行情，保持 60s
+            if has_active_opportunity:
+                current_interval = 30
+                logger.info(f"⚡ 检测到活跃行情/网格机会 (Active Mode)，临时加速轮询: {interval}s -> {current_interval}s")
+            else:
+                current_interval = interval
+            
+            # 5. Sleep
             elapsed = time.time() - current_ts
             logger.info(f"💤 本轮分析耗时 {elapsed:.4f}s")
             
-            # 计算需要休眠的时间，保持 interval 稳定
-            # [Dynamic Interval] 如果发现机会，加速到 15s；否则使用默认 interval
-            target_interval = interval
-            if has_active_opportunity and interval > 30:
-                 logger.info(f"⚡ 检测到活跃行情/网格机会 (Active Mode)，临时加速轮询: {interval}s -> 30s")
-                 target_interval = 30
-            
-            sleep_time = max(1, target_interval - elapsed)
+            sleep_time = max(1, current_interval - elapsed)
             logger.info(f"⏳ 休眠 {sleep_time:.2f}s 等待下一轮...")
             
-            # [Fix] 安全心跳微循环 (Safety Heartbeat Micro-loop)
-            # 为了防止在长休眠期间 (如 15m) 发生黑天鹅事件导致无法止损
-            # 我们将长休眠拆分为多个 1s 的短休眠，并在期间持续进行风控检查和移动止盈
-            
-            wake_up_time = time.time() + sleep_time
-            while time.time() < wake_up_time:
-                # 每次小睡 1s (实现快慢分离：AI分析慢，止盈止损快)
-                chunk_sleep = min(1, wake_up_time - time.time())
-                await asyncio.sleep(chunk_sleep)
-                
-                # 1. 快速检查移动止盈 (Trailing Stop)
-                # 根据监控币种数量动态调整频率，平衡响应速度与 API 限制
-                # <= 3 个币: 每 1s 查一次 (极速)
-                # <= 6 个币: 每 2s 查一次 (均衡)
-                # > 6 个币: 每 5s 查一次 (安全)
-                symbol_count = len(traders)
-                check_interval = 5
-                if symbol_count <= 3: check_interval = 1
-                elif symbol_count <= 6: check_interval = 2
-                
-                if int(time.time()) % check_interval == 0:
-                     # [Optimization] Bulk Fetch (1 API call instead of N)
-                     # Fetch all tickers and positions once
-                     try:
-                         # 1. Fetch Tickers (Standard CCXT)
-                         target_symbols = [t.symbol for t in traders]
-                         if target_symbols:
-                             all_tickers = await exchange.fetch_tickers(target_symbols)
-                         else:
-                             all_tickers = {}
-                         
-                         # 2. Fetch All Positions (OKX Specific optimization)
-                         # Note: fetch_positions() usually returns all positions if symbol is None
-                         # But some exchanges require symbol. For OKX, fetch_positions(None) works for all active positions.
-                         # However, for 'cash' mode (Spot), we need fetch_balance. 
-                         # Mixing Cash and Contract in bulk is tricky.
-                         # We stick to fetching positions for Contract mode only in bulk, or iterate if needed.
-                         
-                         # For now, let's just optimize Ticker fetching which is easy and standard.
-                         # Position fetching is complex because 'cash' mode uses fetch_balance() and 'swap' uses fetch_positions().
-                         
-                         async def check_single_trader(t):
-                             try:
-                                 # Use cached ticker if available
-                                 cur_price = None
-                                 if t.symbol in all_tickers:
-                                     cur_price = all_tickers[t.symbol]['last']
-                                 
-                                 # [Fix] 使用 run_safety_check 代替 check_trailing_stop
-                                 # run_safety_check 包含了 Hard SL, Hard TP, Trailing Stop, Dynamic AI SL
-                                 # 实现了更全面的高频风控
-                                 # Note: get_current_position() internally calls fetch_balance or fetch_positions
-                                 # We can optimize this later if needed, but Ticker optimization is already 50% saving.
-                                 pos = await t.get_current_position()
-                                 if pos: await t.run_safety_check(current_position=pos, current_price=cur_price)
-                             except Exception as e:
-                                 # logger.error(f"Safety check failed for {t.symbol}: {e}")
-                                 pass
-                         
-                         # 启动所有检查任务
-                         check_tasks = [check_single_trader(t) for t in traders]
-                         await asyncio.gather(*check_tasks, return_exceptions=True)
-                         
-                     except Exception as e:
-                         logger.error(f"Bulk safety check failed: {e}")
-                         # Fallback to individual checks? No, just skip this tick.
+            await asyncio.sleep(sleep_time)
 
-
-                # 2. 轻量级全局风控检查 (不打印日志，除非触发风控)
-                # 这样即使主循环是 1h 一次，止损也能在 1s 内触发
-                await risk_manager.check(force_log=False)
-
-            
-            
     except KeyboardInterrupt:
-        logger.info("🛑 停止中...")
+        logger.info("🛑 用户停止程序")
     except Exception as e:
         logger.error(f"Main loop error: {e}")
     finally:

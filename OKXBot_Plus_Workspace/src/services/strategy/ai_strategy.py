@@ -12,16 +12,12 @@ class DeepSeekAgent:
         client_params = {
             'api_key': api_key,
             'base_url': base_url,
-            'max_retries': 0
+            'max_retries': 2  # [Fix] 增加重试次数，防止网络微抖动导致分析失败
         }
         if proxy:
             client_params['http_client'] = httpx.AsyncClient(proxies=proxy)
             
         self.client = AsyncOpenAI(**client_params)
-
-    def _is_stable_coin_pair(self, symbol):
-        # [Deprecated] 现在的顶级交易员不需要这种硬编码的辅助
-        return False
 
     def _get_role_prompt(self, volatility_status="NORMAL"):
         # 基础角色设定 (纯静态，利用缓存加速)
@@ -69,7 +65,7 @@ class DeepSeekAgent:
 """
         return base_role
 
-    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True, volatility_status="NORMAL"):
+    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True, volatility_status="NORMAL", btc_change_24h=None):
         
         # [New] 动态参数下沉到 User Prompt (Cache-Friendly)
         fee_pct = taker_fee_rate * 100
@@ -110,17 +106,24 @@ class DeepSeekAgent:
         3. **趋势共振**: 在开新仓前，必须确认 大周期(趋势) 与 小周期(入场点) 共振。逆势接飞刀必须有极强的背离信号。
         """
 
-        # 交易成本分析、杠杆警示等通用规则已移入 System Prompt
-        # Funding Fee 仍然保留在这里，因为它是动态的
-        funding_desc = "无"
-        if funding_rate != 0:
-            funding_desc = f"{funding_rate*100:.4f}%"
-            if funding_rate > 0: funding_desc += " (多付空收)"
-            else: funding_desc += " (空付多收)"
-            
-        cost_msg = f"""
-        💰 **动态成本 (Funding)**:
-        - 资金费率: {funding_desc}。如果持仓方向与费率方向不利，每8小时会被扣费。
+        # [New] 资金费率因子 (Funding Rate Factor)
+        # 如果费率极端异常，强制注入反向指令
+        funding_instruction = ""
+        abs_fr = abs(funding_rate)
+        if abs_fr > 0.0005: # > 0.05% (通常是 0.01%)
+            if funding_rate > 0: # 费率为正，多头太挤，做多要付巨额利息
+                funding_instruction = """
+        ⚠️ **资金费率过热警报 (Funding Rate Overheat)**
+        当前资金费率为正且极高 (多头拥挤)。
+        1. **严禁开多 (No Long)**: 做多不仅要付高额利息，还极易被庄家"杀多头" (Long Squeeze)。
+        2. **优先做空 (Short Bias)**: 市场有极高的回调需求以平抑费率。寻找做空机会。
+        """
+            else: # 费率为负，空头太挤
+                funding_instruction = """
+        ⚠️ **资金费率过冷警报 (Negative Funding Rate)**
+        当前资金费率为负且极高 (空头拥挤)。
+        1. **严禁开空 (No Short)**: 做空要付高额利息，极易被"逼空" (Short Squeeze)。
+        2. **优先做多 (Long Bias)**: 市场有极高的反弹需求。寻找做多机会。
         """
         
         # 提取风控目标
@@ -217,11 +220,18 @@ class DeepSeekAgent:
         if buy_prop > 0.6: flow_status = "🟢 买盘主导"
         elif buy_prop < 0.4: flow_status = "🔴 卖盘主导"
         
+        # [New] 波动率因子 (ATR Ratio)
+        atr_ratio_val = ind.get('atr_ratio', 1.0)
+        volatility_factor_status = "正常"
+        if atr_ratio_val < 0.5: volatility_factor_status = "💤 极度萎缩 (死鱼盘)"
+        elif atr_ratio_val > 2.0: volatility_factor_status = "🌊 极度活跃 (巨浪)"
+        
         indicator_text = f"""【技术指标】
         RSI(14): {rsi_str}
         MACD: {macd_str}
         Bollinger: {bb_str}
-        ADX(14): {adx_str} (趋势强度 >30为强) | ATR(14): {atr_str} (波动率，建议止损参考: Entry ± 2*ATR)
+        ADX(14): {adx_str} (趋势强度 >30为强) | ATR(14): {atr_str}
+        Volatility Factor: ATR Ratio {atr_ratio_val:.2f} ({volatility_factor_status})
         Volume: 当前量比 {vol_ratio_val:.2f} ({vol_status})
         Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能量潮)"""
 
@@ -248,8 +258,27 @@ class DeepSeekAgent:
         if price_data.get('price', 0) > 0:
             max_buy_token = (balance * leverage) / price_data['price']
 
-        # [Removed] 删除了基于 if-else 的稳定币/高波动币硬编码指令
-        # 既然是顶级交易员，他自己看盘口和波动率就知道该怎么做，不需要我们教
+        # [New] 大盘联动指令 (BTC Correlation)
+        btc_instruction = ""
+        if btc_change_24h is not None:
+             btc_icon = "📈" if btc_change_24h > 0 else "📉"
+             btc_instruction = f"""
+        【大盘环境 (BTC Context)】
+        BTC 24H涨跌幅: {btc_change_24h:+.2f}% {btc_icon}
+        """
+             if btc_change_24h < -3.0:
+                 btc_instruction += """
+        ⚠️ **大盘暴跌警报**: BTC 大跌 (>3%)，山寨币通常会联动暴跌。
+        - **慎做多**: 除非有独立行情，否则不要轻易接飞刀。
+        - **防补跌**: 如果当前持有多单，请收紧止损或提前止盈。
+        """
+             elif btc_change_24h > 3.0:
+                 btc_instruction += """
+        🚀 **大盘暴涨**: BTC 大涨 (>3%)，市场情绪高昂。
+        - **顺势做多**: 寻找补涨币种。
+        - **慎做空**: 容易被踏空资金冲烂。
+        """
+
         market_instruction = """
         【狙击镜分析流程 (Sniper Scope)】
         请按以下步骤思考（体现在 reason 中）：
@@ -269,7 +298,6 @@ class DeepSeekAgent:
         周期: {timeframe}
         当前价格: ${price_data['price']:,.4f}
         阶段涨跌: {price_data['price_change']:+.2f}%
-        {cost_msg}
         
         # 账户与风险
         当前持仓: {position_text}
@@ -288,11 +316,13 @@ class DeepSeekAgent:
 
         # 核心策略
         {profit_first_instruction}
+        {funding_instruction}
+        {btc_instruction}
         {closing_instruction}
         {market_instruction}
         """
 
-    async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0, dynamic_tp=True):
+    async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0, dynamic_tp=True, btc_change_24h=None):
         """
         调用 DeepSeek 进行市场分析
         """
@@ -309,7 +339,7 @@ class DeepSeekAgent:
                 position_text = f"{current_pos['side']}仓, 数量:{current_pos['size']}, 浮盈:{pnl:.2f}U"
 
             prompt = self._build_user_prompt(
-                symbol, timeframe, price_data, balance, position_text, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp, volatility_status
+                symbol, timeframe, price_data, balance, position_text, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp, volatility_status, btc_change_24h
             )
 
             # self.logger.info(f"[{symbol}] ⏳ 请求 DeepSeek (Async)...")
@@ -331,12 +361,12 @@ class DeepSeekAgent:
             # self.logger.info(f"[{symbol}] ✅ DeepSeek 响应完成 (耗时: {req_time:.2f}s)")
 
             result = response.choices[0].message.content
-            result = result.replace('```json', '').replace('```', '').strip()
+            # [Fix] 更健壮的 JSON 提取逻辑
+            import re
+            json_match = re.search(r'\{.*\}', result, re.DOTALL)
             
-            start_idx = result.find('{')
-            end_idx = result.rfind('}') + 1
-            if start_idx != -1 and end_idx != 0:
-                json_str = result[start_idx:end_idx]
+            if json_match:
+                json_str = json_match.group(0)
                 signal_data = json.loads(json_str)
                 
                 signal_data['signal'] = str(signal_data.get('signal', '')).upper()

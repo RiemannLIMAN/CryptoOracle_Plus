@@ -207,7 +207,7 @@ else
     cat "$STARTUP_LOG"
     echo "--------------------------------------------------"
     echo "可能的原因:"
-    echo "1. 依赖库未安装 (运行 pip install -r requirements.txt && pip install aiohttp)"
+    echo "1. 依赖库未安装 (请尝试: pip install -r requirements.txt)"
     echo "2. config.json 配置错误"
     echo "3. API 连接失败"
 fi

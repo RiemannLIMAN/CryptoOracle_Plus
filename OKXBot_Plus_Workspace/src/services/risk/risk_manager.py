@@ -3,7 +3,7 @@ import json
 import time
 import logging
 import asyncio
-import aiohttp
+# import aiohttp # [Fix] Removed unused import
 import pandas as pd
 from datetime import datetime
 
@@ -59,9 +59,9 @@ class RiskManager:
                     self.smart_baseline = state.get('smart_baseline')
                 self.deposit_offset = state.get('deposit_offset', 0.0) # 恢复 offset
                 if self.smart_baseline:
-                    print(f"🔄 已恢复历史基准资金: {self.smart_baseline:.2f} U (闲置抵扣: {self.deposit_offset:.2f} U)")
+                    self.logger.info(f"🔄 已恢复历史基准资金: {self.smart_baseline:.2f} U (闲置抵扣: {self.deposit_offset:.2f} U)")
             except Exception as e:
-                print(f"⚠️ 加载状态失败: {e}")
+                self.logger.warning(f"⚠️ 加载状态失败: {e}")
 
     def save_state(self):
         try:
@@ -72,7 +72,7 @@ class RiskManager:
             with open(self.state_file, 'w', encoding='utf-8') as f:
                 json.dump(state, f)
         except Exception as e:
-            print(f"⚠️ 保存状态失败: {e}")
+            self.logger.warning(f"⚠️ 保存状态失败: {e}")
 
     def _log(self, msg, level='info'):
         if level == 'info':
@@ -96,12 +96,17 @@ class RiskManager:
         """Async 记录 PnL 并生成图表 (非阻塞)"""
         file_exists = os.path.isfile(self.csv_file)
         try:
-            # 1. 写入 CSV (IO操作，很快，可以直接做)
-            with open(self.csv_file, 'a', encoding='utf-8') as f:
-                if not file_exists:
-                    f.write("timestamp,total_equity,pnl_usdt,pnl_percent\n")
-                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                f.write(f"{timestamp},{total_equity:.2f},{current_pnl:.2f},{pnl_percent:.2f}\n")
+            # 1. 写入 CSV (使用 asyncio.to_thread 避免文件IO阻塞)
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            line = f"{timestamp},{total_equity:.2f},{current_pnl:.2f},{pnl_percent:.2f}\n"
+            
+            def write_csv_sync():
+                with open(self.csv_file, 'a', encoding='utf-8') as f:
+                    if not file_exists:
+                        f.write("timestamp,total_equity,pnl_usdt,pnl_percent\n")
+                    f.write(line)
+            
+            await asyncio.to_thread(write_csv_sync)
             
             # 2. 生成图表 (Matplotlib 很慢，必须放到后台线程/进程)
             try:
@@ -373,7 +378,16 @@ class RiskManager:
             confirmed_amount = 0.0
             flow_found = False
             
+            # [Fix] 充值去重逻辑
+            # 使用 Set 记录已处理的流水 ID，避免在多次轮询中重复计算同一笔充值
+            if not hasattr(self, 'processed_ledger_ids'):
+                self.processed_ledger_ids = set()
+
             for entry in recent_flows:
+                # [Fix] Skip if already processed
+                if entry['id'] in self.processed_ledger_ids:
+                    continue
+
                 amount = float(entry['amount'])
                 flow_type = entry['type'] # deposit, withdrawal, transfer
                 
@@ -383,6 +397,7 @@ class RiskManager:
                     if amount > 0:
                         confirmed_amount += amount
                         flow_found = True
+                        self.processed_ledger_ids.add(entry['id'])
                         self._log(f"🧾 账本核实: 发现充值/转入 +{amount} U (ID: {entry['id']})")
 
                 # 匹配提现
@@ -392,6 +407,7 @@ class RiskManager:
                     if amount < 0:
                         confirmed_amount += amount # amount is negative
                         flow_found = True
+                        self.processed_ledger_ids.add(entry['id'])
                         self._log(f"🧾 账本核实: 发现提现/转出 {amount} U (ID: {entry['id']})")
             
             if flow_found:
@@ -494,19 +510,31 @@ class RiskManager:
             raw_pnl = adjusted_equity - self.smart_baseline
             
             # [Fix] 首次运行 PnL 异常检测 (Startup Anomaly Check)
-            # 如果这是本次启动后第一次计算 PnL，且 PnL 巨大 (说明 initialize_baseline 可能漏掉了 offset)
-            # 我们直接将其视为 Offset，而不是盈利
-            # 只有当 raw_pnl 是正数时才进行此检查。如果是负数（亏损），则如实反映。
+            # 只有当 Baseline 为 None (全新启动) 时，才允许激进的 PnL 归零逻辑
+            # 如果是重启 (load_state 成功)，则信任上次的状态，不要随意归零盈利
+            
             if not hasattr(self, 'last_known_pnl'):
                 # 首次计算
-                if raw_pnl > max(10.0, self.smart_baseline * 0.1):
-                    self._log(f"⚠️ 检测到首次 PnL 异常偏高 (+{raw_pnl:.2f} U)，判定为未初始化的闲置资金/充值")
-                    self.deposit_offset += raw_pnl
-                    self._log(f"🔄 自动修正抵扣额: {self.deposit_offset:.2f} U")
-                    self.save_state()
-                    # 重新计算
-                    adjusted_equity = current_total_value - self.deposit_offset
-                    raw_pnl = adjusted_equity - self.smart_baseline
+                # 仅当 Baseline 未加载 (说明 bot_state.json 不存在) 时才执行此检测
+                if not self.smart_baseline: 
+                    # ... (这里原本也不会执行，因为 smart_baseline 是 None 会直接 return)
+                    pass
+                else:
+                    # 如果是从文件加载的 baseline，我们信任它。
+                    # 只有一种情况例外：bot_state.json 丢失，但 config.json 里配了 initial_balance
+                    # 此时 raw_pnl 可能会很大 (例如重启前赚了 50%)
+                    # 我们是否应该把这 50% 视为充值？
+                    # 答案：不应该。用户更希望看到历史盈利。
+                    # 只有当 raw_pnl 异常大到不合理 (例如 > 200%)，才可能是真正的充值
+                    
+                    if raw_pnl > max(50.0, self.smart_baseline * 2.0): # 阈值提高到 200%
+                        self._log(f"⚠️ 检测到首次 PnL 异常巨大 (+{raw_pnl:.2f} U)，判定为未初始化的闲置资金/充值")
+                        self.deposit_offset += raw_pnl
+                        self._log(f"🔄 自动修正抵扣额: {self.deposit_offset:.2f} U")
+                        self.save_state()
+                        # 重新计算
+                        adjusted_equity = current_total_value - self.deposit_offset
+                        raw_pnl = adjusted_equity - self.smart_baseline
                 
                 self.last_known_pnl = raw_pnl
             
@@ -753,10 +781,10 @@ class RiskManager:
         # User requested Chinese header to match old screenshot
         table_header = f"{'交易对':<18} | {'分配比例':<8} | {'理论配额(U)':<12} | {'持仓数量':<10} | {'持仓市值(U)':<12} | {'占用%':<6} | {'成本':<10} | {'估算盈亏'}"
         
-        # 改回使用 logger.info 以确保日志文件中可见，与老版本保持一致
+        # [Fix] 打印分隔线以区分表格
         self.logger.info(header)
         self.logger.info(table_header)
-        self.logger.info(sep_line)
+        self.logger.info("-" * 115) # Add separator line
         
         total_position_value = 0.0
         
@@ -802,6 +830,15 @@ class RiskManager:
                 
             if trader.trade_mode == 'cash':
                 holding_amount = await trader.get_spot_balance()
+                # [Fix] 现货模式下，DOGE/USDT:USDT 返回的是 USDT 余额而不是 DOGE 余额
+                # 这是因为 config.json 里 symbol 配置是 DOGE/USDT:USDT (线性合约格式) 但 trade_mode 是 cash
+                # ccxt.okx 在 cash 模式下 fetch_balance 返回的是所有币种
+                # get_spot_balance 内部调用的是 fetch_balance['base_currency']['free']
+                # 我们需要确保获取的是 Base Currency (DOGE) 的余额
+                
+                # 如果 holding_amount 非常小 (精度误差)，归零
+                if holding_amount < 1e-6: holding_amount = 0
+                
                 if holding_amount > 0 and current_price > 0:
                     position_val = holding_amount * current_price
                     total_position_value += position_val

@@ -1,7 +1,9 @@
 ccxt
 openai
 pandas
+numpy
 aiohttp
+aiosqlite
 httpx
 requests
 emoji

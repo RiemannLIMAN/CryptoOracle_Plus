@@ -65,7 +65,9 @@ def generate_pnl_chart(csv_path=None, output_path=None, verbose=True):
              csv_path = os.path.join(project_root, "pnl_history.csv")
 
     if output_path is None:
-        output_path = os.path.join(project_root, "png", "pnl_chart.png")
+        # [New] 按日期命名图片
+        today_str = pd.Timestamp.now().strftime('%Y%m%d')
+        output_path = os.path.join(project_root, "png", f"pnl_chart_{today_str}.png")
 
     if not os.path.exists(csv_path):
         if verbose:

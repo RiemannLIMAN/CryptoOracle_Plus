@@ -137,8 +137,9 @@ def setup_logger(name="crypto_oracle"):
     except Exception:
         pass
 
-    # [Fix] 回归单文件模式，避免文件过多
-    log_filename = os.path.join(log_dir, "crypto_oracle.log")
+    # [Fix] 恢复多文件模式，按日期命名
+    today_str = datetime.now().strftime('%Y%m%d')
+    log_filename = os.path.join(log_dir, f"crypto_oracle_{today_str}.log")
 
     # 强制输出到 stdout，确保控制台可见
     console_handler = logging.StreamHandler(sys.stdout)
