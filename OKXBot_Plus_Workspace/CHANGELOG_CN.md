@@ -5,6 +5,17 @@
 格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)，
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
+## [v3.6.1] - 2026-01-08 (Win Rate Priority)
+
+### 🚀 策略升级 (Strategy Upgrade)
+- **胜率优先模式 (Win Rate > 60%)**:
+  - **人设重塑**: 在 System Prompt 中明确注入 "胜率优先" 指令，要求 AI 宁可踏空也不开低胜率单子。
+  - **硬性技术过滤 (Hard Technical Filters)**: 
+    - 在执行层引入了不依赖 AI 的硬性指标拦截机制。
+    - **RSI 过滤**: 禁止在 RSI > 70 时追多，或在 RSI < 30 时追空（除非 ADX > 40 确认极强趋势）。
+    - **波动率过滤**: 当 ATR Ratio < 0.4 (死鱼盘) 时，强制拦截所有开仓请求。
+  - **反手保护降级**: 当触发反手信号 (Flip) 但被技术指标拦截时，不再完全取消交易，而是自动**降级为仅平仓** (Close Only)，确保利润落袋或及时止损。
+
 ## [v3.6.0] - 2026-01-07 (Spot/Swap Hybrid Edition)
 
 ### 🚀 核心架构升级 (Core Architecture)

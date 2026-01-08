@@ -896,6 +896,42 @@ class DeepSeekTrader:
             self._log(f"策略自动判断失败: {e}", 'warning')
             return self.allocation, "ERROR"
 
+    def _check_technical_filters(self, signal_type, indicators):
+        """
+        [New] 硬性技术过滤 (Hard Technical Filters)
+        目标: 胜率 > 60%。宁可踏空，不可亏损。
+        """
+        if not indicators:
+            return True, "无指标数据，跳过过滤"
+            
+        rsi = indicators.get('rsi')
+        # 如果 indicators 里没有 trend_ema，我们可能无法判断趋势，只能跳过
+        # 通常 indicators 是从 plotter.calculate_indicators 返回的
+        
+        # 1. RSI 极端值过滤 (防止追涨杀跌)
+        if rsi is not None:
+            if signal_type == 'BUY':
+                # 除非是超强趋势(ADX>40)，否则 RSI > 70 禁止追多
+                if rsi > 70:
+                    adx = indicators.get('adx', 0) or 0
+                    if adx < 40:
+                        return False, f"RSI超买 ({rsi:.1f}) 且趋势未爆发 (ADX {adx:.1f})，禁止追多"
+            elif signal_type == 'SELL':
+                # 除非是超强趋势(ADX>40)，否则 RSI < 30 禁止追空
+                if rsi < 30:
+                    adx = indicators.get('adx', 0) or 0
+                    if adx < 40:
+                        return False, f"RSI超卖 ({rsi:.1f}) 且趋势未爆发 (ADX {adx:.1f})，禁止追空"
+
+        # 2. 波动率过滤 (ATR Ratio)
+        atr_ratio = indicators.get('atr_ratio', 1.0)
+        if atr_ratio < 0.4:
+            # 死鱼盘，禁止开新仓 (平仓除外，但这个 filter 是针对 Entry 的)
+            # 注意: execute_trade 里如果是 closing 会自动处理，这里主要拦截 Opening
+            return False, f"波动率过低 (ATR Ratio {atr_ratio:.2f})，属于死鱼盘"
+
+        return True, "通过"
+
     async def execute_trade(self, signal_data, current_price=None, current_position=None, balance=None):
         """执行交易 (Async - Enhanced Logic)"""
         
@@ -996,6 +1032,41 @@ class DeepSeekTrader:
                     self.dynamic_sl_side = current_position['side']
 
             return "HOLD", "AI建议观望"
+
+        # [New] Hard Technical Filters (Win Rate > 60%)
+        # 仅当涉及开新仓位时检查 (Opening or Flipping)
+        is_entry = False
+        if signal_data['signal'] == 'BUY':
+             # 没持仓 -> Entry
+             if not current_position: is_entry = True
+             # 持多 -> Entry (加仓)
+             elif current_position['side'] == 'long': is_entry = True
+             # 持空 -> Flip (反手) -> Entry
+             elif current_position['side'] == 'short' and signal_data.get('amount', 0) > 0: is_entry = True
+             
+        elif signal_data['signal'] == 'SELL':
+             # 没持仓 -> Entry (开空)
+             if not current_position: is_entry = True
+             # 持空 -> Entry (加仓)
+             elif current_position['side'] == 'short': is_entry = True
+             # 持多 -> Flip (反手) -> Entry
+             elif current_position['side'] == 'long' and signal_data.get('amount', 0) > 0: is_entry = True
+
+        if is_entry:
+            tech_pass, tech_msg = self._check_technical_filters(signal_data['signal'], getattr(self, 'last_indicators', {}))
+            if not tech_pass:
+                # 如果是反手，降级为仅平仓
+                is_flipping = False
+                if current_position:
+                    if signal_data['signal'] == 'BUY' and current_position['side'] == 'short': is_flipping = True
+                    if signal_data['signal'] == 'SELL' and current_position['side'] == 'long': is_flipping = True
+                
+                if is_flipping:
+                    self._log(f"🛑 技术面拦截反手: {tech_msg} -> 降级为仅平仓", 'warning')
+                    signal_data['amount'] = 0 # 强制改为仅平仓
+                else:
+                    self._log(f"🛑 技术面拦截开仓: {tech_msg}", 'warning')
+                    return "SKIPPED_TECH", tech_msg
 
         if self.test_mode:
             self._log(f"🧪 测试模式: {signal_data['signal']} {signal_data['amount']} (不执行)")
@@ -1866,7 +1937,7 @@ class DeepSeekTrader:
                         )
                         self._log(f"📉 卖出成功: {final_sell_amount} (模式: {self.trade_mode})")
                     except Exception as e:
-                        if "51008" in str(e): # Insufficient balance/margin
+                        if "51008" in str(e) or "Insufficient" in str(e): # Insufficient balance/margin
                              # [Retry] 现货卖出余额不足，通常是因为余额有极小变动或精度问题
                              # 尝试重新获取余额并向下取整更狠一点
                              # 或者直接减少 1%
@@ -1874,20 +1945,44 @@ class DeepSeekTrader:
                              retry_amount = float(self.exchange.amount_to_precision(self.symbol, retry_amount))
                              
                              self._log(f"⚠️ 余额不足 (51008)，尝试减少卖出数量重试: {final_sell_amount} -> {retry_amount}", 'warning')
+                             
+                             if retry_amount <= 0:
+                                 self._log(f"❌ 重试数量为0，放弃卖出 (余额过小)", 'error')
+                                 return "FAILED", "余额不足(Min)"
+
                              if retry_amount > 0:
-                                 await self.exchange.create_order(
-                                    self.symbol, 
-                                    'market', 
-                                    'sell', 
-                                    retry_amount, 
-                                    params=sell_params
-                                 )
-                                 final_sell_amount = retry_amount
-                                 self._log(f"📉 重试卖出成功: {final_sell_amount}")
+                                 try:
+                                     await self.exchange.create_order(
+                                        self.symbol, 
+                                        'market', 
+                                        'sell', 
+                                        retry_amount, 
+                                        params=sell_params
+                                     )
+                                     final_sell_amount = retry_amount
+                                     self._log(f"📉 重试卖出成功: {final_sell_amount}")
+                                 except Exception as retry_e:
+                                     self._log(f"❌ 重试也失败: {retry_e}", 'error')
+                                     return "FAILED", f"重试失败: {retry_e}"
                              else:
                                  raise e
                         else:
                             raise e
+                    
+                    # [Fix] Reset dynamic risk params on Spot Sell
+                    self.dynamic_stop_loss = 0.0
+                    self.dynamic_take_profit = 0.0
+                    self.dynamic_sl_side = None
+                    asyncio.create_task(self.save_state())
+
+                    msg = f"📉 **卖出执行 (SELL)**\n"
+                    msg += f"• 交易对: {self.symbol}\n"
+                    msg += f"• 数量: {final_sell_amount}\n"
+                    msg += f"• 理由: {signal_data['reason']}\n"
+                    msg += f"• 信心: {signal_data.get('confidence', 'N/A')}"
+                    await self.send_notification(msg, title=f"📉 卖出执行 | {self.symbol}")
+                    
+                    return "EXECUTED", f"卖出 {final_sell_amount}"
                     
                     post_balance = await self.get_account_balance()
                     est_revenue = final_sell_amount * current_realtime_price
@@ -2239,12 +2334,19 @@ class DeepSeekTrader:
             
             # [New] 移动止盈 (Trailing Stop)
             if self.trailing_config.get('enabled', False):
+                # [Fix] 现货模式下，DOGE/USDT 等币种如果没有持仓，就不应该触发 trailing stop
+                if self.trade_mode == 'cash' and pos['size'] <= 0:
+                    return None
+
                 activation = self.trailing_config.get('activation_pnl', 0.01) # 默认 1% 激活
                 callback = self.trailing_config.get('callback_rate', 0.003)   # 默认 0.3% 回撤
                 
                 # 更新最高水位线 (仅当 PnL 为正时)
                 if pnl_pct > self.trailing_max_pnl:
                     self.trailing_max_pnl = pnl_pct
+                    # [Fix] Persist
+                    if self.trailing_max_pnl > activation:
+                        asyncio.create_task(self.save_state())
                 
                 # 检查触发条件
                 # 1. 当前水位必须超过激活阈值 (已进入盈利区)
@@ -2253,12 +2355,24 @@ class DeepSeekTrader:
                     if pnl_pct <= (self.trailing_max_pnl - callback):
                         self._log(f"📉 [TRAILING] 触发移动止盈: 最高 {self.trailing_max_pnl*100:.2f}% -> 当前 {pnl_pct*100:.2f}% (回撤 > {callback*100}%)", 'info')
                         
+                        # [Fix] 发送明确的 Notification
+                        msg = f"📉 **移动止盈触发 (Trailing Stop)**\n"
+                        msg += f"• 交易对: {self.symbol}\n"
+                        msg += f"• 触发回撤: {callback*100:.1f}%\n"
+                        msg += f"• 锁定收益: {pnl_pct*100:.2f}% (最高: {self.trailing_max_pnl*100:.2f}%)\n"
+                        msg += f"• 动作: 正在平仓..."
+                        await self.send_notification(msg, title=f"💰 止盈落袋 | {self.symbol}")
+
                         fake_signal = {
                             'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
                             'confidence': 'HIGH', 
                             'amount': 0, 
                             'reason': f"移动止盈触发: Peak {self.trailing_max_pnl*100:.2f}% -> Now {pnl_pct*100:.2f}%"
                         }
+                        
+                        # [Fix] 重置 trailing_max_pnl，防止重复触发
+                        self.trailing_max_pnl = 0.0
+                        asyncio.create_task(self.save_state())
                         
                         await self.execute_trade(fake_signal)
                         return {
@@ -2530,8 +2644,14 @@ class DeepSeekTrader:
             # 获取 BTC 走势作为大盘风向标
             btc_change_24h = None
             try:
+                # [Fix] 适配现货代码 BTC/USDT (不带 :USDT) 和合约代码 BTC/USDT:USDT
+                # 优先尝试获取 BTC/USDT (现货)，因为通常流动性最好且最具代表性
+                btc_symbol_ref = 'BTC/USDT'
+                if self.trade_mode != 'cash':
+                    btc_symbol_ref = 'BTC/USDT:USDT'
+                
                 if 'BTC' not in self.symbol: # 如果自己不是 BTC
-                    btc_ticker = await self.exchange.fetch_ticker('BTC/USDT')
+                    btc_ticker = await self.exchange.fetch_ticker(btc_symbol_ref)
                     if btc_ticker and 'percentage' in btc_ticker:
                         btc_change_24h = float(btc_ticker['percentage'])
                 else:
