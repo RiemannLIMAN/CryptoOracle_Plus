@@ -1937,7 +1937,7 @@ class DeepSeekTrader:
                         )
                         self._log(f"📉 卖出成功: {final_sell_amount} (模式: {self.trade_mode})")
                     except Exception as e:
-                        if "51008" in str(e) or "Insufficient" in str(e): # Insufficient balance/margin
+                        if "51008" in str(e): # Insufficient balance/margin
                              # [Retry] 现货卖出余额不足，通常是因为余额有极小变动或精度问题
                              # 尝试重新获取余额并向下取整更狠一点
                              # 或者直接减少 1%
@@ -1945,44 +1945,20 @@ class DeepSeekTrader:
                              retry_amount = float(self.exchange.amount_to_precision(self.symbol, retry_amount))
                              
                              self._log(f"⚠️ 余额不足 (51008)，尝试减少卖出数量重试: {final_sell_amount} -> {retry_amount}", 'warning')
-                             
-                             if retry_amount <= 0:
-                                 self._log(f"❌ 重试数量为0，放弃卖出 (余额过小)", 'error')
-                                 return "FAILED", "余额不足(Min)"
-
                              if retry_amount > 0:
-                                 try:
-                                     await self.exchange.create_order(
-                                        self.symbol, 
-                                        'market', 
-                                        'sell', 
-                                        retry_amount, 
-                                        params=sell_params
-                                     )
-                                     final_sell_amount = retry_amount
-                                     self._log(f"📉 重试卖出成功: {final_sell_amount}")
-                                 except Exception as retry_e:
-                                     self._log(f"❌ 重试也失败: {retry_e}", 'error')
-                                     return "FAILED", f"重试失败: {retry_e}"
+                                 await self.exchange.create_order(
+                                    self.symbol, 
+                                    'market', 
+                                    'sell', 
+                                    retry_amount, 
+                                    params=sell_params
+                                 )
+                                 final_sell_amount = retry_amount
+                                 self._log(f"📉 重试卖出成功: {final_sell_amount}")
                              else:
                                  raise e
                         else:
                             raise e
-                    
-                    # [Fix] Reset dynamic risk params on Spot Sell
-                    self.dynamic_stop_loss = 0.0
-                    self.dynamic_take_profit = 0.0
-                    self.dynamic_sl_side = None
-                    asyncio.create_task(self.save_state())
-
-                    msg = f"📉 **卖出执行 (SELL)**\n"
-                    msg += f"• 交易对: {self.symbol}\n"
-                    msg += f"• 数量: {final_sell_amount}\n"
-                    msg += f"• 理由: {signal_data['reason']}\n"
-                    msg += f"• 信心: {signal_data.get('confidence', 'N/A')}"
-                    await self.send_notification(msg, title=f"📉 卖出执行 | {self.symbol}")
-                    
-                    return "EXECUTED", f"卖出 {final_sell_amount}"
                     
                     post_balance = await self.get_account_balance()
                     est_revenue = final_sell_amount * current_realtime_price
@@ -2334,19 +2310,12 @@ class DeepSeekTrader:
             
             # [New] 移动止盈 (Trailing Stop)
             if self.trailing_config.get('enabled', False):
-                # [Fix] 现货模式下，DOGE/USDT 等币种如果没有持仓，就不应该触发 trailing stop
-                if self.trade_mode == 'cash' and pos['size'] <= 0:
-                    return None
-
                 activation = self.trailing_config.get('activation_pnl', 0.01) # 默认 1% 激活
                 callback = self.trailing_config.get('callback_rate', 0.003)   # 默认 0.3% 回撤
                 
                 # 更新最高水位线 (仅当 PnL 为正时)
                 if pnl_pct > self.trailing_max_pnl:
                     self.trailing_max_pnl = pnl_pct
-                    # [Fix] Persist
-                    if self.trailing_max_pnl > activation:
-                        asyncio.create_task(self.save_state())
                 
                 # 检查触发条件
                 # 1. 当前水位必须超过激活阈值 (已进入盈利区)
@@ -2355,24 +2324,12 @@ class DeepSeekTrader:
                     if pnl_pct <= (self.trailing_max_pnl - callback):
                         self._log(f"📉 [TRAILING] 触发移动止盈: 最高 {self.trailing_max_pnl*100:.2f}% -> 当前 {pnl_pct*100:.2f}% (回撤 > {callback*100}%)", 'info')
                         
-                        # [Fix] 发送明确的 Notification
-                        msg = f"📉 **移动止盈触发 (Trailing Stop)**\n"
-                        msg += f"• 交易对: {self.symbol}\n"
-                        msg += f"• 触发回撤: {callback*100:.1f}%\n"
-                        msg += f"• 锁定收益: {pnl_pct*100:.2f}% (最高: {self.trailing_max_pnl*100:.2f}%)\n"
-                        msg += f"• 动作: 正在平仓..."
-                        await self.send_notification(msg, title=f"💰 止盈落袋 | {self.symbol}")
-
                         fake_signal = {
                             'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
                             'confidence': 'HIGH', 
                             'amount': 0, 
                             'reason': f"移动止盈触发: Peak {self.trailing_max_pnl*100:.2f}% -> Now {pnl_pct*100:.2f}%"
                         }
-                        
-                        # [Fix] 重置 trailing_max_pnl，防止重复触发
-                        self.trailing_max_pnl = 0.0
-                        asyncio.create_task(self.save_state())
                         
                         await self.execute_trade(fake_signal)
                         return {
@@ -2644,14 +2601,8 @@ class DeepSeekTrader:
             # 获取 BTC 走势作为大盘风向标
             btc_change_24h = None
             try:
-                # [Fix] 适配现货代码 BTC/USDT (不带 :USDT) 和合约代码 BTC/USDT:USDT
-                # 优先尝试获取 BTC/USDT (现货)，因为通常流动性最好且最具代表性
-                btc_symbol_ref = 'BTC/USDT'
-                if self.trade_mode != 'cash':
-                    btc_symbol_ref = 'BTC/USDT:USDT'
-                
                 if 'BTC' not in self.symbol: # 如果自己不是 BTC
-                    btc_ticker = await self.exchange.fetch_ticker(btc_symbol_ref)
+                    btc_ticker = await self.exchange.fetch_ticker('BTC/USDT')
                     if btc_ticker and 'percentage' in btc_ticker:
                         btc_change_24h = float(btc_ticker['percentage'])
                 else:
