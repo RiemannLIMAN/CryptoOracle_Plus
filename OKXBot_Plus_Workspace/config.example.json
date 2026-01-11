@@ -26,7 +26,13 @@
         "enabled": true,
         "activation_pnl": 0.01,
         "callback_rate": 0.003
-      }
+      },
+      "signal_gate": {
+        "rsi_min": 35,
+        "rsi_max": 65,
+        "adx_min": 25
+      },
+      "token_budget_daily": 100
     },
     "margin_mode": "cross",
     "trade_mode": "cross",

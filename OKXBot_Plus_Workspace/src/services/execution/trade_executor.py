@@ -2570,9 +2570,58 @@ class DeepSeekTrader:
             volatility_status = price_data.get('volatility_status', 'NORMAL')
             adx_val = ind.get('adx') # re-fetch for reporting
             
-            # [Log Cleanup] 这里的日志移交给上层统一打印
-            # icon = "🟢" if price_data['price_change'] > 0 else "🔴"
-            # self._log(f"📊 当前价格: ${price_data['price']:,.2f} {icon} ({price_data['price_change']:+.2f}%)")
+            rsi_val = ind.get('rsi')
+            gate_conf = self.common_config.get('strategy', {}).get('signal_gate', {})
+            rsi_min = float(gate_conf.get('rsi_min', 35))
+            rsi_max = float(gate_conf.get('rsi_max', 65))
+            adx_min = float(gate_conf.get('adx_min', 25))
+            budget_limit = int(self.common_config.get('strategy', {}).get('token_budget_daily', 0))
+            today_str = datetime.now().strftime('%Y%m%d')
+            if not hasattr(self, 'token_calls_day'):
+                self.token_calls_day = today_str
+                self.token_calls_today = 0
+            if self.token_calls_day != today_str:
+                self.token_calls_day = today_str
+                self.token_calls_today = 0
+            gate_reason = None
+            if budget_limit and self.token_calls_today >= budget_limit:
+                gate_reason = "Token预算耗尽"
+            else:
+                if volatility_status == 'HIGH_TREND':
+                    if adx_val is None or adx_val < adx_min:
+                        gate_reason = "趋势不足"
+                else:
+                    if rsi_val is None or rsi_val < rsi_min or rsi_val > rsi_max:
+                        gate_reason = "RSI超界"
+                    elif adx_val is not None and adx_val < adx_min:
+                        gate_reason = "ADX不足"
+            if gate_reason:
+                persona_map = {
+                    'HIGH_TREND': 'Trend Hunter (趋势猎人)',
+                    'LOW': 'Grid Trader (网格交易)',
+                    'HIGH_CHOPPY': 'Risk Guardian (风控卫士)',
+                    'NORMAL': 'Day Trader (波段交易)'
+                }
+                persona = persona_map.get(volatility_status, volatility_status)
+                self.consecutive_errors = 0
+                return {
+                    'symbol': self.symbol,
+                    'price': price_data['price'],
+                    'change': price_data['price_change'],
+                    'signal': 'HOLD',
+                    'confidence': 'LOW',
+                    'reason': gate_reason,
+                    'summary': gate_reason,
+                    'status': 'HOLD',
+                    'status_msg': gate_reason,
+                    'volatility': volatility_status,
+                    'persona': persona,
+                    'adx': adx_val,
+                    'rsi': rsi_val,
+                    'atr_ratio': ind.get('atr_ratio'),
+                    'vol_ratio': ind.get('vol_ratio'),
+                    'recommended_sleep': 60.0
+                }
 
             # Call Agent
             current_pos = await self.get_current_position()
@@ -2628,6 +2677,7 @@ class DeepSeekTrader:
             )
             
             if signal_data:
+                self.token_calls_today += 1
                 # [New] 异步保存信号记录
                 asyncio.create_task(self.data_manager.save_signal(self.symbol, signal_data, price_data['price']))
                 

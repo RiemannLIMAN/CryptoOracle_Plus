@@ -6,6 +6,15 @@
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
 
+## [v3.6.3] - 2026-01-08 (Trend Prediction)
+
+### 🧠 AI 策略增强 (AI Upgrade)
+- **趋势预测 (Trend Prediction)**: 
+  - 强制 AI 在输出中明确预测未来 4 小时的趋势方向 (UP/DOWN/SIDEWAYS) 和概率。
+  - 在 Prompt 中强化“趋势预判”思维链，迫使 AI 先看大势再做决策。
+- **参数落地**: 
+  - 在 `config.json` 中实装了 `signal_gate` (RSI/ADX 门控) 和 `token_budget_daily` (预算) 配置。
+
 ## [v3.6.1] - 2026-01-08 (Win Rate Priority)
 
 ### 🚀 策略升级 (Strategy Upgrade)
@@ -16,6 +25,8 @@
     - **RSI 过滤**: 禁止在 RSI > 70 时追多，或在 RSI < 30 时追空（除非 ADX > 40 确认极强趋势）。
     - **波动率过滤**: 当 ATR Ratio < 0.4 (死鱼盘) 时，强制拦截所有开仓请求。
   - **反手保护降级**: 当触发反手信号 (Flip) 但被技术指标拦截时，不再完全取消交易，而是自动**降级为仅平仓** (Close Only)，确保利润落袋或及时止损。
+  - **AI 调用门控**: 仅在强信号时调用模型（RSI区间、ADX阈值、趋势状态）。
+  - **Token 预算器**: 支持按日限制模型调用次数 (`token_budget_daily`)，预算耗尽后自动 HOLD。
 
 ## [v3.6.0] - 2026-01-07 (Spot/Swap Hybrid Edition)
 
