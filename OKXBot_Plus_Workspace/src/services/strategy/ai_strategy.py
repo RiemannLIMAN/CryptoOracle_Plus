@@ -72,49 +72,50 @@ class DeepSeekAgent:
 """
         return base_role
 
-    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True, volatility_status="NORMAL", btc_change_24h=None):
-        
-        # [New] 动态参数下沉到 User Prompt (Cache-Friendly)
+    def _build_hard_constraints(self, taker_fee_rate, leverage):
+        """
+        构建客观约束提示词
+        """
         fee_pct = taker_fee_rate * 100
         break_even = fee_pct * 2
         
-        hard_constraints = f"""
+        return f"""
         【客观约束 (Hard Constraints)】
         1. **成本线**: Taker费率 {fee_pct:.3f}%。任何建议的开仓，其预期浮盈必须能覆盖 >{break_even:.3f}% 的成本，否则就是给交易所打工。
         2. **风控线**: 当前杠杆 {leverage}x。请自行计算爆仓风险，并给出合理的止损位。
         3. **最小单**: 若资金不足，系统会自动拒绝，你无需担心，只需专注于策略本身。
         """
 
-        # [New] 盈利优先指令 (Profit First Instruction)
-        # 用户反馈: "我是想实现盈利的，但是现在不盈利反而亏啊"
-        # 针对: 避免频繁止损反手 (Double Slap) 和无效磨损
-        
-        # [Dynamic Strategy Adjustment]
-        # 如果是网格模式 (LOW Volatility)，我们需要允许"吃小肉" (Scalping)，否则 AI 会一直观望
+    def _build_profit_first_instruction(self, volatility_status, break_even):
+        """
+        构建盈利优先指令提示词
+        """
         if volatility_status == "LOW":
-             profit_first_instruction = """
+             return f"""
         【盈利优先原则 (Profit First) - 网格模式】
         1. **区间套利**: 当前市场处于震荡期，请利用微小波动积累利润。不要期待大趋势。
         2. **积少成多**: 允许赚取 0.5% - 1.0% 的小幅利润 (Scalping)。只要覆盖成本 ({break_even:.3f}%) 即可获利了结。
         3. **高抛低吸**: 在布林带下轨/支撑位买入，在上轨/压力位卖出。
         """
         elif volatility_status == "HIGH_CHOPPY":
-             profit_first_instruction = """
+             return """
         【盈利优先原则 (Profit First) - 均值回归模式】
         1. **极端猎杀**: 市场处于剧烈震荡。严禁追涨杀跌！只做"均值回归" (Mean Reversion)。
         2. **反向操作**: 价格触及布林带上轨/超买区 -> **SELL** (做空/止盈)；触及下轨/超卖区 -> **BUY** (做多/止损)。
         3. **快进快出**: 利润目标不宜过大，回归中轨即可减仓。
         """
         else:
-             profit_first_instruction = """
+             return f"""
         【盈利优先原则 (Profit First) - 趋势模式】
         1. **严禁频繁反手 (No Flip Flop)**: 如果你在做"止损"(Stop Loss)，请优先建议 **amount=0** (仅平仓观望)。除非你有 90% 以上的把握确信这是"假突破+真反转"，否则严禁立即反手开新仓！
         2. **拒绝小肉 (No Scalping)**: 不要为了赚 0.5% 的波动去冒 1% 的风险。我们是狙击手，不是高频刷单机器。
         3. **趋势共振**: 在开新仓前，必须确认 大周期(趋势) 与 小周期(入场点) 共振。逆势接飞刀必须有极强的背离信号。
         """
 
-        # [New] 资金费率因子 (Funding Rate Factor)
-        # 如果费率极端异常，强制注入反向指令
+    def _build_funding_instruction(self, funding_rate):
+        """
+        构建资金费率指令提示词
+        """
         funding_instruction = ""
         abs_fr = abs(funding_rate)
         if abs_fr > 0.0005: # > 0.05% (通常是 0.01%)
@@ -132,13 +133,16 @@ class DeepSeekAgent:
         1. **严禁开空 (No Short)**: 做空要付高额利息，极易被"逼空" (Short Squeeze)。
         2. **优先做多 (Long Bias)**: 市场有极高的反弹需求。寻找做多机会。
         """
-        
-        # 提取风控目标
+        return funding_instruction
+
+    def _build_risk_message(self, current_account_pnl, risk_control):
+        """
+        构建风险提示信息
+        """
         max_profit_usdt = risk_control.get('max_profit_usdt', 0)
         max_loss_usdt = risk_control.get('max_loss_usdt', 0)
         risk_msg = ""
         
-        # [New] 添加资金进度信息
         if current_account_pnl != 0:
             risk_msg += f"- 当前账户总盈亏: {current_account_pnl:+.2f} U\n"
         
@@ -152,8 +156,15 @@ class DeepSeekAgent:
         if max_loss_usdt > 0: # 注意配置里通常是正数表示亏损额度，或者0禁用。这里假设配置是正数
             risk_msg += f"- 强制总止损: -{max_loss_usdt} U\n"
         
-        # 动态生成止盈策略提示 (仅当 dynamic_tp=True 时生效)
+        return risk_msg
+
+    def _build_closing_instruction(self, current_account_pnl, current_pos, risk_control, dynamic_tp=True):
+        """
+        构建平仓指令提示词
+        """
         closing_instruction = ""
+        max_profit_usdt = risk_control.get('max_profit_usdt', 0)
+        
         if dynamic_tp and max_profit_usdt > 0:
             progress = current_account_pnl / max_profit_usdt
             if progress >= 1.0:
@@ -161,11 +172,17 @@ class DeepSeekAgent:
             elif progress > 0.7:
                  closing_instruction = "🟠 **盈利保护指令**：目标接近完成 (>70%)。若市场走势不明朗或ADX下降，请优先选择 SELL 落袋为安，放弃鱼尾行情。"
         
-        # [New] 亏损/反手提示
+        # 亏损/反手提示
         if current_pos and current_pos.get('unrealized_pnl', 0) < 0:
              pnl_val = current_pos['unrealized_pnl']
              closing_instruction += f"\n🔴 **亏损警报**：当前持仓浮亏 {pnl_val:.2f} U。请严格评估趋势是否已反转！如果确认趋势反转（如多单遇暴跌），请立即建议 SELL 并注明 '反手' 或 'Flip'。"
+        
+        return closing_instruction
 
+    def _build_signal_definition(self, current_pos):
+        """
+        构建信号定义提示词
+        """
         signal_def_msg = ""
         if current_pos and current_pos['side'] == 'short':
              signal_def_msg = """
@@ -183,8 +200,12 @@ class DeepSeekAgent:
           * 如果想反手开空(Flip)，请设置 amount>0 (新空单数量)。
         - **BUY** = 加仓多单 (Pyramiding)。如果已满仓，BUY 信号将被忽略。
              """
-             
-        # [Modified] 动态获取 K 线数量，不再硬编码 30
+        return signal_def_msg
+
+    def _build_kline_text(self, price_data, timeframe):
+        """
+        构建K线数据提示词
+        """
         kline_count = len(price_data.get('kline_data', []))
         kline_text = f"【最近{kline_count}根{timeframe}K线数据】(时间倒序: 最新 -> 最旧)\n"
         # 稍微优化一下K线展示，只展示最近 15 根详细数据，避免 Token 过多，剩下的总结
@@ -192,7 +213,7 @@ class DeepSeekAgent:
         for i, kline in enumerate(reversed(detailed_klines)): # 倒序展示更符合直觉
             change = ((kline['close'] - kline['open']) / kline['open']) * 100
             trend = "阳" if kline['close'] > kline['open'] else "阴"
-            # [New] 显示成交量和量比
+            # 显示成交量和量比
             vol_str = f"Vol:{int(kline['volume'])}"
             if 'vol_ratio' in kline and kline['vol_ratio'] is not None:
                 vr = kline['vol_ratio']
@@ -204,7 +225,13 @@ class DeepSeekAgent:
         
         if kline_count > 15:
             kline_text += f"...(更早的 {kline_count-15} 根K线已省略，但请基于整体结构分析)..."
+        
+        return kline_text
 
+    def _build_indicator_text(self, price_data):
+        """
+        构建技术指标提示词
+        """
         ind = price_data.get('indicators', {})
         rsi_str = f"{ind.get('rsi', 'N/A'):.2f}" if ind.get('rsi') else "N/A"
         macd_str = f"MACD: {ind.get('macd', 'N/A'):.4f}, Sig: {ind.get('macd_signal', 'N/A'):.4f}" if ind.get('macd') else "N/A"
@@ -212,14 +239,14 @@ class DeepSeekAgent:
         atr_str = f"{ind.get('atr', 'N/A'):.4f}" if ind.get('atr') else "N/A"
         bb_str = f"Up: {ind.get('bb_upper', 'N/A'):.2f}, Low: {ind.get('bb_lower', 'N/A'):.2f}"
         
-        # [New] 成交量概况
+        # 成交量概况
         vol_ratio_val = ind.get('vol_ratio', 1.0)
         vol_status = "正常"
         if vol_ratio_val > 2.0: vol_status = "🔥 极度放量"
         elif vol_ratio_val > 1.5: vol_status = "📈 显著放量"
         elif vol_ratio_val < 0.5: vol_status = "📉 极度缩量"
         
-        # [New] 资金流向 (OBV & 买盘占比)
+        # 资金流向 (OBV & 买盘占比)
         obv_val = f"{ind.get('obv', 'N/A')}"
         buy_prop = ind.get('buy_prop', 0.5)
         buy_prop_str = f"{buy_prop*100:.1f}%"
@@ -227,13 +254,13 @@ class DeepSeekAgent:
         if buy_prop > 0.6: flow_status = "🟢 买盘主导"
         elif buy_prop < 0.4: flow_status = "🔴 卖盘主导"
         
-        # [New] 波动率因子 (ATR Ratio)
+        # 波动率因子 (ATR Ratio)
         atr_ratio_val = ind.get('atr_ratio', 1.0)
         volatility_factor_status = "正常"
         if atr_ratio_val < 0.5: volatility_factor_status = "💤 极度萎缩 (死鱼盘)"
         elif atr_ratio_val > 2.0: volatility_factor_status = "🌊 极度活跃 (巨浪)"
         
-        indicator_text = f"""【技术指标】
+        return f"""【技术指标】
         RSI(14): {rsi_str}
         MACD: {macd_str}
         Bollinger: {bb_str}
@@ -242,13 +269,16 @@ class DeepSeekAgent:
         Volume: 当前量比 {vol_ratio_val:.2f} ({vol_status})
         Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能量潮)"""
 
-        # [New] 资金耗尽预警
+    def _build_fund_status_message(self, balance, price_data):
+        """
+        构建资金状态提示词
+        """
         min_notional_info = price_data.get('min_notional_info', '5.0')
         min_limit_info = price_data.get('min_limit_info', '0.0001') # Default value as fallback
         
         min_notional_val = to_float(min_notional_info) or 5.0
         fund_status_msg = ""
-        # [Fix] 这里的 balance 是可用余额 (Avail)。如果 < 5U，说明真的没钱了
+        # 这里的 balance 是可用余额 (Avail)。如果 < 5U，说明真的没钱了
         if balance < min_notional_val:
             fund_status_msg = f"""
         ⚠️ **状态更新：资金已满仓 (Full Position)**
@@ -259,13 +289,12 @@ class DeepSeekAgent:
         2. **重点转向 (Focus)**：请把注意力从 "寻找买点" 转移到 "持仓管理" 和 "寻找卖点"。
         3. **风险评估**：既然已满仓，风险敞口最大。请更严格地审视 K 线结构，一旦发现趋势反转信号，必须果断建议 SELL (减仓/平仓) 以锁定利润或止损。
             """
-        
-        # 计算最大可买数量 (简单估算)
-        max_buy_token = 0
-        if price_data.get('price', 0) > 0:
-            max_buy_token = (balance * leverage) / price_data['price']
+        return fund_status_msg, min_notional_info, min_limit_info
 
-        # [New] 大盘联动指令 (BTC Correlation)
+    def _build_btc_instruction(self, btc_change_24h):
+        """
+        构建大盘联动指令提示词
+        """
         btc_instruction = ""
         if btc_change_24h is not None:
              btc_icon = "📈" if btc_change_24h > 0 else "📉"
@@ -285,8 +314,13 @@ class DeepSeekAgent:
         - **顺势做多**: 寻找补涨币种。
         - **慎做空**: 容易被踏空资金冲烂。
         """
+        return btc_instruction
 
-        market_instruction = """
+    def _build_market_instruction(self):
+        """
+        构建市场分析指令提示词
+        """
+        return """
         【狙击镜分析流程 (Sniper Scope)】
         请按以下步骤思考（体现在 reason 中）：
         1. **趋势预判**: 基于当前 K 线组合和量能，预测未来 4 小时的主流趋势（UP/DOWN/SIDEWAYS）及其概率。
@@ -300,6 +334,33 @@ class DeepSeekAgent:
            - 如果看不懂 -> **HOLD**。
         """
 
+    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True, volatility_status="NORMAL", btc_change_24h=None):
+        """
+        构建用户提示词
+        """
+        # 动态参数下沉到 User Prompt (Cache-Friendly)
+        fee_pct = taker_fee_rate * 100
+        break_even = fee_pct * 2
+        
+        # 构建各个部分的提示词
+        hard_constraints = self._build_hard_constraints(taker_fee_rate, leverage)
+        profit_first_instruction = self._build_profit_first_instruction(volatility_status, break_even)
+        funding_instruction = self._build_funding_instruction(funding_rate)
+        risk_msg = self._build_risk_message(current_account_pnl, risk_control)
+        closing_instruction = self._build_closing_instruction(current_account_pnl, current_pos, risk_control, dynamic_tp)
+        signal_def_msg = self._build_signal_definition(current_pos)
+        kline_text = self._build_kline_text(price_data, timeframe)
+        indicator_text = self._build_indicator_text(price_data)
+        fund_status_msg, min_notional_info, min_limit_info = self._build_fund_status_message(balance, price_data)
+        btc_instruction = self._build_btc_instruction(btc_change_24h)
+        market_instruction = self._build_market_instruction()
+        
+        # 计算最大可买数量 (简单估算)
+        max_buy_token = 0
+        if price_data.get('price', 0) > 0:
+            max_buy_token = (balance * leverage) / price_data['price']
+
+        # 组合所有提示词
         return f"""
         # 市场数据
         交易对: {symbol}

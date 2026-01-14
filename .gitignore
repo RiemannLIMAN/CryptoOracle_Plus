@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Config & Secrets (Important!)
+.env
+.env.local
+config.json
+# Keep example files
+!config.example.json
+!.env.example
+
+# Logs & Data
+log/
+png/
+*.log
+
+# PyInstaller / Build
+build/
+dist/
+*.spec
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+
+# Generated Docs
+*.pdf

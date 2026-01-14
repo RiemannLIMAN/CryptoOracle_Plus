@@ -12,11 +12,13 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 # Local imports
 from core.config import Config
 from core.utils import setup_logger
+from core.monitor import health_monitor
+from core.plugin import plugin_manager
 from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.6.3 (Trend Prediction)"
+SYSTEM_VERSION = "v3.6.4 (Test Mode Funding Fix)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -37,23 +39,34 @@ async def run_system_check(logger, exchange, agent, config):
     print("="*50)
     
     try:
-        # 1. 检查 OKX 连接
-        balance = await exchange.fetch_balance()
-        logger.info("✅ OKX API 连接成功")
+        # 检查是否为测试模式
+        test_mode = config['trading'].get('test_mode', False)
         
-        # 资金盘点
+        # 1. 检查 OKX 连接
         total_usdt = 0
         free_usdt = 0
-        if 'USDT' in balance:
-            total_usdt = float(balance['USDT']['total'])
-            free_usdt = float(balance['USDT']['free'])
-        elif 'info' in balance and 'data' in balance['info']: # 统一账户
-             # [Fix] Handle empty data list for Unified Account
-             if balance['info']['data']:
-                 for asset in balance['info']['data'][0]['details']:
-                     if asset['ccy'] == 'USDT':
-                         total_usdt = float(asset['eq'])
-                         free_usdt = float(asset['availBal'])
+        
+        if test_mode:
+            # 测试模式下使用模拟资金
+            total_usdt = 10000.00
+            free_usdt = 10000.00
+            logger.info("✅ 测试模式: 模拟资金初始化")
+        else:
+            # 实盘模式下从交易所获取真实余额
+            balance = await exchange.fetch_balance()
+            logger.info("✅ OKX API 连接成功")
+            
+            # 资金盘点
+            if 'USDT' in balance:
+                total_usdt = float(balance['USDT']['total'])
+                free_usdt = float(balance['USDT']['free'])
+            elif 'info' in balance and 'data' in balance['info']: # 统一账户
+                 # [Fix] Handle empty data list for Unified Account
+                 if balance['info']['data']:
+                     for asset in balance['info']['data'][0]['details']:
+                         if asset['ccy'] == 'USDT':
+                             total_usdt = float(asset['eq'])
+                             free_usdt = float(asset['availBal'])
         
         logger.info(f"💰 账户 USDT 权益: {total_usdt:.2f} U (可用: {free_usdt:.2f} U)")
         
@@ -128,7 +141,7 @@ async def main():
         'apiKey': okx_config['api_key'],
         'secret': okx_config['secret'],
         'password': okx_config['password'],
-        'options': {'defaultType': 'swap'},
+        'options': okx_config.get('options', {'defaultType': 'swap'}),
         'enableRateLimit': True
     }
     if proxy:
@@ -143,12 +156,34 @@ async def main():
     # [New] 注入总币种数量，用于 Auto Allocation
     config['trading']['active_symbols_count'] = len(config['symbols'])
     
-    for symbol_conf in config['symbols']:
-        trader = DeepSeekTrader(symbol_conf, config['trading'], exchange, agent)
-        await trader.initialize()
-        traders.append(trader)
+    # [New] 并发交易对数量限制
+    max_concurrent_traders = config['trading'].get('max_concurrent_traders', 5)
+    logger.info(f"⚡ 并发交易对限制: {max_concurrent_traders}")
+    
+    # 分批初始化交易对
+    batch_size = min(max_concurrent_traders, len(config['symbols']))
+    for i in range(0, len(config['symbols']), batch_size):
+        batch_symbols = config['symbols'][i:i+batch_size]
+        batch_traders = []
+        
+        for symbol_conf in batch_symbols:
+            trader = DeepSeekTrader(symbol_conf, config['trading'], exchange, agent)
+            await trader.initialize()
+            batch_traders.append(trader)
+        
+        traders.extend(batch_traders)
+        
+        # 如果不是最后一批，暂停一下
+        if i + batch_size < len(config['symbols']):
+            logger.info(f"⏳ 已初始化 {len(traders)}/{len(config['symbols'])} 个交易对，休息 2 秒...")
+            await asyncio.sleep(2)
 
     risk_manager = RiskManager(exchange, config['trading'].get('risk_control', {}), traders)
+    
+    # 初始化插件系统
+    logger.info("🔌 初始化插件系统...")
+    plugin_manager.load_plugins(config, exchange, agent)
+    await plugin_manager.initialize_plugins()
     
     # --- 启动前自检与初始化 ---
     start_equity = await run_system_check(logger, exchange, agent, config)
@@ -233,9 +268,25 @@ async def main():
             # check() 会打印当前的 PnL 状态
             await risk_manager.check(force_log=True)
             
-            # 3. 并行执行所有 Traders 的分析与交易任务
-            tasks = [trader.run() for trader in traders]
-            results = await asyncio.gather(*tasks)
+            # 3. 插件系统 - 每轮循环调用
+            await plugin_manager.on_tick({"timestamp": current_ts, "traders": traders})
+            
+            # 3. 并行执行所有 Traders 的分析与交易任务 (带并发限制)
+            max_concurrent_traders = config['trading'].get('max_concurrent_traders', 5)
+            results = []
+            
+            # 分批执行交易任务
+            batch_size = min(max_concurrent_traders, len(traders))
+            for i in range(0, len(traders), batch_size):
+                batch_traders = traders[i:i+batch_size]
+                batch_tasks = [trader.run() for trader in batch_traders]
+                batch_results = await asyncio.gather(*batch_tasks)
+                results.extend(batch_results)
+                
+                # 如果不是最后一批，暂停一下
+                if i + batch_size < len(traders):
+                    logger.info(f"⏳ 已处理 {len(results)}/{len(traders)} 个交易对，休息 1 秒...")
+                    await asyncio.sleep(1)
             
             # 4. 结构化表格输出
             table_lines = []
@@ -253,6 +304,10 @@ async def main():
             
             for res in results:
                 if res:
+                    # 插件系统 - 交易执行后调用
+                    if res.get('status') == 'EXECUTED':
+                        await plugin_manager.on_trade(res)
+                    
                     symbol_str = res['symbol'].split(':')[0]
                     # [Fix] 截断过长的 symbol 名称，防止破坏表格结构
                     if len(symbol_str) > 14: symbol_str = symbol_str[:11] + "..."
@@ -322,15 +377,28 @@ async def main():
                 logger.info(line)
             
             # [Dynamic Interval]
-            # 如果市场活跃，将轮询时间缩短到 30s
-            # 如果是死鱼盘或普通行情，保持 60s
+            # 如果市场活跃，尝试将轮询时间缩短到 30s
+            # 但如果用户配置的轮询间隔本来就小于 30s (例如 20s)，则保持用户的配置，不应减速
             if has_active_opportunity:
-                current_interval = 30
-                logger.info(f"⚡ 检测到活跃行情/网格机会 (Active Mode)，临时加速轮询: {interval}s -> {current_interval}s")
+                target_interval = 30
+                if interval > target_interval:
+                    current_interval = target_interval
+                    logger.info(f"⚡ 检测到活跃行情/网格机会 (Active Mode)，临时加速轮询: {interval}s -> {current_interval}s")
+                else:
+                    current_interval = interval
             else:
                 current_interval = interval
             
-            # 5. Sleep
+            # 5. 定期记录系统健康状态报告
+            loop_count = getattr(main, 'loop_count', 0)
+            loop_count += 1
+            setattr(main, 'loop_count', loop_count)
+            
+            # 每执行10次循环记录一次健康状态报告
+            if loop_count % 10 == 0:
+                health_monitor.log_health_report()
+            
+            # 6. Sleep
             elapsed = time.time() - current_ts
             logger.info(f"💤 本轮分析耗时 {elapsed:.4f}s")
             
@@ -343,7 +411,13 @@ async def main():
         logger.info("🛑 用户停止程序")
     except Exception as e:
         logger.error(f"Main loop error: {e}")
+        # 插件系统 - 发生错误时调用
+        await plugin_manager.on_error(e)
     finally:
+        # 插件系统 - 关闭插件
+        logger.info("🔌 关闭插件系统...")
+        await plugin_manager.shutdown_plugins()
+        
         await exchange.close()
         # agent.client closes automatically
 

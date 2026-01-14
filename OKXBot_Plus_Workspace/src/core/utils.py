@@ -6,6 +6,11 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime
 
 import sys # Ensure sys is imported
+from .exceptions import (
+    CryptoOracleException, APIConnectionError, APIResponseError,
+    ConfigError, TradingError, RiskManagementError,
+    DataProcessingError, AIError
+)
 
 async def send_notification_async(webhook_url, message, title=None):
     """
@@ -178,3 +183,57 @@ def to_float(value):
             return float(v)
     except Exception: return None
     return None
+
+def exception_handler(func):
+    """
+    异常处理装饰器
+    """
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except APIConnectionError as e:
+            logger = logging.getLogger("crypto_oracle")
+            logger.error(f"API连接异常: {e}")
+            return None
+        except APIResponseError as e:
+            logger = logging.getLogger("crypto_oracle")
+            logger.error(f"API响应异常: {e}")
+            return None
+        except ConfigError as e:
+            logger = logging.getLogger("crypto_oracle")
+            logger.error(f"配置异常: {e}")
+            return None
+        except TradingError as e:
+            logger = logging.getLogger("crypto_oracle")
+            logger.error(f"交易异常: {e}")
+            return None
+        except RiskManagementError as e:
+            logger = logging.getLogger("crypto_oracle")
+            logger.error(f"风险管理异常: {e}")
+            return None
+        except DataProcessingError as e:
+            logger = logging.getLogger("crypto_oracle")
+            logger.error(f"数据处理异常: {e}")
+            return None
+        except AIError as e:
+            logger = logging.getLogger("crypto_oracle")
+            logger.error(f"AI分析异常: {e}")
+            return None
+        except Exception as e:
+            logger = logging.getLogger("crypto_oracle")
+            logger.error(f"未知异常: {e}")
+            return None
+    return wrapper
+
+def sync_exception_handler(func):
+    """
+    同步函数异常处理装饰器
+    """
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            logger = logging.getLogger("crypto_oracle")
+            logger.error(f"未知异常: {e}")
+            return None
+    return wrapper

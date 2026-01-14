@@ -33,6 +33,13 @@ pip install -r requirements.txt
 ```
 
 ### 2. 配置账号
+**推荐方式**：使用环境变量存储 API 密钥（更安全）
+
+1. 复制 `.env.example` 为 `.env`
+2. 在 `.env` 文件中填入您的 API 密钥
+
+**备选方式**：使用配置文件
+
 复制 `config.example.json` 为 `config.json`，并填入您的 OKX 和 DeepSeek API Key。
 
 ### 3. 启动机器人
