@@ -19,6 +19,12 @@ class RiskManager:
         self.exchange = exchange
         self.config = risk_config
         self.traders = traders
+        self.is_test_mode = False
+        try:
+            if traders and hasattr(traders[0], 'common_config'):
+                self.is_test_mode = bool(traders[0].common_config.get('test_mode', False))
+        except Exception:
+            pass
         self.initial_balance = risk_config.get('initial_balance_usdt', 0)
         
         self.max_profit = risk_config.get('max_profit_usdt')
@@ -37,6 +43,8 @@ class RiskManager:
             
         self.state_file = os.path.join(self.data_dir, "bot_state.json")
         self.csv_file = os.path.join(self.data_dir, "pnl_history.csv")
+        if self.is_test_mode:
+            self.csv_file = os.path.join(self.data_dir, "pnl_history_sim.csv")
         
         self.load_state()
         
@@ -179,7 +187,8 @@ class RiskManager:
             # 为了保留 trader 信息，我们构造一个辅助函数
             async def fetch_trader_stats(trader):
                 try:
-                    trades = await trader.exchange.fetch_my_trades(trader.symbol, limit=100)
+                    # [Fix] Use get_my_trades wrapper to support simulation
+                    trades = await trader.get_my_trades(limit=100)
                     return {'trader': trader, 'trades': trades, 'error': None}
                 except Exception as e:
                     return {'trader': trader, 'trades': None, 'error': str(e)}
@@ -260,7 +269,8 @@ class RiskManager:
             for trader in self.traders:
                 try:
                     # 获取最近 5 条成交
-                    trades = await trader.exchange.fetch_my_trades(trader.symbol, limit=5)
+                    # [Fix] Use get_my_trades wrapper to support simulation
+                    trades = await trader.get_my_trades(limit=5)
                     if not trades:
                         continue
                     
@@ -426,12 +436,21 @@ class RiskManager:
     async def check(self, force_log=False):
         """执行风控检查 (Async)"""
         try:
-            balance = await self.exchange.fetch_balance()
             total_equity = 0
             found_usdt = False
             used_total_eq = False
+            if self.is_test_mode:
+                eq_sum = 0.0
+                for t in self.traders:
+                    _, e = await t.get_account_info()
+                    eq_sum += e
+                total_equity = eq_sum
+                found_usdt = True
+                used_total_eq = True
+            else:
+                balance = await self.exchange.fetch_balance()
 
-            if 'info' in balance and 'data' in balance['info']:
+            if not self.is_test_mode and 'info' in balance and 'data' in balance['info']:
                 # [Fix] Handle empty data list for Unified Account
                 if balance['info']['data']:
                     data0 = balance['info']['data'][0]
@@ -447,7 +466,7 @@ class RiskManager:
                                 found_usdt = True
                                 break
             
-            if not found_usdt:
+            if not self.is_test_mode and not found_usdt:
                 if 'USDT' in balance and 'equity' in balance['USDT']:
                     total_equity = float(balance['USDT']['equity'])
                 elif 'USDT' in balance and 'total' in balance['USDT']:
@@ -545,7 +564,7 @@ class RiskManager:
             
             # [New] 查账模式 (Fact-based Funding Check)
             # 只有当资金变动显著时，才调用 API 查流水
-            if abs(pnl_delta) > threshold_val:
+            if not self.is_test_mode and abs(pnl_delta) > threshold_val:
                 has_flow = await self._verify_funding_flow(pnl_delta)
                 if has_flow:
                     # 如果确认了流水，Offset 已更新
@@ -775,6 +794,12 @@ class RiskManager:
 
     async def initialize_baseline(self, current_usdt_equity):
         """初始化基准资金 (Async)"""
+        if self.is_test_mode:
+            sim_eq = 0.0
+            for t in self.traders:
+                _, e = await t.get_account_info()
+                sim_eq += e
+            current_usdt_equity = sim_eq
         sep_line = "-" * 115
         header = f"\n{sep_line}\n📊 资产初始化盘点 (Asset Initialization)\n{sep_line}"
         # 使用纯英文表头以确保对齐
@@ -801,9 +826,23 @@ class RiskManager:
             quota = 0.0
             allocation_str = "N/A"
             
-            if hasattr(trader, 'initial_balance') and trader.initial_balance and trader.initial_balance > 0:
+            # 测试模式下，使用 sim_balance 作为基础资金
+            if hasattr(trader, 'test_mode') and trader.test_mode and hasattr(trader, 'sim_balance') and trader.sim_balance > 0:
+                base_capital = trader.sim_balance
                 if isinstance(trader.allocation, str) and trader.allocation == 'auto':
-                    # [New] Auto Allocation Display Logic
+                    quota = base_capital
+                    allocation_str = "Auto"
+                elif isinstance(trader.allocation, (int, float)):
+                    if trader.allocation <= 1.0:
+                        quota = base_capital * trader.allocation
+                        allocation_str = f"{trader.allocation*100:.0f}%"
+                    else:
+                        quota = trader.allocation
+                        allocation_str = "Fixed"
+            # 实盘模式下，使用 initial_balance 作为基础资金
+            elif hasattr(trader, 'initial_balance') and trader.initial_balance and trader.initial_balance > 0:
+                if isinstance(trader.allocation, str) and trader.allocation == 'auto':
+                    # 实盘模式下，按活跃交易对数量平均分配
                     active_count = len(self.traders)
                     if active_count > 0:
                         quota = trader.initial_balance / active_count
@@ -884,6 +923,13 @@ class RiskManager:
         self.logger.info(sep_line)
         
         real_total_equity = current_usdt_equity + total_position_value
+        
+        # [Fix] 测试模式下，current_usdt_equity 已经是包含持仓PnL的总权益
+        # 而 total_position_value 是现货持仓市值
+        # 由于模拟器的 equity = balance + u_pnl，这已经涵盖了现货价值变动
+        # 所以不应该再重复累加 total_position_value
+        if self.is_test_mode:
+            real_total_equity = current_usdt_equity
         
         # [New] 显示当前资金总数 (响应用户需求)
         self.logger.info(f"💰 当前资金总数 (Total Equity): {real_total_equity:.2f} U")

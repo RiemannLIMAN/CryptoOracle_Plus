@@ -6,6 +6,26 @@
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
 
+## [v3.6.4] - 2026-01-14 (Test Mode Funding Fix)
+
+### 🛠️ 核心修复 (Core Fixes)
+- **配置读取路径修复 (Config Path Fix)**: 
+  - 修改了 `config.py` 中的通知 Webhook 注入逻辑，同时注入到顶层和 `trading` 子目录，确保兼容性。
+  - 解决了启动通知能发送但交易执行通知失败的问题。
+
+### 💰 测试模式资金分配优化 (Test Mode Funding Optimization)
+- **模拟资金独立分配**: 
+  - 修改了 `trade_executor.py` 中的 `_update_amount_auto` 函数，让它在测试模式下使用每个交易对自己的 `sim_balance` 作为基础资金。
+  - 当 `allocation` 为 `auto` 时，直接使用完整的模拟余额作为配额，不再除以活跃交易对的数量。
+- **资产初始化盘点逻辑改进**: 
+  - 修改了 `risk_manager.py` 中的资产初始化盘点逻辑，让它在测试模式下使用 `trader.sim_balance` 作为基础资金。
+  - 确保每个交易对的理论配额正确显示为 10000.00 U，总共 50000.00 U。
+
+### ✨ 体验优化 (UX Improvements)
+- **资金透明度增强**: 
+  - 修复了测试模式下资金分配显示不正确的问题，确保每个交易对的理论配额与实际模拟资金一致。
+  - 提高了资金分配逻辑的可读性和可维护性。
+
 ## [v3.6.3] - 2026-01-08 (Trend Prediction)
 
 ### 🧠 AI 策略增强 (AI Upgrade)

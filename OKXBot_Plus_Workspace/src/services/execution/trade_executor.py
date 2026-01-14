@@ -4,7 +4,12 @@ import asyncio
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from core.utils import to_float, send_notification_async
+from core.utils import to_float, send_notification_async, exception_handler
+from core.exceptions import (
+    APIConnectionError, APIResponseError, TradingError, 
+    DataProcessingError, RiskManagementError
+)
+from core.cache import cache_manager
 from services.data.data_manager import DataManager
 import json
 import os
@@ -94,9 +99,32 @@ class DeepSeekTrader:
         
         # [New] Global Circuit Breaker
         self.daily_high_equity = 0.0
+        self.high_water_day = datetime.now().strftime('%Y%m%d')
 
         # [New] State Persistence
         self.state_file = f"data/state_{self.symbol.replace('/', '_')}.json"
+        
+        # [New] Simulation State (Test Mode Only)
+        self.sim_state_file = f"data/sim_state_{self.symbol.replace('/', '_')}.json"
+        self.sim_position = None
+        self.sim_realized_pnl = 0.0
+        self.sim_balance = 0.0 
+        
+        if self.test_mode:
+            self._load_sim_state()
+            # If no balance record, use allocated portion of initial_balance
+            if self.sim_balance <= 0:
+                 # Default mock balance: 10000 U if not specified
+                 self.sim_balance = 10000.0
+                 if self.initial_balance > 0:
+                     # Try to respect allocation logic
+                     if isinstance(self.allocation, (int, float)) and self.allocation <= 1.0:
+                         self.sim_balance = self.initial_balance * self.allocation
+                     elif isinstance(self.allocation, (int, float)) and self.allocation > 1.0:
+                         self.sim_balance = self.allocation
+                     
+                 self._log(f"🧪 模拟资金初始化: {self.sim_balance:.2f} U")
+
         self.load_state()
 
     async def save_state(self):
@@ -104,6 +132,7 @@ class DeepSeekTrader:
         try:
             state = {
                 'daily_high_equity': self.daily_high_equity,
+                'high_water_day': self.high_water_day,
                 'dynamic_stop_loss': self.dynamic_stop_loss,
                 'dynamic_take_profit': self.dynamic_take_profit,
                 'dynamic_sl_side': self.dynamic_sl_side,
@@ -123,6 +152,14 @@ class DeepSeekTrader:
                 with open(self.state_file, 'r', encoding='utf-8') as f:
                     state = json.load(f)
                     self.daily_high_equity = state.get('daily_high_equity', 0.0)
+                    saved_day = state.get('high_water_day')
+                    today = datetime.now().strftime('%Y%m%d')
+                    # [Fix] Reset high water mark on new day to prevent stale drawdown
+                    if saved_day != today:
+                        self.daily_high_equity = 0.0
+                        self.high_water_day = today
+                    else:
+                        self.high_water_day = saved_day or today
                     self.dynamic_stop_loss = state.get('dynamic_stop_loss', 0.0)
                     self.dynamic_take_profit = state.get('dynamic_take_profit', 0.0)
                     self.dynamic_sl_side = state.get('dynamic_sl_side')
@@ -156,19 +193,35 @@ class DeepSeekTrader:
             # 或者直接用 pnl_ratio (如果 API 返回的话)
             # OKX v5 position info: `uplRatio` is unrealized pnl ratio
             pnl_ratio = 0.0
+            has_valid_pnl = False
+            
             if 'uplRatio' in current_position:
-                 pnl_ratio = float(current_position['uplRatio'])
+                 try:
+                     pnl_ratio = float(current_position['uplRatio'])
+                     has_valid_pnl = True
+                 except (ValueError, TypeError):
+                     pass
             elif 'percentage' in current_position:
-                 pnl_ratio = float(current_position['percentage']) / 100.0
-            else:
-                 # Fallback calculate using entry price and current price if available
-                 # current_position passed from caller might not have current_price if it came from fetch_positions
-                 # but run_safety_check passes current_price separately, check_trailing_stop usually doesn't take price
-                 # Wait, check_trailing_stop only takes current_position.
-                 # We need current price to calculate if uplRatio is missing.
-                 # But OKX always returns uplRatio.
-                 # If not, we skip.
-                 return False
+                 try:
+                     pnl_ratio = float(current_position['percentage']) / 100.0
+                     has_valid_pnl = True
+                 except (ValueError, TypeError):
+                     pass
+            elif 'unrealized_pnl' in current_position and 'size' in current_position:
+                # 尝试使用未实现盈亏和持仓大小计算
+                try:
+                    unrealized_pnl = float(current_position['unrealized_pnl'])
+                    size = float(current_position['size'])
+                    if size > 0:
+                        # 简单估算：假设每单位价值 1 美元
+                        pnl_ratio = unrealized_pnl / (size * 100)  # 转换为百分比
+                        has_valid_pnl = True
+                except (ValueError, TypeError):
+                    pass
+            
+            # 如果无法计算收益率，跳过
+            if not has_valid_pnl:
+                return False
 
             activation_pnl = self.trailing_config.get('activation_pnl', 0.01) # 默认 1%
             callback_rate = self.trailing_config.get('callback_rate', 0.003) # 默认 0.3%
@@ -221,6 +274,242 @@ class DeepSeekTrader:
             self._log(f"移动止盈检查出错: {e}", 'error')
         
         return False
+
+    def _load_sim_state(self):
+        """Load simulation state from JSON"""
+        if os.path.exists(self.sim_state_file):
+            try:
+                with open(self.sim_state_file, 'r', encoding='utf-8') as f:
+                    state = json.load(f)
+                    self.sim_position = state.get('position')
+                    self.sim_realized_pnl = state.get('realized_pnl', 0.0)
+                    self.sim_balance = state.get('balance', 0.0)
+                    self.sim_trades = state.get('trades', [])
+            except Exception as e:
+                self._log(f"读取模拟状态失败: {e}", 'warning')
+        else:
+            self.sim_trades = []
+
+    def _save_sim_state(self):
+        """Save simulation state to JSON"""
+        try:
+            state = {
+                'position': self.sim_position,
+                'realized_pnl': self.sim_realized_pnl,
+                'balance': self.sim_balance,
+                'trades': self.sim_trades
+            }
+            with open(self.sim_state_file, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=4)
+        except Exception as e:
+            self._log(f"保存模拟状态失败: {e}", 'warning')
+
+    def _record_sim_trade(self, side, price, amount, fee=0.0, pnl=0.0):
+        """Record simulation trade to history"""
+        trade = {
+            'symbol': self.symbol,
+            'side': side.lower(), # buy/sell
+            'price': price,
+            'amount': amount,
+            'cost': price * amount,
+            'fee': {'cost': fee, 'currency': 'USDT'},
+            'timestamp': int(time.time() * 1000),
+            'datetime': datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
+            'info': {'pnl': pnl} # Simulate exchange info
+        }
+        self.sim_trades.append(trade)
+        # Keep last 100 trades
+        if len(self.sim_trades) > 100:
+            self.sim_trades = self.sim_trades[-100:]
+
+    def _execute_sim_trade(self, signal_data, current_price):
+        """Execute trade in simulation mode"""
+        signal = signal_data['signal']
+        amount = signal_data.get('amount', 0)
+        
+        # Calculate fee (simplified)
+        fee_rate = self.taker_fee_rate
+        trade_value = amount * current_price
+        fee = trade_value * fee_rate
+        
+        pnl = 0.0
+        
+        if signal == 'BUY':
+            # Opening Long or Closing Short
+            if self.sim_position and self.sim_position['side'] == 'short':
+                # Closing Short (Buy to Cover)
+                # Check if partial close
+                close_amount = amount
+                current_size = self.sim_position['size']
+                
+                if close_amount >= current_size * 0.99: # Full close
+                    close_amount = current_size
+                    is_full_close = True
+                else:
+                    is_full_close = False
+                    
+                entry_price = self.sim_position['entry_price']
+                
+                # PnL = (Entry - Exit) * Size
+                pnl = (entry_price - current_price) * close_amount
+                pnl -= fee # deduct fee
+                
+                self.sim_realized_pnl += pnl
+                self.sim_balance += pnl # update balance with PnL
+                
+                self._record_sim_trade('buy', current_price, close_amount, fee, pnl)
+                
+                if is_full_close:
+                    self.sim_position = None # Closed
+                    self._log(f"🧪 模拟平空(全): {close_amount} @ {current_price} | PnL: {pnl:.2f} U")
+                else:
+                    self.sim_position['size'] -= close_amount
+                    self.sim_position['coin_size'] -= close_amount # Simplified
+                    self._log(f"🧪 模拟平空(分): {close_amount} @ {current_price} | PnL: {pnl:.2f} U")
+                
+            elif self.sim_position and self.sim_position['side'] == 'long':
+                # Adding to Long (Pyramiding)
+                old_size = self.sim_position['size']
+                old_entry = self.sim_position['entry_price']
+                
+                new_size = old_size + amount
+                # Weighted Average Entry Price
+                avg_entry = ((old_size * old_entry) + (amount * current_price)) / new_size
+                
+                self.sim_position['size'] = new_size
+                self.sim_position['coin_size'] = new_size
+                self.sim_position['entry_price'] = avg_entry
+                
+                self.sim_realized_pnl -= fee
+                self.sim_balance -= fee
+                
+                self._record_sim_trade('buy', current_price, amount, fee, 0.0)
+                self._log(f"🧪 模拟加多: {amount} @ {current_price} | NewAvg: {avg_entry:.4f}")
+                
+            else:
+                # Opening Long
+                cost = trade_value + fee
+                # Check balance? (Optional for sim)
+                
+                self.sim_position = {
+                    'side': 'long',
+                    'size': amount,
+                    'coin_size': amount, # Simplified
+                    'entry_price': current_price,
+                    'unrealized_pnl': 0.0,
+                    'leverage': self.leverage,
+                    'symbol': self.symbol,
+                    'mode': 'cash' if self.trade_mode == 'cash' else 'margin'
+                }
+                # Initial fee deduction
+                self.sim_realized_pnl -= fee
+                self.sim_balance -= fee
+                
+                # [Fix] Cash Mode Balance Deduction
+                if self.trade_mode == 'cash':
+                    self.sim_balance -= trade_value
+                
+                self._record_sim_trade('buy', current_price, amount, fee, 0.0)
+                self._log(f"🧪 模拟开多: {amount} @ {current_price} | Fee: {fee:.2f} U")
+
+        elif signal == 'SELL':
+            # Opening Short or Closing Long
+            if self.sim_position and self.sim_position['side'] == 'long':
+                # Closing Long (Sell to Close)
+                close_amount = amount
+                current_size = self.sim_position['size']
+                
+                if close_amount >= current_size * 0.99: # Full close
+                    close_amount = current_size
+                    is_full_close = True
+                else:
+                    is_full_close = False
+                    
+                entry_price = self.sim_position['entry_price']
+                
+                # PnL = (Exit - Entry) * Size
+                pnl = (current_price - entry_price) * close_amount
+                pnl -= fee
+                
+                self.sim_realized_pnl += pnl
+                self.sim_balance += pnl
+                
+                # [Fix] Cash Mode Balance Restoration
+                # sim_balance already added pnl (profit/loss).
+                # For Cash: New Balance = Old Balance + Revenue - Fee
+                # PnL = Revenue - Cost - Fee
+                # Revenue = PnL + Cost + Fee
+                # So we need to add Cost back?
+                # Wait. sim_balance += pnl means: Bal = Bal + (Rev - Cost - Fee)
+                # This is equivalent to: Bal = Bal + Rev - Fee - Cost.
+                # But we already deducted Cost when buying.
+                # So Bal_new = (Bal_old - Cost - Fee_buy) + (Rev - Cost_sell - Fee_sell) ?? No.
+                
+                # Let's trace:
+                # 1. Buy: Bal = 1000. Cost=100. Fee=1. Bal -> 899. (Deducted Cost + Fee)
+                # 2. Sell: Rev=110. Fee=1. PnL = 110-100-1 = 9.
+                #    If we do Bal += PnL -> 899 + 9 = 908.
+                #    Correct Bal should be: 1000 - 1 - 1 + 10 = 1008. (Or 899 + 110 - 1 = 1008).
+                #    So 908 is WRONG. It's missing the Principal (Cost).
+                #    Difference = 1008 - 908 = 100. Exactly the Cost.
+                
+                if self.trade_mode == 'cash':
+                    cost_of_sold = close_amount * entry_price
+                    self.sim_balance += cost_of_sold
+                
+                self._record_sim_trade('sell', current_price, close_amount, fee, pnl)
+                
+                if is_full_close:
+                    self.sim_position = None
+                    self._log(f"🧪 模拟平多(全): {close_amount} @ {current_price} | PnL: {pnl:.2f} U")
+                else:
+                    self.sim_position['size'] -= close_amount
+                    self.sim_position['coin_size'] -= close_amount
+                    self._log(f"🧪 模拟平多(分): {close_amount} @ {current_price} | PnL: {pnl:.2f} U")
+                
+            elif self.sim_position and self.sim_position['side'] == 'short':
+                # Adding to Short
+                old_size = self.sim_position['size']
+                old_entry = self.sim_position['entry_price']
+                
+                new_size = old_size + amount
+                # Weighted Average Entry Price
+                avg_entry = ((old_size * old_entry) + (amount * current_price)) / new_size
+                
+                self.sim_position['size'] = new_size
+                self.sim_position['coin_size'] = new_size
+                self.sim_position['entry_price'] = avg_entry
+                
+                self.sim_realized_pnl -= fee
+                self.sim_balance -= fee
+                
+                self._record_sim_trade('sell', current_price, amount, fee, 0.0)
+                self._log(f"🧪 模拟加空: {amount} @ {current_price} | NewAvg: {avg_entry:.4f}")
+                
+            else:
+                # Opening Short
+                if self.trade_mode == 'cash':
+                    self._log(f"🧪 现货模式无法开空")
+                    return "FAILED", "现货无法开空"
+                    
+                self.sim_position = {
+                    'side': 'short',
+                    'size': amount,
+                    'coin_size': amount,
+                    'entry_price': current_price,
+                    'unrealized_pnl': 0.0,
+                    'leverage': self.leverage,
+                    'symbol': self.symbol,
+                    'mode': 'margin'
+                }
+                self.sim_realized_pnl -= fee
+                self.sim_balance -= fee
+                
+                self._record_sim_trade('sell', current_price, amount, fee, 0.0)
+                self._log(f"🧪 模拟开空: {amount} @ {current_price} | Fee: {fee:.2f} U")
+
+        self._save_sim_state()
+        return "TEST_MODE", f"模拟{signal}成功 | PnL: {self.sim_realized_pnl:.2f}"
 
     async def initialize(self):
         """Async Initialization"""
@@ -276,15 +565,23 @@ class DeepSeekTrader:
             return
 
         try:
-            # [Fix] 优先使用配置的初始本金，如果没有(0)，则使用当前实时余额
-            base_capital = self.initial_balance if self.initial_balance > 0 else (current_balance if current_balance else 0)
+            # [Fix] 测试模式下使用每个交易对自己的模拟余额作为基础资金
+            if self.test_mode:
+                base_capital = self.sim_balance
+            else:
+                # 实盘模式下，优先使用配置的初始本金，如果没有(0)，则使用当前实时余额
+                base_capital = self.initial_balance if self.initial_balance > 0 else (current_balance if current_balance else 0)
             
             quota = 0
             if base_capital > 0:
                 if isinstance(self.allocation, str) and self.allocation == 'auto':
-                    # [New] Auto Allocation Logic
-                    if self.active_symbols_count > 0:
-                        quota = base_capital / self.active_symbols_count
+                    # [Fix] 测试模式下，auto 分配直接使用完整的模拟余额
+                    if self.test_mode:
+                        quota = base_capital
+                    else:
+                        # 实盘模式下，按活跃交易对数量平均分配
+                        if self.active_symbols_count > 0:
+                            quota = base_capital / self.active_symbols_count
                 elif isinstance(self.allocation, (int, float)):
                     if self.allocation <= 1.0:
                         quota = base_capital * self.allocation
@@ -547,183 +844,224 @@ class DeepSeekTrader:
 
 
 
+    @exception_handler
     async def get_ohlcv(self):
+        # 生成缓存键
+        cache_key = cache_manager.generate_key(
+            'ohlcv',
+            symbol=self.symbol,
+            timeframe=self.timeframe
+        )
+        
+        # 尝试从缓存获取数据
+        cached_data = cache_manager.get(cache_key)
+        if cached_data:
+            self._log(f"使用缓存的K线数据", 'debug')
+            return cached_data
+        
+        # [兼容性处理] 如果配置了毫秒级周期 (如 "500ms")，API 请求强制使用 "1m"
+        # OKX 不支持 "1s", "30s" 等周期，最低为 "1m"
+        api_timeframe = self.timeframe
+        if 'ms' in self.timeframe or self.timeframe.endswith('s'):
+            api_timeframe = '1m'
+        
+        # [Fix 51000 Error] 确保 limit 足够大，有些交易所对小周期请求有最小数量要求
+        # 或者当 API 周期为 1m 时，不要请求奇怪的数量
+        # 增加超时设置，防止 fetch_ohlcv 永久挂起
+        # [Resume] 尝试从数据库加载最近的 K 线 (断点续传)
+        # 优先使用本地数据，以减少 API 调用并保持状态连续性
+        # 但为了数据的实时性，我们仍需要拉取最新的数据进行合并
+        local_klines = []
         try:
-            # [兼容性处理] 如果配置了毫秒级周期 (如 "500ms")，API 请求强制使用 "1m"
-            # OKX 不支持 "1s", "30s" 等周期，最低为 "1m"
-            api_timeframe = self.timeframe
-            if 'ms' in self.timeframe or self.timeframe.endswith('s'):
-                api_timeframe = '1m'
-            
-            # [Fix 51000 Error] 确保 limit 足够大，有些交易所对小周期请求有最小数量要求
-            # 或者当 API 周期为 1m 时，不要请求奇怪的数量
-            # 增加超时设置，防止 fetch_ohlcv 永久挂起
-            # [Resume] 尝试从数据库加载最近的 K 线 (断点续传)
-            # 优先使用本地数据，以减少 API 调用并保持状态连续性
-            # 但为了数据的实时性，我们仍需要拉取最新的数据进行合并
-            local_klines = []
-            try:
-                local_klines = await self.data_manager.get_recent_klines(self.symbol, self.timeframe, limit=200)
-            except Exception as e:
-                self._log(f"加载本地历史数据失败: {e}", 'warning')
-
-            # [Optimization] 获取 200 根 K 线
-            # 如果本地有足够数据，理论上我们可以只拉取最近的几十根，但为了安全起见（防止长时间停机导致的巨大 Gap），
-            # 这里还是拉取 200 根，然后做 merge
-            ohlcv = await asyncio.wait_for(
-                self.exchange.fetch_ohlcv(self.symbol, api_timeframe, limit=200),
-                timeout=10
-            )
-            df_new = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df_new['timestamp'] = pd.to_datetime(df_new['timestamp'], unit='ms')
-            
-            # [Merge] 合并本地数据与新数据
-            df = df_new
-            if local_klines:
-                df_local = pd.DataFrame(local_klines)
-                # 确保 timestamp 类型一致
-                df_local['timestamp'] = pd.to_datetime(df_local['timestamp'])
-                
-                # 合并并去重 (以 timestamp 为准)
-                # [Fix] keep='last' to prefer new API data over local stale data
-                # 如果时间戳冲突，说明本地存的是之前的"未收盘"快照，必须用新的覆盖
-                df = pd.concat([df_local, df_new]).drop_duplicates(subset=['timestamp'], keep='last').sort_values('timestamp')
-                # 保持长度在合理范围 (例如 500)
-                df = df.tail(500)
-            
-            # 维护历史 K 线记录
-            self.price_history = df.tail(100).to_dict('records')
-            
-            # 使用默认值进行预热检查（不再依赖 config 中的 history_limit）
-            if not self.price_history and len(df) > 50:
-                self._log(f"🔥 正在预热历史数据...")
-                pass
-            
-            # 计算指标
-            df = self.calculate_indicators(df)
-            
-            # [Fix] 先计算指标字典，用于确定 volatility_status
-            current_data = df.iloc[-1]
-            previous_data = df.iloc[-2] if len(df) > 1 else current_data
-
-            indicators = {
-                'rsi': float(current_data['rsi']) if pd.notna(current_data.get('rsi')) else None,
-                'macd': float(current_data['macd']) if pd.notna(current_data.get('macd')) else None,
-                'macd_signal': float(current_data['signal_line']) if pd.notna(current_data.get('signal_line')) else None,
-                'macd_hist': float(current_data['macd_hist']) if pd.notna(current_data.get('macd_hist')) else None,
-                'bb_upper': float(current_data['upper_band']) if pd.notna(current_data.get('upper_band')) else None,
-                'bb_lower': float(current_data['lower_band']) if pd.notna(current_data.get('lower_band')) else None,
-                'bb_middle': float(current_data['sma_20']) if pd.notna(current_data.get('sma_20')) else None,
-                'adx': float(current_data['adx']) if pd.notna(current_data.get('adx')) else None,
-                'vol_ratio': float(current_data['vol_ratio']) if pd.notna(current_data.get('vol_ratio')) else None,
-                'obv': float(current_data['obv']) if pd.notna(current_data.get('obv')) else None,
-                'buy_prop': float(current_data['buy_vol_prop_5']) if pd.notna(current_data.get('buy_vol_prop_5')) else None,
-                'atr': float(current_data['atr']) if pd.notna(current_data.get('atr')) else None,
-                'atr_ratio': float(current_data['atr_ratio']) if pd.notna(current_data.get('atr_ratio')) else None, # [New]
-            }
-            
-            # [New] Store indicators for Smart Sizing usage in execute_trade
-            self.last_indicators = indicators
-            
-            # [New] Determine Volatility Status (Moved Up for DB Saving)
-            vol_status = "NORMAL"
-            atr_r = indicators['atr_ratio'] if indicators['atr_ratio'] is not None else 1.0
-            adx_val = indicators['adx'] if indicators['adx'] is not None else 25.0
-            
-            if atr_r < 0.6:
-                vol_status = "LOW" # 死鱼盘 -> 网格模式
-            elif adx_val > 30:
-                vol_status = "HIGH_TREND" # 强趋势 -> 趋势模式
-            elif atr_r > 1.5:
-                vol_status = "HIGH_CHOPPY" # 剧烈震荡 -> 均值回归模式
-            
-            # [Fix] 将状态写回 DataFrame 的最后一行，以便 DataManager 保存
-            # 注意: 这里只更新最后一行，历史行的 status 可能是空的，但我们主要关心最新的
-            df.loc[df.index[-1], 'volatility_status'] = vol_status
-
-            # [New] 异步保存 K 线数据 (现在包含了 volatility_status)
-            asyncio.create_task(self.data_manager.save_klines(self.symbol, self.timeframe, df.tail(1)))
-
-            # 显式传递最小交易单位给 AI
-            min_limit_info = "0.01"
-            min_notional_info = "5.0"
-            try:
-                market = self.exchange.market(self.symbol)
-                min_amount = market.get('limits', {}).get('amount', {}).get('min')
-                if min_amount:
-                    min_limit_info = str(min_amount)
-                min_cost = market.get('limits', {}).get('cost', {}).get('min')
-                if min_cost:
-                    min_notional_info = str(min_cost)
-            except:
-                pass
-
-            # [Modified] 动态计算投喂给 AI 的 K 线数量 (feed_limit)
-            # 即使配置文件写死，这里也优先使用动态逻辑，以适应不同 Timeframe
-            feed_limit = 24 # Default
-            tf = self.timeframe
-            if tf == '1m': feed_limit = 60    # 1h context
-            elif tf == '3m': feed_limit = 40  # 2h context
-            elif tf == '5m': feed_limit = 36  # 3h context
-            elif tf == '15m': feed_limit = 32 # 8h context
-            elif tf == '30m': feed_limit = 24 # 12h context
-            elif tf == '1h': feed_limit = 24  # 24h context
-            elif tf == '4h': feed_limit = 24  # 4d context
-            elif tf == '1d': feed_limit = 14  # 2w context
-            
-            # 如果配置文件特别指定了极大的值 (例如为了 debug)，可以保留 override 逻辑，
-            # 但这里我们默认采用动态逻辑覆盖配置，除非配置值为 "auto" (目前代码里是 int)
-            # 简单起见，直接使用上述动态值，并确保不低于 10
-            feed_limit = max(10, feed_limit)
-            
-            # [New] Determine Volatility Status for AI Persona
-            # 这一步非常关键：它决定了 AI 是"趋势猎人"还是"网格交易员"
-            # [Fix] Already calculated above
-            # vol_status = "NORMAL"
-            # atr_r = indicators['atr_ratio'] if indicators['atr_ratio'] is not None else 1.0
-            # adx_val = indicators['adx'] if indicators['adx'] is not None else 25.0
-            # 
-            # if atr_r < 0.6:
-            #     vol_status = "LOW" # 死鱼盘 -> 网格模式
-            # elif adx_val > 30:
-            #     vol_status = "HIGH_TREND" # 强趋势 -> 趋势模式
-            # elif atr_r > 1.5:
-            #     vol_status = "HIGH_CHOPPY" # 剧烈震荡 -> 均值回归模式
-            
-            # [Real-time Correction] 实时 Tick 修正
-            # 获取最新成交价，计算其与 K 线收盘价的偏离度
-            ticker_price = current_data['close'] # default
-            price_divergence = 0.0
-            try:
-                ticker = await self.exchange.fetch_ticker(self.symbol)
-                ticker_price = float(ticker['last'])
-                # 偏离度 % (Tick - Close) / Close
-                price_divergence = ((ticker_price - current_data['close']) / current_data['close']) * 100
-            except:
-                pass
-
-            return {
-                'volatility_status': vol_status, # [New] Added for AI Persona
-                'price': ticker_price, # [Modified] Use real-time ticker price instead of kline close
-                'kline_close': current_data['close'], # Keep original close for reference
-                'price_divergence': price_divergence, # [New] Tell AI about the lag
-                'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                'high': current_data['high'],
-                'low': current_data['low'],
-                'volume': current_data['volume'],
-                'timeframe': self.timeframe,
-                'price_change': ((current_data['close'] - previous_data['close']) / previous_data['close']) * 100,
-                # 这里改为使用 dynamic feed_limit
-                'kline_data': df[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'vol_ratio', 'obv']].tail(feed_limit).to_dict('records'),
-                'indicators': indicators,
-                'min_limit_info': min_limit_info,
-                'min_notional_info': min_notional_info,
-            }
+            local_klines = await self.data_manager.get_recent_klines(self.symbol, self.timeframe, limit=200)
         except Exception as e:
-            self._log(f"获取K线数据失败: {e}", 'error')
-            return None
+            self._log(f"加载本地历史数据失败: {e}", 'warning')
+
+        # [Optimization] 获取 200 根 K 线
+        # 如果本地有足够数据，理论上我们可以只拉取最近的几十根，但为了安全起见（防止长时间停机导致的巨大 Gap），
+        # 这里还是拉取 200 根，然后做 merge
+        ohlcv = await asyncio.wait_for(
+            self.exchange.fetch_ohlcv(self.symbol, api_timeframe, limit=200),
+            timeout=10
+        )
+        df_new = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df_new['timestamp'] = pd.to_datetime(df_new['timestamp'], unit='ms')
+        
+        # [Merge] 合并本地数据与新数据
+        df = df_new
+        if local_klines:
+            df_local = pd.DataFrame(local_klines)
+            # 确保 timestamp 类型一致
+            df_local['timestamp'] = pd.to_datetime(df_local['timestamp'])
+            
+            # 合并并去重 (以 timestamp 为准)
+            # [Fix] keep='last' to prefer new API data over local stale data
+            # 如果时间戳冲突，说明本地存的是之前的"未收盘"快照，必须用新的覆盖
+            df = pd.concat([df_local, df_new]).drop_duplicates(subset=['timestamp'], keep='last').sort_values('timestamp')
+            # 保持长度在合理范围 (例如 500)
+            df = df.tail(500)
+        
+        # 维护历史 K 线记录
+        self.price_history = df.tail(100).to_dict('records')
+        
+        # 使用默认值进行预热检查（不再依赖 config 中的 history_limit）
+        if not self.price_history and len(df) > 50:
+            self._log(f"🔥 正在预热历史数据...")
+            pass
+        
+        # 计算指标
+        df = self.calculate_indicators(df)
+        
+        # [Fix] 先计算指标字典，用于确定 volatility_status
+        current_data = df.iloc[-1]
+        previous_data = df.iloc[-2] if len(df) > 1 else current_data
+
+        indicators = {
+            'rsi': float(current_data['rsi']) if pd.notna(current_data.get('rsi')) else None,
+            'macd': float(current_data['macd']) if pd.notna(current_data.get('macd')) else None,
+            'macd_signal': float(current_data['signal_line']) if pd.notna(current_data.get('signal_line')) else None,
+            'macd_hist': float(current_data['macd_hist']) if pd.notna(current_data.get('macd_hist')) else None,
+            'bb_upper': float(current_data['upper_band']) if pd.notna(current_data.get('upper_band')) else None,
+            'bb_lower': float(current_data['lower_band']) if pd.notna(current_data.get('lower_band')) else None,
+            'bb_middle': float(current_data['sma_20']) if pd.notna(current_data.get('sma_20')) else None,
+            'adx': float(current_data['adx']) if pd.notna(current_data.get('adx')) else None,
+            'vol_ratio': float(current_data['vol_ratio']) if pd.notna(current_data.get('vol_ratio')) else None,
+            'obv': float(current_data['obv']) if pd.notna(current_data.get('obv')) else None,
+            'buy_prop': float(current_data['buy_vol_prop_5']) if pd.notna(current_data.get('buy_vol_prop_5')) else None,
+            'atr': float(current_data['atr']) if pd.notna(current_data.get('atr')) else None,
+            'atr_ratio': float(current_data['atr_ratio']) if pd.notna(current_data.get('atr_ratio')) else None, # [New]
+            }
+        
+        # [New] Store indicators for Smart Sizing usage in execute_trade
+        self.last_indicators = indicators
+        
+        # [New] Determine Volatility Status (Moved Up for DB Saving)
+        vol_status = "NORMAL"
+        atr_r = indicators['atr_ratio'] if indicators['atr_ratio'] is not None else 1.0
+        adx_val = indicators['adx'] if indicators['adx'] is not None else 25.0
+        
+        if atr_r < 0.6:
+            vol_status = "LOW" # 死鱼盘 -> 网格模式
+        elif adx_val > 30:
+            vol_status = "HIGH_TREND" # 强趋势 -> 趋势模式
+        elif atr_r > 1.5:
+            vol_status = "HIGH_CHOPPY" # 剧烈震荡 -> 均值回归模式
+        
+        # [Fix] 将状态写回 DataFrame 的最后一行，以便 DataManager 保存
+        # 注意: 这里只更新最后一行，历史行的 status 可能是空的，但我们主要关心最新的
+        df.loc[df.index[-1], 'volatility_status'] = vol_status
+
+        # [New] 异步保存 K 线数据 (现在包含了 volatility_status)
+        asyncio.create_task(self.data_manager.save_klines(self.symbol, self.timeframe, df.tail(1)))
+
+        # 显式传递最小交易单位给 AI
+        min_limit_info = "0.01"
+        min_notional_info = "5.0"
+        try:
+            market = self.exchange.market(self.symbol)
+            min_amount = market.get('limits', {}).get('amount', {}).get('min')
+            if min_amount:
+                min_limit_info = str(min_amount)
+            min_cost = market.get('limits', {}).get('cost', {}).get('min')
+            if min_cost:
+                min_notional_info = str(min_cost)
+        except:
+            pass
+
+        # [Modified] 动态计算投喂给 AI 的 K 线数量 (feed_limit)
+        # 即使配置文件写死，这里也优先使用动态逻辑，以适应不同 Timeframe
+        feed_limit = 24 # Default
+        tf = self.timeframe
+        if tf == '1m': feed_limit = 60    # 1h context
+        elif tf == '3m': feed_limit = 40  # 2h context
+        elif tf == '5m': feed_limit = 36  # 3h context
+        elif tf == '15m': feed_limit = 32 # 8h context
+        elif tf == '30m': feed_limit = 24 # 12h context
+        elif tf == '1h': feed_limit = 24  # 24h context
+        elif tf == '4h': feed_limit = 24  # 4d context
+        elif tf == '1d': feed_limit = 14  # 2w context
+        
+        # 如果配置文件特别指定了极大的值 (例如为了 debug)，可以保留 override 逻辑，
+        # 但这里我们默认采用动态逻辑覆盖配置，除非配置值为 "auto" (目前代码里是 int)
+        # 简单起见，直接使用上述动态值，并确保不低于 10
+        feed_limit = max(10, feed_limit)
+        
+        # [New] Determine Volatility Status for AI Persona
+        # 这一步非常关键：它决定了 AI 是"趋势猎人"还是"网格交易员"
+        # [Fix] Already calculated above
+        # vol_status = "NORMAL"
+        # atr_r = indicators['atr_ratio'] if indicators['atr_ratio'] is not None else 1.0
+        # adx_val = indicators['adx'] if indicators['adx'] is not None else 25.0
+        # 
+        # if atr_r < 0.6:
+        #     vol_status = "LOW" # 死鱼盘 -> 网格模式
+        # elif adx_val > 30:
+        #     vol_status = "HIGH_TREND" # 强趋势 -> 趋势模式
+        # elif atr_r > 1.5:
+        #     vol_status = "HIGH_CHOPPY" # 剧烈震荡 -> 均值回归模式
+        
+        # [Real-time Correction] 实时 Tick 修正
+        # 获取最新成交价，计算其与 K 线收盘价的偏离度
+        ticker_price = current_data['close'] # default
+        price_divergence = 0.0
+        try:
+            ticker = await self.exchange.fetch_ticker(self.symbol)
+            ticker_price = float(ticker['last'])
+            # 偏离度 % (Tick - Close) / Close
+            price_divergence = ((ticker_price - current_data['close']) / current_data['close']) * 100
+        except:
+            pass
+
+        result = {
+            'volatility_status': vol_status, # [New] Added for AI Persona
+            'price': ticker_price, # [Modified] Use real-time ticker price instead of kline close
+            'kline_close': current_data['close'], # Keep original close for reference
+            'price_divergence': price_divergence, # [New] Tell AI about the lag
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'high': current_data['high'],
+            'low': current_data['low'],
+            'volume': current_data['volume'],
+            'timeframe': self.timeframe,
+            'price_change': ((current_data['close'] - previous_data['close']) / previous_data['close']) * 100,
+            # 这里改为使用 dynamic feed_limit
+            'kline_data': df[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'vol_ratio', 'obv']].tail(feed_limit).to_dict('records'),
+            'indicators': indicators,
+            'min_limit_info': min_limit_info,
+            'min_notional_info': min_notional_info,
+        }
+        
+        # 生成缓存键并缓存结果
+        cache_key = cache_manager.generate_key(
+            'ohlcv',
+            symbol=self.symbol,
+            timeframe=self.timeframe
+        )
+        # 缓存时间根据时间周期调整
+        cache_ttl = 30 if 'm' in self.timeframe else 60
+        cache_manager.set(cache_key, result, ttl=cache_ttl)
+        
+        return result
 
     async def get_current_position(self):
+        # [New] Test Mode Simulation Interception
+        if self.test_mode:
+            if self.sim_position:
+                # Update unrealized PnL based on current price
+                try:
+                    ticker = await self.exchange.fetch_ticker(self.symbol)
+                    current_price = ticker['last']
+                    
+                    entry = float(self.sim_position['entry_price'])
+                    size = float(self.sim_position['coin_size']) # Use coin_size for calculation
+                    
+                    if self.sim_position['side'] == 'long':
+                        self.sim_position['unrealized_pnl'] = (current_price - entry) * size
+                    else:
+                        self.sim_position['unrealized_pnl'] = (entry - current_price) * size
+                except:
+                    pass
+            return self.sim_position
+
         try:
             # Identify if this is a Contract instrument or Spot
             market_info = self.exchange.market(self.symbol)
@@ -827,6 +1165,12 @@ class DeepSeekTrader:
             return 0.0
 
     async def get_spot_balance(self, total=False):
+        if self.test_mode:
+            # Return simulation balance for spot mode
+            if self.sim_position and self.sim_position.get('mode') == 'cash':
+                 return float(self.sim_position['size'])
+            return 0.0
+
         try:
             base_currency = self.symbol.split('/')[0]
             balance = await self.exchange.fetch_balance()
@@ -848,6 +1192,14 @@ class DeepSeekTrader:
             return 0.0
         except Exception:
             return 0.0
+
+    async def get_my_trades(self, limit=100):
+        """Helper to get recent trades (Real or Simulated)"""
+        if self.test_mode:
+            # Return last N trades
+            return self.sim_trades[-limit:]
+        
+        return await self.exchange.fetch_my_trades(self.symbol, limit=limit)
 
     async def _auto_detect_strategy_mode(self, balance_usdt):
         """[New] 根据资金规模自动切换策略模式 (Auto-Scaling Strategy)"""
@@ -1069,8 +1421,20 @@ class DeepSeekTrader:
                     return "SKIPPED_TECH", tech_msg
 
         if self.test_mode:
-            self._log(f"🧪 测试模式: {signal_data['signal']} {signal_data['amount']} (不执行)")
-            return "TEST_MODE", f"模拟执行 {signal_data['signal']}"
+            # Need a price for simulation
+            exec_price = current_price
+            if exec_price is None:
+                 try:
+                     ticker = await self.exchange.fetch_ticker(self.symbol)
+                     exec_price = ticker['last']
+                 except:
+                     exec_price = 0
+            
+            if exec_price > 0:
+                return self._execute_sim_trade(signal_data, exec_price)
+            else:
+                self._log(f"🧪 测试模式: {signal_data['signal']} (无法获取价格，跳过)")
+                return "TEST_MODE", "无法获取价格"
 
         # [New] Update Dynamic Risk Params for Active Trades
         # We do this before price check to ensure we capture the latest AI advice
@@ -2217,11 +2581,26 @@ class DeepSeekTrader:
 
     async def get_account_info(self):
         """获取账户余额和权益 (一次请求)"""
+        if self.test_mode:
+             # Calculate total equity including unrealized PnL
+             equity = self.sim_balance
+             if self.sim_position:
+                 try:
+                     ticker = await self.exchange.fetch_ticker(self.symbol)
+                     current_price = ticker['last']
+                     entry = float(self.sim_position['entry_price'])
+                     size = float(self.sim_position['coin_size'])
+                     if self.sim_position['side'] == 'long':
+                         u_pnl = (current_price - entry) * size
+                     else:
+                         u_pnl = (entry - current_price) * size
+                     equity += u_pnl
+                 except:
+                     pass
+             return self.sim_balance, equity
+
         try:
             params = {}
-            if self.test_mode:
-                params = {'simulated': True}
-            
             balance = await self.exchange.fetch_balance(params)
             
             free_usdt = 0.0
@@ -2327,7 +2706,7 @@ class DeepSeekTrader:
                         fake_signal = {
                             'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
                             'confidence': 'HIGH', 
-                            'amount': 0, 
+                            'amount': pos['size'], 
                             'reason': f"移动止盈触发: Peak {self.trailing_max_pnl*100:.2f}% -> Now {pnl_pct*100:.2f}%"
                         }
                         
@@ -2355,7 +2734,7 @@ class DeepSeekTrader:
                         fake_signal = {
                             'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
                             'confidence': 'HIGH', 
-                            'amount': 0, 
+                            'amount': pos['size'], 
                             'reason': f"AI动态止损触发: {current_price} vs {self.dynamic_stop_loss}"
                         }
                         await self.execute_trade(fake_signal)
@@ -2374,7 +2753,7 @@ class DeepSeekTrader:
                         fake_signal = {
                             'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
                             'confidence': 'HIGH', 
-                            'amount': 0, 
+                            'amount': pos['size'], 
                             'reason': f"AI动态止盈触发: {current_price} vs {self.dynamic_take_profit}"
                         }
                         await self.execute_trade(fake_signal)
@@ -2393,7 +2772,7 @@ class DeepSeekTrader:
                     fake_signal = {
                         'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
                         'confidence': 'HIGH', # 强制最高信心
-                        'amount': 0, # amount 0 在平仓逻辑中会被忽略，直接全平
+                        'amount': pos['size'], # amount 0 在平仓逻辑中会被忽略，直接全平
                         'reason': f"硬止损触发: Loss {pnl_pct*100:.2f}%"
                     }
                     
@@ -2412,7 +2791,7 @@ class DeepSeekTrader:
                     fake_signal = {
                         'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
                         'confidence': 'HIGH', 
-                        'amount': 0, 
+                        'amount': pos['size'], 
                         'reason': f"硬止盈触发: Profit {pnl_pct*100:.2f}%"
                     }
                     
@@ -2536,6 +2915,14 @@ class DeepSeekTrader:
             
             # [New] Global Circuit Breaker (账户级熔断)
             # 记录当日最高权益 (High Water Mark)
+            # [Fix] Reset high water mark when day changes
+            current_day = datetime.now().strftime('%Y%m%d')
+            if self.high_water_day != current_day:
+                self.high_water_day = current_day
+                self.daily_high_equity = 0.0
+            # Initialize high water with current equity to avoid stale large value
+            if self.daily_high_equity == 0.0:
+                self.daily_high_equity = equity
             if equity > self.daily_high_equity:
                 self.daily_high_equity = equity
                 # [Fix] Persist high water mark
@@ -2557,6 +2944,10 @@ class DeepSeekTrader:
                     return {
                         'symbol': self.symbol,
                         'price': price_data['price'],
+                        'change': price_data.get('price_change', 0.0), # [Fix] Add missing key
+                        'signal': 'STOPPED', # [Fix] Add missing signal
+                        'confidence': 'HIGH', # [Fix] Add missing confidence
+                        'reason': f"熔断触发: 回撤 {drawdown*100:.2f}%", # [Fix] Add missing reason
                         'status': 'STOPPED',
                         'status_msg': f"熔断触发: 回撤 {drawdown*100:.2f}%",
                         'recommended_sleep': 60.0 # 冷却 1 分钟
@@ -2575,26 +2966,16 @@ class DeepSeekTrader:
             rsi_min = float(gate_conf.get('rsi_min', 35))
             rsi_max = float(gate_conf.get('rsi_max', 65))
             adx_min = float(gate_conf.get('adx_min', 25))
-            budget_limit = int(self.common_config.get('strategy', {}).get('token_budget_daily', 0))
-            today_str = datetime.now().strftime('%Y%m%d')
-            if not hasattr(self, 'token_calls_day'):
-                self.token_calls_day = today_str
-                self.token_calls_today = 0
-            if self.token_calls_day != today_str:
-                self.token_calls_day = today_str
-                self.token_calls_today = 0
+            
             gate_reason = None
-            if budget_limit and self.token_calls_today >= budget_limit:
-                gate_reason = "Token预算耗尽"
+            if volatility_status == 'HIGH_TREND':
+                if adx_val is None or adx_val < adx_min:
+                    gate_reason = "趋势不足"
             else:
-                if volatility_status == 'HIGH_TREND':
-                    if adx_val is None or adx_val < adx_min:
-                        gate_reason = "趋势不足"
-                else:
-                    if rsi_val is None or rsi_val < rsi_min or rsi_val > rsi_max:
-                        gate_reason = "RSI超界"
-                    elif adx_val is not None and adx_val < adx_min:
-                        gate_reason = "ADX不足"
+                if rsi_val is None or rsi_val < rsi_min or rsi_val > rsi_max:
+                    gate_reason = "RSI超界"
+                elif adx_val is not None and adx_val < adx_min:
+                    gate_reason = "ADX不足"
             if gate_reason:
                 persona_map = {
                     'HIGH_TREND': 'Trend Hunter (趋势猎人)',
@@ -2677,7 +3058,6 @@ class DeepSeekTrader:
             )
             
             if signal_data:
-                self.token_calls_today += 1
                 # [New] 异步保存信号记录
                 asyncio.create_task(self.data_manager.save_signal(self.symbol, signal_data, price_data['price']))
                 
