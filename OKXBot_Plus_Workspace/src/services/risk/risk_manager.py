@@ -475,6 +475,15 @@ class RiskManager:
             if not self.is_initialized:
                 await self.initialize_baseline(total_equity)
             
+            # [Fix] 首次运行时，为了消除 initialize_baseline 和 check 之间的时间差导致的微小波动
+            # 我们在第一次 check 时强制对齐基准 (仅当波动非常小时)
+            if not hasattr(self, 'last_known_pnl') and self.smart_baseline:
+                diff = total_equity - self.smart_baseline
+                # 如果偏差在 -0.5 ~ 0.5 U 之间，且不是充值导致的（deposit_offset 为 0 或稳定），则视为抖动
+                if abs(diff) < 0.5:
+                    self.smart_baseline = total_equity
+                    # self._log(f"🔧 启动微调: 消除时间差波动 ({diff:+.4f} U) -> PnL 归零", 'debug')
+            
             current_total_value = total_equity
             
             # 批量获取价格 (Async)
@@ -931,34 +940,35 @@ class RiskManager:
         self.logger.info(f"💰 当前资金总数 (Total Equity): {real_total_equity:.2f} U")
         
         if self.initial_balance and self.initial_balance > 0:
-            # [Logic Change] 固定本金模式
-            # 如果 实际权益 > 初始配置 (说明有额外充值)，则强制维持 初始配置 作为基准
-            # 只有当 实际权益 < 初始配置 * 0.9 (说明亏损严重或提现)，才向下校准
+            # [Logic Change] 智能基准模式 (Smart Baseline)
+            # 优先尊重用户的 config 配置，但如果实际资金与配置偏差过大 (可能是配置没填对)，则提示并自动适配
             
-            if real_total_equity < self.initial_balance * 0.5:
-                self.smart_baseline = real_total_equity
-                self.deposit_offset = 0.0 # 缩水了，清空抵扣
-                self._log(f"⚠️ 资产缩水校准: 配置 {self.initial_balance} -> 实际 {real_total_equity:.2f} (缩水 >50%)")
+            diff = real_total_equity - self.initial_balance
+            
+            # 1. 如果实际资金略少于配置 (例如少于 2U 或 5%)，通常是手续费磨损或零头差异
+            #    此时应该【强制】把基准设为实际资金，避免一启动就显示亏损
+            if -5.0 < diff < 0 or (0.95 < real_total_equity / self.initial_balance < 1.0):
+                 self.smart_baseline = real_total_equity
+                 self.deposit_offset = 0.0
+                 self._log(f"📉 微小差额自动校准: 配置 {self.initial_balance} -> 实际 {real_total_equity:.2f} (归零启动盈亏)")
+            
+            # 2. 如果实际资金远小于配置 (例如配置 1000U，实际只有 30U)
+            #    说明用户可能填错了，或者提现了。也应该以实际为准。
+            elif real_total_equity < self.initial_balance * 0.95:
+                 self.smart_baseline = real_total_equity
+                 self.deposit_offset = 0.0
+                 self._log(f"⚠️ 资产显著缩水: 配置 {self.initial_balance} -> 实际 {real_total_equity:.2f} (以实际资金重置基准)")
+            
+            # 3. 如果实际资金大于配置 (例如配置 30U，实际 100U)
+            #    这通常是用户想“专款专用”。此时保持配置值作为基准，多出来的部分算作 Offset (闲置资金)
             else:
-                # 即使实际权益远大于配置，也坚持使用配置值，实现"专款专用"
                 self.smart_baseline = self.initial_balance
-                if real_total_equity > self.initial_balance * 1.1:
-                    # 初始化 offset: 实际权益 - 配置本金
-                    # 如果之前没有 offset 或者 需要重新计算
-                    # 这里为了防止重启时重复计算，我们只在 smart_baseline 是 None 时，或者 offset 为 0 时初始化
-                    # 或者，如果 offset + baseline != real_total_equity (偏差很大)，也校准一下？
-                    # 简化逻辑：每次启动如果处于锁定模式，直接把多出来的部分算作 offset
-                    self.deposit_offset = real_total_equity - self.initial_balance
-                    self._log(f"🔒 锁定本金模式: 忽略额外资金 {self.deposit_offset:.2f} U，仅管理 {self.smart_baseline:.2f} U")
+                self.deposit_offset = real_total_equity - self.initial_balance
+                if self.deposit_offset > 0.1:
+                    self._log(f"� 锁定本金模式: 仅管理 {self.smart_baseline:.2f} U，闲置/额外资金 {self.deposit_offset:.2f} U")
                 else:
-                    self.deposit_offset = 0.0
-                    self._log(f"✅ 初始本金确认: {self.smart_baseline:.2f} U")
-                    
-                    # [New] 提示用户如果这是初始资金差异
-                    diff = real_total_equity - self.initial_balance
-                    if diff > 0.5:
-                        self._log(f"💡 提示: 当前资金 ({real_total_equity:.2f}) > 配置本金 ({self.initial_balance})。差额 {diff:.2f} U 即将进行【自动校准】。")
-                        # self._log(f"👉 如果这是您的初始本金，请在 config.json 中将 initial_balance_usdt 修改为 {real_total_equity:.2f} 以归零盈亏。")
+                    self._log(f"✅ 初始本金完美匹配: {self.smart_baseline:.2f} U")
+
         else:
             if not self.smart_baseline:
                 self.smart_baseline = real_total_equity

@@ -1,5 +1,8 @@
 import time
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None
 import logging
 from datetime import datetime
 
@@ -36,6 +39,15 @@ class HealthMonitor:
     def collect_system_metrics(self):
         """收集系统指标"""
         try:
+            # 如果 psutil 不存在，跳过系统指标收集
+            if psutil is None:
+                self.system_metrics = {
+                    'cpu_usage': 0,
+                    'memory_usage': 0,
+                    'uptime': time.time() - self.start_time
+                }
+                return
+
             # CPU 使用率
             cpu_usage = psutil.cpu_percent(interval=0.1)
             

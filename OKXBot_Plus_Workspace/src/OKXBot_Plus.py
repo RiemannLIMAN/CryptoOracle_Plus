@@ -383,17 +383,9 @@ async def main():
                 logger.info(line)
             
             # [Dynamic Interval]
-            # 如果市场活跃，尝试将轮询时间缩短到 30s
-            # 但如果用户配置的轮询间隔本来就小于 30s (例如 20s)，则保持用户的配置，不应减速
-            if has_active_opportunity:
-                target_interval = 30
-                if interval > target_interval:
-                    current_interval = target_interval
-                    logger.info(f"⚡ 检测到活跃行情/网格机会 (Active Mode)，临时加速轮询: {interval}s -> {current_interval}s")
-                else:
-                    current_interval = interval
-            else:
-                current_interval = interval
+            # 用户要求: 活跃行情的时候不要缩短分析时间，配置多少就按照多少
+            current_interval = interval
+
             
             # 5. 定期记录系统健康状态报告
             loop_count = getattr(main, 'loop_count', 0)
