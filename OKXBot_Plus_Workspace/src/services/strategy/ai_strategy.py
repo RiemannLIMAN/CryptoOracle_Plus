@@ -93,23 +93,23 @@ class DeepSeekAgent:
         if volatility_status == "LOW":
              return f"""
         【盈利优先原则 (Profit First) - 网格模式】
-        1. **区间套利**: 当前市场处于震荡期，请利用微小波动积累利润。不要期待大趋势。
-        2. **积少成多**: 允许赚取 0.5% - 1.0% 的小幅利润 (Scalping)。只要覆盖成本 ({break_even:.3f}%) 即可获利了结。
+        1. **区间套利**: 当前市场处于震荡期，请利用微小波动积累利润。
+        2. **不止盈原则**: 除非触及布林带上轨阻力位，否则不设固定止盈，让利润奔跑 (Run Profits)。
         3. **高抛低吸**: 在布林带下轨/支撑位买入，在上轨/压力位卖出。
         """
         elif volatility_status == "HIGH_CHOPPY":
              return """
         【盈利优先原则 (Profit First) - 均值回归模式】
         1. **极端猎杀**: 市场处于剧烈震荡。严禁追涨杀跌！只做"均值回归" (Mean Reversion)。
-        2. **反向操作**: 价格触及布林带上轨/超买区 -> **SELL** (做空/止盈)；触及下轨/超卖区 -> **BUY** (做多/止损)。
-        3. **快进快出**: 利润目标不宜过大，回归中轨即可减仓。
+        2. **反向操作**: 价格触及布林带上轨/超买区 -> **SELL** (做空)；触及下轨/超卖区 -> **BUY** (做多)。
+        3. **不止盈原则**: 不设固定 TP，依赖移动止损 (Trailing Stop) 锁住利润。
         """
         else:
              return f"""
         【盈利优先原则 (Profit First) - 趋势模式】
-        1. **严禁频繁反手 (No Flip Flop)**: 如果你在做"止损"(Stop Loss)，请优先建议 **amount=0** (仅平仓观望)。除非你有 90% 以上的把握确信这是"假突破+真反转"，否则严禁立即反手开新仓！
-        2. **拒绝小肉 (No Scalping)**: 不要为了赚 0.5% 的波动去冒 1% 的风险。我们是狙击手，不是高频刷单机器。
-        3. **趋势共振**: 在开新仓前，必须确认 大周期(趋势) 与 小周期(入场点) 共振。逆势接飞刀必须有极强的背离信号。
+        1. **无限利润 (No Take Profit)**: 我们的策略是"截断亏损，让利润奔跑"。**严禁设置固定止盈位 (TP=0)**。
+        2. **移动止损**: 依靠后端的 Trailing Stop 来保护利润。你只需要关注何时趋势反转或触发硬止损。
+        3. **趋势共振**: 在开新仓前，必须确认 大周期(趋势) 与 小周期(入场点) 共振。
         """
 
     def _build_funding_instruction(self, funding_rate):
@@ -324,31 +324,43 @@ class DeepSeekAgent:
         【狙击镜分析流程 (Sniper Scope)】
         请按以下步骤思考（体现在 reason 中）：
         1. **趋势预判**: 基于当前 K 线组合和量能，预测未来 4 小时的主流趋势（UP/DOWN/SIDEWAYS）及其概率。
-        2. **战场态势**: 当前是上涨趋势、下跌趋势还是垃圾震荡？(参考 ADX 和 EMA)
-        3. **关键位置**: 价格是否处于关键支撑/阻力位？
-        4. **寻找陷阱 (Trap)**: 是否出现"插针收回"、"假突破"等诱骗形态？这是最佳开火点！
-        5. **量能验证**: 上涨放量？下跌缩量？(Volume Ratio)
-        6. **最终扣动**: 
+        2. **形态识别 (三线战法 Three-Line Strike)**:
+           - **看涨三线 (Bullish Strike)**: 连续三根阴线后，出现一根吞没大阳线。 -> **HIGH CONFIDENCE BUY** (若做空立即反手)
+           - **看跌三线 (Bearish Strike)**: 连续三根阳线后，出现一根吞没大阴线。 -> **HIGH CONFIDENCE SELL** (若做多立即反手)
+        3. **战场态势**: 当前是上涨趋势、下跌趋势还是垃圾震荡？(参考 ADX 和 EMA)
+        4. **关键位置**: 价格是否处于关键支撑/阻力位？
+        5. **寻找陷阱 (Trap)**: 是否出现"插针收回"、"假突破"等诱骗形态？这是最佳开火点！
+        6. **量能验证**: 上涨放量？下跌缩量？(Volume Ratio)
+        7. **最终扣动**: 
            - 如果是"假摔"后拉回 -> **BUY** (反手做多)。
            - 如果是"诱多"后砸盘 -> **SELL** (反手做空)。
            - 如果看不懂 -> **HOLD**。
         """
 
-    def _build_surge_instruction(self, is_surge):
+    def _build_surge_instruction(self, is_surge, candlestick_pattern=None):
         """
         构建异动唤醒指令提示词
         """
         if is_surge:
-             return """
+             msg = """
         🚀 **异动唤醒模式 (Surge Mode Triggered)**
         检测到成交量爆增或价格剧烈波动，系统强制唤醒了你！
         1. **快速反应**: 现在的行情极快，请忽略常规的 ADX 限制。
         2. **顺势猎杀**: 这通常是捕捉"大长腿"(Long Leg)的最佳时机。
-        3. **快进快出 (Hit & Run)**: 异动通常不可持续。如果开仓，请务必设置较紧的动态止盈，或者在下一轮分析时果断平仓。
+        3. **快进快出 (Hit & Run)**: 异动通常不可持续。如果开仓，请务必设置较紧的动态止损，或者在下一轮分析时果断平仓。
         """
+             if candlestick_pattern:
+                 msg += f"""
+        ✨ **K线形态确认 (Pattern Confirmed)**:
+        Python 硬核算法检测到了 **{candlestick_pattern}** (三线战法)！
+        这是极高置信度的反转信号。
+        - BULLISH_STRIKE -> 强烈建议 BUY，止损设在形态最低点下方。
+        - BEARISH_STRIKE -> 强烈建议 SELL，止损设在形态最高点上方。
+        """
+             return msg
         return ""
 
-    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True, volatility_status="NORMAL", btc_change_24h=None, is_surge=False):
+    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True, volatility_status="NORMAL", btc_change_24h=None, is_surge=False, candlestick_pattern=None):
         """
         构建用户提示词
         """
@@ -368,7 +380,7 @@ class DeepSeekAgent:
         fund_status_msg, min_notional_info, min_limit_info = self._build_fund_status_message(balance, price_data)
         btc_instruction = self._build_btc_instruction(btc_change_24h)
         market_instruction = self._build_market_instruction()
-        surge_instruction = self._build_surge_instruction(is_surge)
+        surge_instruction = self._build_surge_instruction(is_surge, candlestick_pattern)
         
         # 计算最大可买数量 (简单估算)
         max_buy_token = 0
@@ -407,7 +419,7 @@ class DeepSeekAgent:
         {market_instruction}
         """
 
-    async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0, dynamic_tp=True, btc_change_24h=None, is_surge=False):
+    async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0, dynamic_tp=True, btc_change_24h=None, is_surge=False, candlestick_pattern=None):
         """
         调用 DeepSeek 进行市场分析
         """
@@ -424,7 +436,7 @@ class DeepSeekAgent:
                 position_text = f"{current_pos['side']}仓, 数量:{current_pos['size']}, 浮盈:{pnl:.2f}U"
 
             prompt = self._build_user_prompt(
-                symbol, timeframe, price_data, balance, position_text, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp, volatility_status, btc_change_24h, is_surge
+                symbol, timeframe, price_data, balance, position_text, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp, volatility_status, btc_change_24h, is_surge, candlestick_pattern
             )
 
             # self.logger.info(f"[{symbol}] ⏳ 请求 DeepSeek (Async)...")

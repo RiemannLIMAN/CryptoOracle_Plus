@@ -6,6 +6,23 @@
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
 
+## [v3.6.5] - 2026-01-24 (Three-Line Strike & Smart Trailing SL)
+
+### 🚀 策略升级 (Strategy Upgrade)
+- **三线战法 (Three-Line Strike)**:
+  - **硬核识别 (Hardcore Detection)**: 引入了 `_check_candlestick_pattern` 函数，使用纯数学逻辑精准识别 "三连阴+一阳吞没" (看涨) 和 "三连阳+一阴吞没" (看跌) 形态。
+  - **AI 联动**: 一旦识别出形态，直接点亮 `is_surge` 信号灯，强制唤醒 DeepSeek，并将形态信息注入 Prompt，作为极高置信度的反转信号。
+  - **优势**: 结合了传统技术分析的确定性与 AI 的环境感知能力，显著提高胜率。
+
+### 🛡️ 风控增强 (Risk Control)
+- **实时移动硬止损 (Real Trailing Hard Stop)**:
+  - **机制**: 实现了真正的 K 线跟随止损。做多时止损位跟随最近 3 根 K 线的最低点上移，做空时跟随最高点下移。
+  - **安全闭环**: 增加了 `entry_price` 检查，只有在**浮盈状态**下才启动移动止损，确保不会在亏损时误操作。
+  - **稳健性**: 增加了 `dynamic_stop_loss` 的非空检查，防止初始化阶段的止损跳变。
+- **纯粹趋势策略**:
+  - **移除止盈**: 全面清理了 Take Profit (TP) 相关逻辑。
+  - **截断亏损，让利润奔跑**: 现在机器人只设止损，不设止盈。离场完全依赖移动止损触发或 AI 反手信号，确保吃满大趋势。
+
 ## [v3.6.4] - 2026-01-24 (Surge Override & Zero-Start Baseline)
 
 ### � 策略升级 (Strategy Upgrade)

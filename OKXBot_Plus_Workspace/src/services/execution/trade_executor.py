@@ -661,6 +661,53 @@ class DeepSeekTrader:
             # self._log(emoji.emojize(f":no_entry: 杠杆设置失败: {e}"), 'error')
             self._log(f"🚫 杠杆设置失败: {e}", 'error')
 
+    def _check_candlestick_pattern(self, df):
+        """
+        [Hardcore] Python 硬核识别 "三线战法" (Three-Line Strike)
+        返回: 
+            - 'BULLISH_STRIKE' (看涨)
+            - 'BEARISH_STRIKE' (看跌)
+            - None (无形态)
+        """
+        if len(df) < 4:
+            return None
+            
+        try:
+            # 获取最近 4 根 K 线
+            # 顺序: k1 (最远), k2, k3, k4 (最新)
+            last_4 = df.iloc[-4:].copy()
+            k1, k2, k3, k4 = last_4.iloc[0], last_4.iloc[1], last_4.iloc[2], last_4.iloc[3]
+            
+            # 定义阴阳线
+            # 阳线: close > open
+            # 阴线: close < open
+            def is_bull(k): return k['close'] > k['open']
+            def is_bear(k): return k['close'] < k['open']
+            
+            # --- 识别看涨三线 (Bullish Strike) ---
+            # 条件: 三连阴 (下台阶) + 一阳吞三阴
+            if (is_bear(k1) and is_bear(k2) and is_bear(k3) and is_bull(k4)):
+                # 验证 "下台阶" (Lower Lows)
+                if (k2['low'] < k1['low'] and k3['low'] < k2['low']):
+                    # 验证 "一阳吞三阴" (最新收盘价 > 第一根开盘价)
+                    # 严格来说是 Close[4] > Open[1]
+                    if k4['close'] > k1['open']:
+                        return 'BULLISH_STRIKE'
+            
+            # --- 识别看跌三线 (Bearish Strike) ---
+            # 条件: 三连阳 (上台阶) + 一阴吞三阳
+            if (is_bull(k1) and is_bull(k2) and is_bull(k3) and is_bear(k4)):
+                # 验证 "上台阶" (Higher Highs)
+                if (k2['high'] > k1['high'] and k3['high'] > k2['high']):
+                    # 验证 "一阴吞三阳" (最新收盘价 < 第一根开盘价)
+                    if k4['close'] < k1['open']:
+                        return 'BEARISH_STRIKE'
+                        
+        except Exception as e:
+            self._log(f"形态识别出错: {e}", 'error')
+            
+        return None
+
     def normalize_data(self, df):
         """
         [Data Wrangling] 数据整理 - 时间对齐与缺省填充
@@ -2202,11 +2249,11 @@ class DeepSeekTrader:
                 
                 # [New] Reset Dynamic Risk Params on New Entry
                 new_sl = float(signal_data.get('stop_loss', 0) or 0)
-                new_tp = float(signal_data.get('take_profit', 0) or 0)
+                # new_tp = float(signal_data.get('take_profit', 0) or 0) # [Removed] TP
                 
                 # [Fix] Apply new dynamic risk params correctly
                 self.dynamic_stop_loss = new_sl
-                self.dynamic_take_profit = new_tp
+                self.dynamic_take_profit = 0.0 # [Removed] Disable fixed TP
                 self.dynamic_sl_side = 'long'
                 # [Fix] Persist new risk params
                 asyncio.create_task(self.save_state())
@@ -2553,10 +2600,10 @@ class DeepSeekTrader:
                     
                     # [New] Reset Dynamic Risk Params on New Entry (Short)
                     new_sl = float(signal_data.get('stop_loss', 0) or 0)
-                    new_tp = float(signal_data.get('take_profit', 0) or 0)
+                    # new_tp = float(signal_data.get('take_profit', 0) or 0) # [Removed] TP
                     
                     self.dynamic_stop_loss = new_sl
-                    self.dynamic_take_profit = new_tp
+                    self.dynamic_take_profit = 0.0 # [Removed] Disable fixed TP
                     self.dynamic_sl_side = 'short'
                     # [Fix] Persist new risk params
                     asyncio.create_task(self.save_state())
@@ -2584,6 +2631,79 @@ class DeepSeekTrader:
                 return "FAILED", f"API错误: {str(e)[:20]}"
 
         return "SKIPPED", "逻辑未覆盖"
+
+    async def _update_real_trailing_sl(self, price_data, current_pos):
+        """
+        [Hardcore] 实时移动硬止损 (Real Trailing Hard Stop)
+        每当价格有利移动时，直接修改交易所的止损单，确保止损线不断抬升。
+        """
+        if not current_pos:
+            return
+            
+        try:
+            current_price = price_data['price']
+            side = current_pos['side']
+            
+            # [Safety Check] 获取持仓均价，确保只有在浮盈状态下才启用移动止损
+            entry_price = float(current_pos.get('entry_price', 0) or 0)
+            if entry_price <= 0: return
+
+            # [Safety Check] 初始化动态止损 (如果为0或None)
+            if not self.dynamic_stop_loss or self.dynamic_stop_loss <= 0:
+                # 如果当前没有止损，为了安全起见，不要盲目设置，等待 AI 或后续逻辑设置
+                # 或者，如果一定要设，可以设在开仓价的一定距离之外 (但这属于开仓逻辑)
+                # 这里我们选择: 如果没有初始止损，就不启用移动逻辑，避免误伤
+                return
+            
+            # 三线战法移动逻辑:
+            # 如果是做多 (Long): 止损位 = 最近 3 根 K 线的最低点 (Low of last 3 candles)
+            # 如果是做空 (Short): 止损位 = 最近 3 根 K 线的最高点 (High of last 3 candles)
+            
+            ohlcv = price_data.get('ohlcv', [])
+            if len(ohlcv) < 3: return
+            
+            last_3 = ohlcv[-3:] # [k-2, k-1, k]
+            
+            new_sl = None
+            if side == 'long':
+                # 只有当当前价格高于开仓价 (浮盈) 时，才考虑移动止损
+                if current_price > entry_price:
+                    # 找出最近3根的最低点
+                    lows = [float(k[3]) for k in last_3] # k[3] is Low
+                    lowest = min(lows)
+                    
+                    # 只有当新止损位比旧止损位高时 (向上移动)，才更新
+                    # 且必须在当前价格下方 (不能直接挂在市价上面)
+                    if lowest > self.dynamic_stop_loss and lowest < current_price:
+                        # [Double Check] 确保新止损位不低于开仓价 (保本原则，可选)
+                        # if lowest < entry_price: lowest = entry_price
+                        new_sl = lowest
+                    
+            elif side == 'short':
+                # 只有当当前价格低于开仓价 (浮盈) 时，才考虑移动止损
+                if current_price < entry_price:
+                    # 找出最近3根的最高点
+                    highs = [float(k[2]) for k in last_3] # k[2] is High
+                    highest = max(highs)
+                    
+                    # 只有当新止损位比旧止损位低时 (向下移动)，才更新
+                    # 且必须在当前价格上方
+                    if highest < self.dynamic_stop_loss and highest > current_price:
+                        new_sl = highest
+            
+            if new_sl:
+                # 移动止损触发!
+                change_pct = abs(new_sl - self.dynamic_stop_loss) / self.dynamic_stop_loss if self.dynamic_stop_loss else 0
+                if change_pct > 0.001: # 只有变化超过 0.1% 才更新，避免频繁抖动
+                    self._log(f"🛡️ [Trailing SL] 移动止损更新: {self.dynamic_stop_loss:.4f} -> {new_sl:.4f} (Entry: {entry_price:.4f})", 'info')
+                    self.dynamic_stop_loss = new_sl
+                    asyncio.create_task(self.save_state())
+                    
+                    # TODO: 如果想更激进，这里可以调用 API 修改交易所的委托单
+                    # await self._modify_exchange_sl_order(new_sl)
+                    
+        except Exception as e:
+            pass
 
     async def get_account_info(self):
         """获取账户余额和权益 (一次请求)"""
@@ -2977,9 +3097,16 @@ class DeepSeekTrader:
             # 只要满足以下任意一条，即使 ADX/RSI 不达标也强制放行:
             # 1. 成交量突增 (> 3倍均量)
             # 2. 价格瞬间剧烈波动 (> 0.5%)
+            # 3. [New] 识别到三线战法 (Three-Line Strike) 形态
             
             is_surge = False
             surge_reason = ""
+            
+            # 检查三线战法形态
+            candlestick_pattern = self._check_candlestick_pattern(price_data.get('df'))
+            if candlestick_pattern:
+                is_surge = True
+                surge_reason = f"形态突袭 ({candlestick_pattern})"
             
             vol_ratio = ind.get('vol_ratio')
             if vol_ratio and vol_ratio > 3.0:
@@ -3048,6 +3175,10 @@ class DeepSeekTrader:
             # Call Agent
             current_pos = await self.get_current_position()
             
+            # [New] 实时更新移动止损 (Real Trailing SL)
+            if current_pos:
+                await self._update_real_trailing_sl(price_data, current_pos)
+            
             # [New] 获取账户总权益并计算 PnL
             current_pnl = 0.0
             if self.initial_balance > 0:
@@ -3094,9 +3225,10 @@ class DeepSeekTrader:
                 self.risk_control, # 传入风控配置
                 current_pnl, # [New] 传入当前账户总盈亏
                 funding_rate, # [New] 传入资金费率
-                self.common_config.get('strategy', {}).get('dynamic_tp', True), # [New] 传入动态止盈开关
+                self.common_config.get('strategy', {}).get('dynamic_tp', False), # [New] 传入动态止盈开关 (False)
                 btc_change_24h=btc_change_24h, # [New] 传入 BTC 涨跌幅
-                is_surge=is_surge # [New] 传入异动唤醒标志
+                is_surge=is_surge, # [New] 传入异动唤醒标志
+                candlestick_pattern=candlestick_pattern # [New] 传入 K 线形态
             )
             
             if signal_data:

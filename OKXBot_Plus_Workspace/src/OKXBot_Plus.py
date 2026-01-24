@@ -18,7 +18,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.6.4 (Test Mode Funding Fix)"
+SYSTEM_VERSION = "v3.6.5 (Three-Line Strike & Smart Trailing SL)"
 
 BANNER = r"""
    _____                  __           ____                  __   
