@@ -238,6 +238,13 @@ async def main():
     elif 'ms' in timeframe: interval = int(timeframe.replace('ms', '')) / 1000
     elif 's' in timeframe: interval = int(timeframe.replace('s', ''))
     
+    # [Hardcore Fix] 强制 30秒 心跳
+    # 无论 timeframe 是多少 (5m, 1h)，我们都希望机器人保持高频活跃
+    # 这样才能实时触发 Trailing Stop 和 Breakeven
+    if interval > 30:
+        logger.info(f"⚡ [Speed Up] 检测到 K线周期 ({timeframe}) 较长，强制将轮询间隔从 {interval}s 缩短为 30s 以保持敏捷")
+        interval = 30
+    
     # [方案 A] 强制使用 loop_interval (如果存在)，与 timeframe 解耦
     # 这样可以实现：Timeframe="15m" (看15分钟图)，但每 15秒 (loop_interval) 检查一次
     custom_interval = config['trading'].get('loop_interval')

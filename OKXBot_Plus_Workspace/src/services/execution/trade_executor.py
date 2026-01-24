@@ -2235,7 +2235,7 @@ class DeepSeekTrader:
                         limit_price, 
                         params=buy_params
                     )
-                    self._log(f"🚀 买入成功: {final_order_amount} (模式: {self.trade_mode})")
+                    # self._log(f"🚀 买入成功: {final_order_amount} (模式: {self.trade_mode})")
                 except Exception as e:
                     if "51008" in str(e) or "Insufficient" in str(e): # Insufficient balance/margin
                          # [Retry] 如果是精度导致的余额不足 (比如算出来 0.76 但最小 1)，或者滑点导致
@@ -2287,8 +2287,10 @@ class DeepSeekTrader:
                 msg += f"• 交易对: {self.symbol}\n"
                 msg += f"• 数量: {trade_amount} 币 ({final_order_amount} 张)\n"
                 msg += f"• 价格: ${current_realtime_price:,.2f}\n"
-                msg += f"• 理由: {signal_data['reason']}\n"
-                msg += f"• 信心: {signal_data.get('confidence', 'N/A')}"
+                msg += f"• 理由: {signal_data['reason'][:50]}..." # Truncate reason
+                
+                self._log(f"🚀 买入成功: {trade_amount} @ {current_realtime_price:.4f} | 理由: {signal_data['reason'][:30]}...", 'info')
+                
                 # [Fix] 飞书推送 Title 增强
                 await self.send_notification(msg, title=f"🚀 买入执行 | {self.symbol}")
                 return "EXECUTED", f"买入 {trade_amount}"
@@ -2636,12 +2638,13 @@ class DeepSeekTrader:
                     post_balance = await self.get_account_balance()
                     est_cost = trade_amount * current_realtime_price
                     
-                    msg = f"**数量**: `{trade_amount}` Coins\n"
-                    msg += f"**价格**: `${current_realtime_price:,.2f}`\n"
-                    msg += f"**金额**: `{est_cost:.2f} U`\n"
-                    msg += f"**余额**: `{post_balance:.2f} U` (Avail)\n"
-                    msg += f"**信心**: `{signal_data.get('confidence', 'N/A')}`\n"
-                    msg += f"> **理由**: {signal_data['reason']}"
+                    msg = f"📉 **开空执行 (SELL)**\n"
+                    msg += f"• 交易对: {self.symbol}\n"
+                    msg += f"• 数量: {trade_amount} Coins ({final_order_amount} sz)\n"
+                    msg += f"• 价格: ${current_realtime_price:,.2f}\n"
+                    msg += f"• 理由: {signal_data['reason'][:50]}..." # Truncate reason
+                    
+                    self._log(f"📉 开空成功: {trade_amount} @ {current_realtime_price:.4f} | 理由: {signal_data['reason'][:30]}...", 'info')
                     
                     await self.send_notification(msg, title=f"📉 开空执行 | {self.symbol}")
                     return "EXECUTED", f"开空 {trade_amount}"
@@ -2683,6 +2686,25 @@ class DeepSeekTrader:
             # 三线战法移动逻辑:
             # 如果是做多 (Long): 止损位 = 最近 3 根 K 线的最低点 (Low of last 3 candles)
             # 如果是做空 (Short): 止损位 = 最近 3 根 K 线的最高点 (High of last 3 candles)
+            
+            # [New] Breakeven Logic (保本优先)
+            # 当浮盈达到 2% (BEAT 高波动推荐) 时，强制把止损提到开仓价
+            breakeven_trigger_pct = 0.02 
+            if pnl_pct > breakeven_trigger_pct:
+                 breakeven_price = entry_price * (1.001 if side == 'long' else 0.999) # +0.1% to cover fees
+                 
+                 should_update_be = False
+                 if side == 'long' and breakeven_price > self.dynamic_stop_loss:
+                     should_update_be = True
+                 elif side == 'short' and breakeven_price < self.dynamic_stop_loss:
+                     should_update_be = True
+                 elif self.dynamic_stop_loss == 0: # 初始状态
+                     should_update_be = True
+                     
+                 if should_update_be:
+                     self._log(f"🛡️ [Breakeven] 浮盈达标 ({pnl_pct*100:.1f}%) -> 强制保本: {breakeven_price:.4f}", 'info')
+                     self.dynamic_stop_loss = breakeven_price
+                     # 这里不 return，允许下方的 trailing 逻辑继续尝试能不能提得更高
             
             ohlcv = price_data.get('ohlcv', [])
             if len(ohlcv) < 3: return
