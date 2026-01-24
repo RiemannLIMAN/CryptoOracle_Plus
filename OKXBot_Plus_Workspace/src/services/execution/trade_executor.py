@@ -661,18 +661,31 @@ class DeepSeekTrader:
             # self._log(emoji.emojize(f":no_entry: 杠杆设置失败: {e}"), 'error')
             self._log(f"🚫 杠杆设置失败: {e}", 'error')
 
-    def _check_candlestick_pattern(self, df):
+    def _check_candlestick_pattern(self, data_input):
         """
         [Hardcore] Python 硬核识别 "三线战法" (Three-Line Strike)
+        支持输入: DataFrame 或 包含 'kline_data' 的字典
         返回: 
             - 'BULLISH_STRIKE' (看涨)
             - 'BEARISH_STRIKE' (看跌)
             - None (无形态)
         """
-        if len(df) < 4:
-            return None
-            
+        df = None
         try:
+            # 1. 如果输入是 DataFrame，直接使用
+            if isinstance(data_input, pd.DataFrame):
+                df = data_input
+            # 2. 如果输入是字典 (price_data)，尝试提取 df 或 kline_data
+            elif isinstance(data_input, dict):
+                if 'df' in data_input and isinstance(data_input['df'], pd.DataFrame):
+                    df = data_input['df']
+                elif 'kline_data' in data_input:
+                    # Fallback: 从 kline_data (list of dicts) 重构 DataFrame
+                    df = pd.DataFrame(data_input['kline_data'])
+            
+            if df is None or len(df) < 4:
+                return None
+            
             # 获取最近 4 根 K 线
             # 顺序: k1 (最远), k2, k3, k4 (最新)
             last_4 = df.iloc[-4:].copy()
@@ -681,30 +694,31 @@ class DeepSeekTrader:
             # 定义阴阳线
             # 阳线: close > open
             # 阴线: close < open
-            def is_bull(k): return k['close'] > k['open']
-            def is_bear(k): return k['close'] < k['open']
+            def is_bull(k): return float(k['close']) > float(k['open'])
+            def is_bear(k): return float(k['close']) < float(k['open'])
             
             # --- 识别看涨三线 (Bullish Strike) ---
             # 条件: 三连阴 (下台阶) + 一阳吞三阴
             if (is_bear(k1) and is_bear(k2) and is_bear(k3) and is_bull(k4)):
                 # 验证 "下台阶" (Lower Lows)
-                if (k2['low'] < k1['low'] and k3['low'] < k2['low']):
+                if (float(k2['low']) < float(k1['low']) and float(k3['low']) < float(k2['low'])):
                     # 验证 "一阳吞三阴" (最新收盘价 > 第一根开盘价)
                     # 严格来说是 Close[4] > Open[1]
-                    if k4['close'] > k1['open']:
+                    if float(k4['close']) > float(k1['open']):
                         return 'BULLISH_STRIKE'
             
             # --- 识别看跌三线 (Bearish Strike) ---
             # 条件: 三连阳 (上台阶) + 一阴吞三阳
             if (is_bull(k1) and is_bull(k2) and is_bull(k3) and is_bear(k4)):
                 # 验证 "上台阶" (Higher Highs)
-                if (k2['high'] > k1['high'] and k3['high'] > k2['high']):
+                if (float(k2['high']) > float(k1['high']) and float(k3['high']) > float(k2['high'])):
                     # 验证 "一阴吞三阳" (最新收盘价 < 第一根开盘价)
-                    if k4['close'] < k1['open']:
+                    if float(k4['close']) < float(k1['open']):
                         return 'BEARISH_STRIKE'
                         
         except Exception as e:
-            self._log(f"形态识别出错: {e}", 'error')
+            # self._log(f"形态识别出错: {e}", 'error')
+            pass
             
         return None
 
@@ -717,12 +731,26 @@ class DeepSeekTrader:
             if df.empty: return df
             
             # [Fix] 去重：确保时间戳唯一 (Duplicate Labels Check)
-            # 如果出现重复时间戳，保留最后一个 (通常是修正后的数据)
+            # [Hardcore Fix] 强制时间戳取整对齐，彻底消除毫秒级微小差异导致的 Duplicate Label
+            # 例如: 10:00:00.001 和 10:00:00.002 会被统一为 10:00:00
+            
+            # 1. 确保是 datetime 类型
             if 'timestamp' in df.columns:
-                df = df.drop_duplicates(subset=['timestamp'], keep='last')
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
             else:
-                # 如果已经是 index，重置后再去重
-                df = df.reset_index().drop_duplicates(subset=['timestamp'], keep='last').set_index('timestamp')
+                df = df.reset_index()
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            # 2. 强制 Rounding (根据 timeframe 动态调整)
+            # 这里统一 Round 到 '1s' 精度，足以应付所有 K 线 (最小 1m)
+            # 如果是毫秒级高频 K 线，可能需要调整，但 CCXT 最小也是 1m
+            df['timestamp'] = df['timestamp'].dt.floor('1s')
+            
+            # 3. 再次去重 (这次是基于 Round 后的时间戳)
+            df = df.drop_duplicates(subset=['timestamp'], keep='last')
+            
+            # 4. 设置索引
+            df = df.set_index('timestamp').sort_index()
             
             # 1. 转换 Timeframe 为 Pandas Offset
             # CCXT: 1m, 5m, 1h, 1d, 1w
@@ -736,20 +764,12 @@ class DeepSeekTrader:
             
             if not freq: return df # 不支持的周期，跳过
             
-            # 2. 设置时间索引
-            if 'timestamp' in df.columns:
-                df = df.set_index('timestamp').sort_index()
-            else:
-                df = df.sort_index() # 确保排序
-            
             # [Fix] 再次去重 (Just in case index still has duplicates)
             df = df[~df.index.duplicated(keep='last')]
             
             # 3. 重采样 (Resample) - 强制对齐时间网格
             # 使用 asfreq() 插入缺失行 (值为 NaN)
             df_resampled = df.resample(freq).asfreq()
-            
-            # 4. 填充缺失值 (Gap Filling)
             # 规则: 
             # - Close: 沿用上一个 Close (Forward Fill)
             # - Open/High/Low: 既然无成交，价格应等于 Close (画十字星)
@@ -956,16 +976,30 @@ class DeepSeekTrader:
         # [Merge] 合并本地数据与新数据
         df = df_new
         if local_klines:
-            df_local = pd.DataFrame(local_klines)
-            # 确保 timestamp 类型一致
-            df_local['timestamp'] = pd.to_datetime(df_local['timestamp'])
-            
-            # 合并并去重 (以 timestamp 为准)
-            # [Fix] keep='last' to prefer new API data over local stale data
-            # 如果时间戳冲突，说明本地存的是之前的"未收盘"快照，必须用新的覆盖
-            df = pd.concat([df_local, df_new]).drop_duplicates(subset=['timestamp'], keep='last').sort_values('timestamp')
-            # 保持长度在合理范围 (例如 500)
-            df = df.tail(500)
+            try:
+                df_local = pd.DataFrame(local_klines)
+                # 确保 timestamp 类型一致
+                df_local['timestamp'] = pd.to_datetime(df_local['timestamp'])
+                
+                # 合并并去重 (以 timestamp 为准)
+                # [Fix] keep='last' to prefer new API data over local stale data
+                # 如果时间戳冲突，说明本地存的是之前的"未收盘"快照，必须用新的覆盖
+                df = pd.concat([df_local, df_new]).drop_duplicates(subset=['timestamp'], keep='last').sort_values('timestamp')
+                
+                # [New] 双重去重保险：如果 concat 后的索引出现重复
+                if df.duplicated(subset=['timestamp']).any():
+                     self._log("⚠️ 检测到重复时间戳，强制去重...", 'warning')
+                     df = df.drop_duplicates(subset=['timestamp'], keep='last')
+
+                # [Clean] 清洗本地脏数据：如果出现非时间戳的异常行，强制删除
+                # 有时候数据库损坏会导致 null 或 0 时间戳
+                df = df[df['timestamp'].notna()]
+                
+                # 保持长度在合理范围 (例如 500)
+                df = df.tail(500)
+            except Exception as e:
+                self._log(f"合并本地K线失败: {e}", 'warning')
+                df = df_new # Fallback to API data only
         
         # 维护历史 K 线记录
         self.price_history = df.tail(100).to_dict('records')
@@ -977,6 +1011,12 @@ class DeepSeekTrader:
         
         # 计算指标
         df = self.calculate_indicators(df)
+        
+        # [Fix] 如果指标计算失败 (df 长度过短或异常)，直接返回 None
+        # 否则后续访问 indicators['obv'] 会报错
+        if 'obv' not in df.columns:
+            self._log("指标计算异常: OBV 列缺失", 'warning')
+            return None
         
         # [Fix] 先计算指标字典，用于确定 volatility_status
         current_data = df.iloc[-1]
@@ -1018,7 +1058,10 @@ class DeepSeekTrader:
         df.loc[df.index[-1], 'volatility_status'] = vol_status
 
         # [New] 异步保存 K 线数据 (现在包含了 volatility_status)
-        asyncio.create_task(self.data_manager.save_klines(self.symbol, self.timeframe, df.tail(1)))
+        # [Fix] 显式重置索引，确保 timestamp 作为普通列传递给 save_klines
+        # 因为前面 set_index 导致 timestamp 变成了索引，直接 row['timestamp'] 会报错
+        df_to_save = df.tail(1).reset_index()
+        asyncio.create_task(self.data_manager.save_klines(self.symbol, self.timeframe, df_to_save))
 
         # 显式传递最小交易单位给 AI
         min_limit_info = "0.01"
@@ -1090,7 +1133,8 @@ class DeepSeekTrader:
             'timeframe': self.timeframe,
             'price_change': ((current_data['close'] - previous_data['close']) / previous_data['close']) * 100,
             # 这里改为使用 dynamic feed_limit
-            'kline_data': df[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'vol_ratio', 'obv']].tail(feed_limit).to_dict('records'),
+            # [Fix] 显式重置索引，否则 to_dict('records') 会丢失 timestamp
+            'kline_data': df.tail(feed_limit).reset_index()[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'vol_ratio', 'obv']].to_dict('records'),
             'indicators': indicators,
             'min_limit_info': min_limit_info,
             'min_notional_info': min_notional_info,
@@ -1105,6 +1149,10 @@ class DeepSeekTrader:
         # 缓存时间根据时间周期调整
         cache_ttl = 30 if 'm' in self.timeframe else 60
         cache_manager.set(cache_key, result, ttl=cache_ttl)
+        
+        # [New] Attach DataFrame object to result for immediate use (NOT cached)
+        # This allows _check_candlestick_pattern to use the DataFrame directly
+        result['df'] = df
         
         return result
 
@@ -3116,7 +3164,7 @@ class DeepSeekTrader:
             surge_reason = ""
             
             # 检查三线战法形态
-            candlestick_pattern = self._check_candlestick_pattern(price_data.get('df'))
+            candlestick_pattern = self._check_candlestick_pattern(price_data)
             if candlestick_pattern:
                 is_surge = True
                 surge_reason = f"形态突袭 ({candlestick_pattern})"
