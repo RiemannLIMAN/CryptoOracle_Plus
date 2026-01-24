@@ -371,7 +371,12 @@ async def main():
                     summary_text = res.get('summary', '')
                     if not summary_text or len(summary_text) == 0:
                         reason = res['reason'].replace('\n', ' ')
-                        summary_text = (reason[:40] + '...') if len(reason) > 40 else reason
+                        summary_text = reason
+                    
+                    # [Optimization] 如果理由太长被表格截断，先在上面打印完整版
+                    if len(summary_text) > 40:
+                        logger.info(f"📜 [详细理由] {symbol_str}: {summary_text}")
+                        summary_text = summary_text[:40] + '...'
                     
                     price_str = f"${res['price']:,.2f}"
                     
