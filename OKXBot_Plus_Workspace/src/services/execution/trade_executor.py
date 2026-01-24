@@ -59,7 +59,9 @@ class DeepSeekTrader:
             self.taker_fee_rate = 0.0005
             self.maker_fee_rate = 0.0002
 
-        self.risk_control = common_config.get('risk_control', {})
+        # 深拷贝risk_control，确保每个交易对的配置是独立的，避免累积分配问题
+        import copy
+        self.risk_control = copy.deepcopy(common_config.get('risk_control', {}))
         self.initial_balance = self.risk_control.get('initial_balance_usdt', 0)
         self.notification_config = common_config.get('notification', {})
         
@@ -122,6 +124,10 @@ class DeepSeekTrader:
                          self.sim_balance = self.initial_balance * self.allocation
                      elif isinstance(self.allocation, (int, float)) and self.allocation > 1.0:
                          self.sim_balance = self.allocation
+                     elif isinstance(self.allocation, str) and self.allocation == 'auto':
+                         # For auto allocation, use actual active symbols count
+                         symbols_count = max(1, self.active_symbols_count)
+                         self.sim_balance = self.initial_balance / symbols_count
                      
                  self._log(f"🧪 模拟资金初始化: {self.sim_balance:.2f} U")
 

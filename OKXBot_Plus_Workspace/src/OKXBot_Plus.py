@@ -45,11 +45,17 @@ async def run_system_check(logger, exchange, agent, config):
         # 1. 检查 OKX 连接
         total_usdt = 0
         free_usdt = 0
+        balance = {}  # 初始化 balance 变量，确保测试模式下也有定义
         
         if test_mode:
             # 测试模式下使用模拟资金
-            total_usdt = 10000.00
-            free_usdt = 10000.00
+            # 优先使用配置文件中的初始资金值
+            if 'risk_control' in config and 'initial_balance_usdt' in config['risk_control']:
+                total_usdt = float(config['risk_control']['initial_balance_usdt'])
+                free_usdt = total_usdt
+            else:
+                total_usdt = 10000.00
+                free_usdt = 10000.00
             logger.info("✅ 测试模式: 模拟资金初始化")
         else:
             # 实盘模式下从交易所获取真实余额

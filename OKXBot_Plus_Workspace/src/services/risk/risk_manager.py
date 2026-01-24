@@ -60,16 +60,10 @@ class RiskManager:
         self.is_initialized = False # [Fix] 强制初始化标记，确保每次重启都重新校准 offset
 
     def load_state(self):
-        if os.path.exists(self.state_file):
-            try:
-                with open(self.state_file, 'r', encoding='utf-8') as f:
-                    state = json.load(f)
-                    self.smart_baseline = state.get('smart_baseline')
-                self.deposit_offset = state.get('deposit_offset', 0.0) # 恢复 offset
-                if self.smart_baseline:
-                    self.logger.info(f"🔄 已恢复历史基准资金: {self.smart_baseline:.2f} U (闲置抵扣: {self.deposit_offset:.2f} U)")
-            except Exception as e:
-                self.logger.warning(f"⚠️ 加载状态失败: {e}")
+        # 不加载历史基准资金，始终使用配置文件中的初始资金
+        self.smart_baseline = None
+        self.deposit_offset = 0.0
+        self.logger.info("✅ 使用配置文件中的初始资金，不加载历史基准")
 
     def save_state(self):
         try:
@@ -440,10 +434,12 @@ class RiskManager:
             found_usdt = False
             used_total_eq = False
             if self.is_test_mode:
+                # 测试模式下，使用所有交易对的sim_balance总和作为total_equity
+                # 不包含未实现盈亏，避免权益计算错误
                 eq_sum = 0.0
                 for t in self.traders:
-                    _, e = await t.get_account_info()
-                    eq_sum += e
+                    sim_bal, _ = await t.get_account_info()
+                    eq_sum += sim_bal
                 total_equity = eq_sum
                 found_usdt = True
                 used_total_eq = True

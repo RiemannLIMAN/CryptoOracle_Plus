@@ -12,10 +12,10 @@
   },
   "trading": {
     "market_type": "swap",      
-    "timeframe": "1m",
+    "timeframe": "15m",
     "test_mode": true,
     
-    "proxy": "",
+    "proxy": "http://127.0.0.1:61440",
     "max_slippage_percent": 1.0,
     "min_confidence": "MEDIUM",
 

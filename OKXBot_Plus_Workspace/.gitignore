@@ -24,9 +24,8 @@ png/
 *.log
 
 # Runtime Data
-data/bot_state.json
-data/pnl_history_sim.csv
-data/trade_data_*
+data/*
+!data/.gitkeep
 
 
 # PyInstaller / Build
