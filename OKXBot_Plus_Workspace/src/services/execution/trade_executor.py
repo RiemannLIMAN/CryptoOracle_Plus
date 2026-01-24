@@ -1098,16 +1098,6 @@ class DeepSeekTrader:
         # [New] Determine Volatility Status for AI Persona
         # 这一步非常关键：它决定了 AI 是"趋势猎人"还是"网格交易员"
         # [Fix] Already calculated above
-        # vol_status = "NORMAL"
-        # atr_r = indicators['atr_ratio'] if indicators['atr_ratio'] is not None else 1.0
-        # adx_val = indicators['adx'] if indicators['adx'] is not None else 25.0
-        # 
-        # if atr_r < 0.6:
-        #     vol_status = "LOW" # 死鱼盘 -> 网格模式
-        # elif adx_val > 30:
-        #     vol_status = "HIGH_TREND" # 强趋势 -> 趋势模式
-        # elif atr_r > 1.5:
-        #     vol_status = "HIGH_CHOPPY" # 剧烈震荡 -> 均值回归模式
         
         # [Real-time Correction] 实时 Tick 修正
         # 获取最新成交价，计算其与 K 线收盘价的偏离度
@@ -1702,45 +1692,15 @@ class DeepSeekTrader:
         # 这里的 allocation 已经是经过 _auto_detect_strategy_mode 修正过的值
         # 如果 <= 1.0 (例如 0.98 或 0.33)
         if alloc_ratio <= 1.0:
-            # 1. 信心因子 (Confidence Factor)
-            confidence_factor = 1.0
-            conf_str = signal_data.get('confidence', '').upper()
+            # [Hardcore Full-Port] 用户强制要求全仓模式
+            # 无论 ATR/Confidence 如何，只要下单，就打满 99% 的可用资金
+            final_ratio = alloc_ratio # Base allocation (usually 1.0)
             
-            # [Optimization] 小资金狙击模式下，只要信心够(HIGH/MEDIUM)，就尽量满仓，不打折
-            # 防止 25U 本金 * 0.98 * 0.8 = 19.6U，导致资金利用率下降
-            is_sniper_mode = (base_capital < 100) and (alloc_ratio > 0.9)
+            # 但如果 allocation 确实被手动设得很低 (例如 0.5)，我们还是尊重它作为上限
+            # 这里的逻辑是：移除所有的 confidence_factor 和 volatility_penalty 折扣
             
-            if not is_sniper_mode:
-                if conf_str == 'LOW': 
-                    confidence_factor = 0.4 # 低信心只开 40% 仓位
-                elif conf_str == 'MEDIUM': 
-                    confidence_factor = 0.8 # 中信心开 80% 仓位
-            else:
-                 # 狙击模式：MEDIUM/HIGH 都是 1.0，只有 LOW 才会降仓 (但 HIGH 模式下 LOW 会被过滤)
-                 if conf_str == 'LOW':
-                     confidence_factor = 0.5
-            
-            # 2. 波动率惩罚 (ATR Ratio)
-            # ... (保留原有逻辑)
-            # 如果 ATR Ratio > 2.0 (极端波动)，风险极高，仓位减半
-            # 如果 ATR Ratio < 0.5 (死鱼盘)，仓位也适当减小，避免资金占用效率低
-            volatility_penalty = 1.0
-            atr_ratio = 1.0
-            try:
-                # [Fix] 从 self.last_indicators 获取 ATR Ratio
-                if hasattr(self, 'last_indicators') and self.last_indicators:
-                    atr_ratio = self.last_indicators.get('atr_ratio', 1.0)
-                    if atr_ratio > 2.0:
-                        volatility_penalty = 0.6
-                        self._log(f"⚠️ ATR过高 ({atr_ratio:.2f}) -> 仓位惩罚 0.6x", 'info')
-                    elif atr_ratio < 0.5:
-                        volatility_penalty = 0.8
-                        self._log(f"💤 ATR过低 ({atr_ratio:.2f}) -> 仓位惩罚 0.8x", 'info')
-            except:
-                pass
-                
-            final_ratio = alloc_ratio * confidence_factor * volatility_penalty
-            self._log(f"🧠 [Smart Sizing] 动态仓位: Base {alloc_ratio} * Conf {confidence_factor} = {final_ratio:.2f}")
+            # self._log(f"🧠 [Smart Sizing] 动态仓位: Base {alloc_ratio} * Conf {confidence_factor} = {final_ratio:.2f}")
+            self._log(f"🔥 [Full Port Mode] 强制全仓出击: 忽略波动率与信心折扣 ({final_ratio*100}%)", 'info')
             
             allocation_usdt_limit = base_capital * final_ratio
         else:
@@ -1876,11 +1836,15 @@ class DeepSeekTrader:
                  self._log(f"🔄 检测到反手信号，预估释放资金: {available_capital:.2f} U")
             
             # 计算物理最大可开仓数量 (Physical Max)
+            # [Full Port] 即使是梭哈，也必须预留 2% 资金作为手续费和滑点缓冲
+            # 否则一旦市场波动，可能会因为保证金不足而开仓失败
+            buffer_rate = 0.98 
+            
             max_physical_token = 0
             if self.trade_mode == 'cash':
-                 max_physical_token = (available_capital * 0.90) / current_realtime_price
+                 max_physical_token = (available_capital * buffer_rate) / current_realtime_price
             else:
-                 max_physical_token = (available_capital * self.leverage * 0.90) / current_realtime_price
+                 max_physical_token = (available_capital * self.leverage * buffer_rate) / current_realtime_price
             
             trade_amount = min(ai_suggest, max_physical_token)
             
@@ -2928,28 +2892,9 @@ class DeepSeekTrader:
                         return {'symbol': self.symbol, 'type': 'STOP_LOSS_AI', 'price': current_price}
 
                 # Dynamic Take Profit
-                if self.dynamic_take_profit > 0:
-                    should_tp = False
-                    if pos['side'] == 'long' and current_price >= self.dynamic_take_profit:
-                        should_tp = True
-                    elif pos['side'] == 'short' and current_price <= self.dynamic_take_profit:
-                        should_tp = True
-                    
-                    if should_tp:
-                        self._log(f"💰 [WATCHDOG] 触发 AI 动态止盈: Price {current_price} hit TP {self.dynamic_take_profit}", 'info')
-                        fake_signal = {
-                            'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
-                            'confidence': 'HIGH', 
-                            'amount': pos['size'], 
-                            'reason': f"AI动态止盈触发: {current_price} vs {self.dynamic_take_profit}"
-                        }
-                        await self.execute_trade(fake_signal)
-                        return {'symbol': self.symbol, 'type': 'TAKE_PROFIT_AI', 'price': current_price}
+                # [Removed] Per user instruction: No Take Profit, only Stop Loss
+                pass
 
-            # [New] 添加止盈监控
-            # 注意: AI 可能会在 analyze() 中给出动态止盈建议，但这里我们先检查配置的硬性止盈
-            max_profit_rate = float(self.risk_control.get('max_profit_rate', 0))
-            
             if self.risk_control.get('max_loss_rate'):
                 max_loss = float(self.risk_control['max_loss_rate'])
                 if pnl_pct <= -max_loss:
@@ -2967,25 +2912,6 @@ class DeepSeekTrader:
                     return {
                         'symbol': self.symbol,
                         'type': 'STOP_LOSS',
-                        'pnl': pnl_pct
-                    }
-            
-            # [New] 硬止盈逻辑
-            if max_profit_rate > 0:
-                if pnl_pct >= max_profit_rate:
-                    self._log(f"💰 [WATCHDOG] 触发硬止盈: 当前盈利 {pnl_pct*100:.2f}% (阈值 +{max_profit_rate*100}%)", 'info')
-                    
-                    fake_signal = {
-                        'signal': 'SELL' if pos['side'] == 'long' else 'BUY', 
-                        'confidence': 'HIGH', 
-                        'amount': pos['size'], 
-                        'reason': f"硬止盈触发: Profit {pnl_pct*100:.2f}%"
-                    }
-                    
-                    await self.execute_trade(fake_signal)
-                    return {
-                        'symbol': self.symbol,
-                        'type': 'TAKE_PROFIT',
                         'pnl': pnl_pct
                     }
             
