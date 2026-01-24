@@ -716,6 +716,14 @@ class DeepSeekTrader:
         try:
             if df.empty: return df
             
+            # [Fix] 去重：确保时间戳唯一 (Duplicate Labels Check)
+            # 如果出现重复时间戳，保留最后一个 (通常是修正后的数据)
+            if 'timestamp' in df.columns:
+                df = df.drop_duplicates(subset=['timestamp'], keep='last')
+            else:
+                # 如果已经是 index，重置后再去重
+                df = df.reset_index().drop_duplicates(subset=['timestamp'], keep='last').set_index('timestamp')
+            
             # 1. 转换 Timeframe 为 Pandas Offset
             # CCXT: 1m, 5m, 1h, 1d, 1w
             # Pandas: 1min, 5min, 1h, 1D, 1W
@@ -731,6 +739,11 @@ class DeepSeekTrader:
             # 2. 设置时间索引
             if 'timestamp' in df.columns:
                 df = df.set_index('timestamp').sort_index()
+            else:
+                df = df.sort_index() # 确保排序
+            
+            # [Fix] 再次去重 (Just in case index still has duplicates)
+            df = df[~df.index.duplicated(keep='last')]
             
             # 3. 重采样 (Resample) - 强制对齐时间网格
             # 使用 asfreq() 插入缺失行 (值为 NaN)
