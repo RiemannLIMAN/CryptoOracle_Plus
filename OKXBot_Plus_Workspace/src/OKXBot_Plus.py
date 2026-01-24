@@ -427,6 +427,14 @@ if __name__ == "__main__":
         sys.stdout.reconfigure(encoding='utf-8')
     
     # print(f"🔥 正在启动 CryptoOracle 进程 (PID: {os.getpid()})...", flush=True)
+    
+    # [New] Record PID for stop script
+    try:
+        with open("bot.pid", "w") as f:
+            f.write(str(os.getpid()))
+    except:
+        pass
+        
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

@@ -34,6 +34,9 @@ if %errorlevel% equ 0 (
     if /i not "%choice%"=="y" exit /b
 )
 
+:: 3. 启动
+:: 放弃在 BAT 里获取 PID，改由 Python 脚本自己记录 PID 到 bot.pid 文件
+:: 这样最准确，且不影响前台日志显示
 python -u src/OKXBot_Plus.py
 
 if %errorlevel% neq 0 (
