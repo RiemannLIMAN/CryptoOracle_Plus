@@ -230,29 +230,22 @@ async def main():
     # 如果用户想在 config.json 里写 "1m" 来避免报错，但又想 30s 跑一次
     # 我们可以在这里硬编码覆盖 interval
     
-    interval = 60 # default 1m
+    interval = 30 # Default Loop Interval (30s) - Decoupled from Timeframe
     
-    # 正常解析逻辑
-    if 'm' in timeframe: interval = int(timeframe.replace('m', '')) * 60
-    elif 'h' in timeframe: interval = int(timeframe.replace('h', '')) * 3600
-    elif 'ms' in timeframe: interval = int(timeframe.replace('ms', '')) / 1000
-    elif 's' in timeframe: interval = int(timeframe.replace('s', ''))
-    
-    # [Hardcore Fix] 强制 30秒 心跳
-    # 无论 timeframe 是多少 (5m, 1h)，我们都希望机器人保持高频活跃
-    # 这样才能实时触发 Trailing Stop 和 Breakeven
-    if interval > 30:
-        logger.info(f"⚡ [Speed Up] 检测到 K线周期 ({timeframe}) 较长，强制将轮询间隔从 {interval}s 缩短为 30s 以保持敏捷")
-        interval = 30
+    # 正常解析逻辑 (仅用于校验 Timeframe 格式，不再影响 interval)
+    # if 'm' in timeframe: interval = int(timeframe.replace('m', '')) * 60
+    # elif 'h' in timeframe: interval = int(timeframe.replace('h', '')) * 3600
+    # elif 'ms' in timeframe: interval = int(timeframe.replace('ms', '')) / 1000
+    # elif 's' in timeframe: interval = int(timeframe.replace('s', ''))
     
     # [方案 A] 强制使用 loop_interval (如果存在)，与 timeframe 解耦
     # 这样可以实现：Timeframe="15m" (看15分钟图)，但每 15秒 (loop_interval) 检查一次
     custom_interval = config['trading'].get('loop_interval')
     if custom_interval and isinstance(custom_interval, (int, float)) and custom_interval > 0:
-        logger.info(f"⚡ [单频模式] K线周期: {timeframe} | 轮询间隔: {custom_interval}s")
+        logger.info(f"⚡ [单频模式] K线周期: {timeframe} | 轮询间隔: {custom_interval}s (Config Override)")
         interval = custom_interval
     else:
-        logger.info(f"⏰ 轮询间隔: {interval}秒 (跟随 Timeframe)")
+        logger.info(f"⏰ K线周期: {timeframe} | 默认轮询间隔: {interval}s (Default)")
 
     logger.info(f"⏰ 最终轮询间隔: {interval}秒")
     
