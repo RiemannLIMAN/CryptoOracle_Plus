@@ -334,7 +334,21 @@ class DeepSeekAgent:
            - 如果看不懂 -> **HOLD**。
         """
 
-    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True, volatility_status="NORMAL", btc_change_24h=None):
+    def _build_surge_instruction(self, is_surge):
+        """
+        构建异动唤醒指令提示词
+        """
+        if is_surge:
+             return """
+        🚀 **异动唤醒模式 (Surge Mode Triggered)**
+        检测到成交量爆增或价格剧烈波动，系统强制唤醒了你！
+        1. **快速反应**: 现在的行情极快，请忽略常规的 ADX 限制。
+        2. **顺势猎杀**: 这通常是捕捉"大长腿"(Long Leg)的最佳时机。
+        3. **快进快出 (Hit & Run)**: 异动通常不可持续。如果开仓，请务必设置较紧的动态止盈，或者在下一轮分析时果断平仓。
+        """
+        return ""
+
+    def _build_user_prompt(self, symbol, timeframe, price_data, balance, position_text, amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp=True, volatility_status="NORMAL", btc_change_24h=None, is_surge=False):
         """
         构建用户提示词
         """
@@ -354,6 +368,7 @@ class DeepSeekAgent:
         fund_status_msg, min_notional_info, min_limit_info = self._build_fund_status_message(balance, price_data)
         btc_instruction = self._build_btc_instruction(btc_change_24h)
         market_instruction = self._build_market_instruction()
+        surge_instruction = self._build_surge_instruction(is_surge)
         
         # 计算最大可买数量 (简单估算)
         max_buy_token = 0
@@ -384,6 +399,7 @@ class DeepSeekAgent:
         {indicator_text}
 
         # 核心策略
+        {surge_instruction}
         {profit_first_instruction}
         {funding_instruction}
         {btc_instruction}
@@ -391,7 +407,7 @@ class DeepSeekAgent:
         {market_instruction}
         """
 
-    async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0, dynamic_tp=True, btc_change_24h=None):
+    async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0, dynamic_tp=True, btc_change_24h=None, is_surge=False):
         """
         调用 DeepSeek 进行市场分析
         """
@@ -408,7 +424,7 @@ class DeepSeekAgent:
                 position_text = f"{current_pos['side']}仓, 数量:{current_pos['size']}, 浮盈:{pnl:.2f}U"
 
             prompt = self._build_user_prompt(
-                symbol, timeframe, price_data, balance, position_text, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp, volatility_status, btc_change_24h
+                symbol, timeframe, price_data, balance, position_text, default_amount, taker_fee_rate, leverage, risk_control, current_account_pnl, current_pos, funding_rate, dynamic_tp, volatility_status, btc_change_24h, is_surge
             )
 
             # self.logger.info(f"[{symbol}] ⏳ 请求 DeepSeek (Async)...")

@@ -2973,17 +2973,50 @@ class DeepSeekTrader:
             rsi_max = float(gate_conf.get('rsi_max', 65))
             adx_min = float(gate_conf.get('adx_min', 25))
             
+            # [New] 量价异动唤醒机制 (Volume/Price Surge Override)
+            # 只要满足以下任意一条，即使 ADX/RSI 不达标也强制放行:
+            # 1. 成交量突增 (> 3倍均量)
+            # 2. 价格瞬间剧烈波动 (> 0.5%)
+            
+            is_surge = False
+            surge_reason = ""
+            
+            vol_ratio = ind.get('vol_ratio')
+            if vol_ratio and vol_ratio > 3.0:
+                is_surge = True
+                surge_reason = f"成交量爆增 ({vol_ratio:.1f}x)"
+                
+            # 计算当前K线瞬间涨跌幅 (close vs open)
+            # price_data['ohlcv'][-1] 是最新K线: [ts, o, h, l, c, v]
+            try:
+                last_k = price_data.get('ohlcv', [])[-1]
+                open_p = float(last_k[1])
+                close_p = float(last_k[4])
+                if open_p > 0:
+                    instant_change_pct = abs((close_p - open_p) / open_p) * 100
+                    if instant_change_pct > 0.5:
+                        is_surge = True
+                        surge_reason = f"瞬间剧烈波动 ({instant_change_pct:.2f}%)"
+            except:
+                pass
+
             gate_reason = None
-            if volatility_status == 'HIGH_TREND':
-                if adx_val is None or adx_val < adx_min:
-                    val_str = f"{adx_val:.1f}" if adx_val is not None else "NaN"
-                    gate_reason = f"趋势不足 (ADX {val_str} < {adx_min})"
+            # 只有当非异动状态时，才执行常规门禁
+            if not is_surge:
+                if volatility_status == 'HIGH_TREND':
+                    if adx_val is None or adx_val < adx_min:
+                        val_str = f"{adx_val:.1f}" if adx_val is not None else "NaN"
+                        gate_reason = f"趋势不足 (ADX {val_str} < {adx_min})"
+                else:
+                    if rsi_val is None or rsi_val < rsi_min or rsi_val > rsi_max:
+                        val_str = f"{rsi_val:.1f}" if rsi_val is not None else "NaN"
+                        gate_reason = f"RSI超界 ({val_str} ∉ [{rsi_min}, {rsi_max}])"
+                    elif adx_val is not None and adx_val < adx_min:
+                        gate_reason = f"ADX不足 ({adx_val:.1f} < {adx_min})"
             else:
-                if rsi_val is None or rsi_val < rsi_min or rsi_val > rsi_max:
-                    val_str = f"{rsi_val:.1f}" if rsi_val is not None else "NaN"
-                    gate_reason = f"RSI超界 ({val_str} ∉ [{rsi_min}, {rsi_max}])"
-                elif adx_val is not None and adx_val < adx_min:
-                    gate_reason = f"ADX不足 ({adx_val:.1f} < {adx_min})"
+                # 如果是异动，记录日志提醒
+                self._log(f"🚀 触发异动唤醒: {surge_reason} -> 绕过 ADX/RSI 门禁", 'info')
+
             if gate_reason:
                 persona_map = {
                     'HIGH_TREND': 'Trend Hunter (趋势猎人)',
@@ -3062,7 +3095,8 @@ class DeepSeekTrader:
                 current_pnl, # [New] 传入当前账户总盈亏
                 funding_rate, # [New] 传入资金费率
                 self.common_config.get('strategy', {}).get('dynamic_tp', True), # [New] 传入动态止盈开关
-                btc_change_24h=btc_change_24h # [New] 传入 BTC 涨跌幅
+                btc_change_24h=btc_change_24h, # [New] 传入 BTC 涨跌幅
+                is_surge=is_surge # [New] 传入异动唤醒标志
             )
             
             if signal_data:
