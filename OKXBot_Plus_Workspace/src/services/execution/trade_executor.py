@@ -2976,12 +2976,14 @@ class DeepSeekTrader:
             gate_reason = None
             if volatility_status == 'HIGH_TREND':
                 if adx_val is None or adx_val < adx_min:
-                    gate_reason = "趋势不足"
+                    val_str = f"{adx_val:.1f}" if adx_val is not None else "NaN"
+                    gate_reason = f"趋势不足 (ADX {val_str} < {adx_min})"
             else:
                 if rsi_val is None or rsi_val < rsi_min or rsi_val > rsi_max:
-                    gate_reason = "RSI超界"
+                    val_str = f"{rsi_val:.1f}" if rsi_val is not None else "NaN"
+                    gate_reason = f"RSI超界 ({val_str} ∉ [{rsi_min}, {rsi_max}])"
                 elif adx_val is not None and adx_val < adx_min:
-                    gate_reason = "ADX不足"
+                    gate_reason = f"ADX不足 ({adx_val:.1f} < {adx_min})"
             if gate_reason:
                 persona_map = {
                     'HIGH_TREND': 'Trend Hunter (趋势猎人)',
