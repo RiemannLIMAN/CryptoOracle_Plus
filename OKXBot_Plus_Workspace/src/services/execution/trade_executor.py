@@ -4,13 +4,14 @@ import asyncio
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from core.utils import to_float, send_notification_async, exception_handler
+from core.utils import to_float, send_notification_async, exception_handler, retry_async
 from core.exceptions import (
     APIConnectionError, APIResponseError, TradingError, 
     DataProcessingError, RiskManagementError
 )
 from core.cache import cache_manager
 from services.data.data_manager import DataManager
+from .components import PositionManager, OrderExecutor, SignalProcessor
 import json
 import os
 
@@ -74,6 +75,28 @@ class DeepSeekTrader:
         # [New] Data Manager
         self.data_manager = DataManager(f"data/trade_data_{self.symbol.replace('/', '_')}.db")
         
+        # [Refactor] Initialize Components
+        self.position_manager = PositionManager(
+            self.exchange, 
+            self.symbol, 
+            self.trade_mode, 
+            self.test_mode, 
+            logging.getLogger("crypto_oracle")
+        )
+        self.position_manager.set_trailing_config(self.trailing_config)
+        
+        self.order_executor = OrderExecutor(
+            self.exchange,
+            self.symbol,
+            self.trade_mode,
+            self.test_mode,
+            self.position_manager,
+            logging.getLogger("crypto_oracle")
+        )
+        self.order_executor.set_fee_rate(self.taker_fee_rate)
+        
+        self.signal_processor = SignalProcessor(logging.getLogger("crypto_oracle"))
+        
         self.price_history = []
         self.signal_history = []
         self.logger = logging.getLogger("crypto_oracle")
@@ -108,28 +131,27 @@ class DeepSeekTrader:
         
         # [New] Simulation State (Test Mode Only)
         self.sim_state_file = f"data/sim_state_{self.symbol.replace('/', '_')}.json"
-        self.sim_position = None
-        self.sim_realized_pnl = 0.0
-        self.sim_balance = 0.0 
         
         if self.test_mode:
             self._load_sim_state()
             # If no balance record, use allocated portion of initial_balance
-            if self.sim_balance <= 0:
-                 # Default mock balance: 10000 U if not specified
-                 self.sim_balance = 10000.0
+            sim_bal = self.position_manager.sim_balance
+            if sim_bal <= 0 or sim_bal == 10000.0: # Check against default
+                 new_bal = 10000.0
                  if self.initial_balance > 0:
                      # Try to respect allocation logic
                      if isinstance(self.allocation, (int, float)) and self.allocation <= 1.0:
-                         self.sim_balance = self.initial_balance * self.allocation
+                         new_bal = self.initial_balance * self.allocation
                      elif isinstance(self.allocation, (int, float)) and self.allocation > 1.0:
-                         self.sim_balance = self.allocation
+                         new_bal = self.allocation
                      elif isinstance(self.allocation, str) and self.allocation == 'auto':
                          # For auto allocation, use actual active symbols count
                          symbols_count = max(1, self.active_symbols_count)
-                         self.sim_balance = self.initial_balance / symbols_count
-                     
-                 self._log(f"🧪 模拟资金初始化: {self.sim_balance:.2f} U")
+                         new_bal = self.initial_balance / symbols_count
+                 
+                 if new_bal != sim_bal:
+                     self.position_manager.sim_balance = new_bal
+                     self._log(f"🧪 模拟资金初始化: {new_bal:.2f} U")
 
         self.load_state()
 
@@ -181,105 +203,31 @@ class DeepSeekTrader:
 
     async def check_trailing_stop(self, current_position=None):
         """检查并执行移动止盈 (Trailing Stop)"""
-        if not self.trailing_config.get('enabled', False):
-            return False
+        return await self.position_manager.check_trailing_stop(
+            current_position, 
+            save_callback=self.save_state, 
+            notification_callback=self.send_notification
+        )
 
-        if not current_position:
-            # 空仓重置
-            self.trailing_max_pnl = 0.0
-            return False
-            
-        # [Fix] 忽略现货模式，移动止盈主要针对合约
-        if self.trade_mode == 'cash':
-            return False
+    async def get_current_position(self):
+        return await self.position_manager.get_current_position()
 
-        try:
-            # 获取当前收益率 (未实现盈亏 %)
-            # OKX 返回的 pnl 是 U 本位金额，我们需要转为百分比
-            # 或者直接用 pnl_ratio (如果 API 返回的话)
-            # OKX v5 position info: `uplRatio` is unrealized pnl ratio
-            pnl_ratio = 0.0
-            has_valid_pnl = False
-            
-            if 'uplRatio' in current_position:
-                 try:
-                     pnl_ratio = float(current_position['uplRatio'])
-                     has_valid_pnl = True
-                 except (ValueError, TypeError):
-                     pass
-            elif 'percentage' in current_position:
-                 try:
-                     pnl_ratio = float(current_position['percentage']) / 100.0
-                     has_valid_pnl = True
-                 except (ValueError, TypeError):
-                     pass
-            elif 'unrealized_pnl' in current_position and 'size' in current_position:
-                # 尝试使用未实现盈亏和持仓大小计算
-                try:
-                    unrealized_pnl = float(current_position['unrealized_pnl'])
-                    size = float(current_position['size'])
-                    if size > 0:
-                        # 简单估算：假设每单位价值 1 美元
-                        pnl_ratio = unrealized_pnl / (size * 100)  # 转换为百分比
-                        has_valid_pnl = True
-                except (ValueError, TypeError):
-                    pass
-            
-            # 如果无法计算收益率，跳过
-            if not has_valid_pnl:
-                return False
+    async def get_avg_entry_price(self, skip_pos=False):
+        return await self.position_manager.get_avg_entry_price(skip_pos)
 
-            activation_pnl = self.trailing_config.get('activation_pnl', 0.01) # 默认 1%
-            callback_rate = self.trailing_config.get('callback_rate', 0.003) # 默认 0.3%
+    async def get_spot_balance(self, total=False):
+        return await self.position_manager.get_spot_balance(total)
 
-            # 1. 更新最高水位线
-            if pnl_ratio > self.trailing_max_pnl:
-                self.trailing_max_pnl = pnl_ratio
-                # [Fix] Persist trailing max pnl
-                # 只有当变化显著时才保存，减少IO
-                if self.trailing_max_pnl > 0.01: 
-                    asyncio.create_task(self.save_state())
-                
-                # 只有当创新高且超过激活线时，才记录日志(减少刷屏)
-                if pnl_ratio > activation_pnl:
-                     # self._log(f"📈 移动止盈新高: {pnl_ratio*100:.2f}% (激活线: {activation_pnl*100:.2f}%)", 'debug')
-                     pass
+    def _check_technical_filters(self, signal_type, indicators):
+        return self.signal_processor.check_technical_filters(signal_type, indicators)
 
-            # 2. 检查是否激活
-            if self.trailing_max_pnl >= activation_pnl:
-                # 3. 检查回撤
-                drawdown = self.trailing_max_pnl - pnl_ratio
-                if drawdown >= callback_rate:
-                    self._log(f"⚡ 触发移动止盈! 最高: {self.trailing_max_pnl*100:.2f}%, 当前: {pnl_ratio*100:.2f}%, 回撤: {drawdown*100:.2f}%")
-                    
-                    # 执行平仓
-                    close_params = {}
-                    if self.trade_mode != 'cash':
-                        close_params['reduceOnly'] = True
-                        close_params['tdMode'] = self.trade_mode
-                    
-                    # 使用当前持仓数量平仓
-                    size = current_position['size'] # Contract size or coin amount
-                    side = 'buy' if current_position['side'] == 'short' else 'sell'
-                    
-                    # [Fix] Handle spot mode trailing stop?
-                    # Spot mode usually doesn't have 'short' side position with pnl.
-                    # Trailing stop mostly for contracts.
-                    # If spot, side is 'sell'.
-                    
-                    await self.exchange.create_market_order(self.symbol, side, size, params=close_params)
-                    
-                    msg = f"⚡ 移动止盈触发 ({self.symbol})\n锁定收益: {pnl_ratio*100:.2f}%\n最高浮盈: {self.trailing_max_pnl*100:.2f}%"
-                    await self.send_notification(msg)
-                    
-                    # 重置
-                    self.trailing_max_pnl = 0.0
-                    return True # Executed
+    def _check_candlestick_pattern(self, data_input):
+        return self.signal_processor.check_candlestick_pattern(data_input)
 
-        except Exception as e:
-            self._log(f"移动止盈检查出错: {e}", 'error')
-        
-        return False
+    def _execute_sim_trade(self, signal_data, current_price):
+        return asyncio.run(self.order_executor.execute_sim_trade(signal_data, current_price))
+
+    # _record_sim_trade removed as it is handled by OrderExecutor
 
     def _load_sim_state(self):
         """Load simulation state from JSON"""
@@ -287,235 +235,34 @@ class DeepSeekTrader:
             try:
                 with open(self.sim_state_file, 'r', encoding='utf-8') as f:
                     state = json.load(f)
-                    self.sim_position = state.get('position')
-                    self.sim_realized_pnl = state.get('realized_pnl', 0.0)
-                    self.sim_balance = state.get('balance', 0.0)
-                    self.sim_trades = state.get('trades', [])
+                    self.position_manager.set_sim_state(
+                        state.get('balance', 0.0),
+                        state.get('position'),
+                        state.get('trades', []),
+                        state.get('realized_pnl', 0.0)
+                    )
             except Exception as e:
                 self._log(f"读取模拟状态失败: {e}", 'warning')
         else:
-            self.sim_trades = []
+            self.position_manager.sim_trades = []
 
     def _save_sim_state(self):
         """Save simulation state to JSON"""
         try:
-            state = {
-                'position': self.sim_position,
-                'realized_pnl': self.sim_realized_pnl,
-                'balance': self.sim_balance,
-                'trades': self.sim_trades
+            state = self.position_manager.get_sim_state()
+            # Map back to storage format
+            storage_state = {
+                'position': state['sim_position'],
+                'realized_pnl': state['sim_realized_pnl'],
+                'balance': state['sim_balance'],
+                'trades': state['sim_trades']
             }
             with open(self.sim_state_file, 'w', encoding='utf-8') as f:
-                json.dump(state, f, indent=4)
+                json.dump(storage_state, f, indent=4)
         except Exception as e:
             self._log(f"保存模拟状态失败: {e}", 'warning')
 
-    def _record_sim_trade(self, side, price, amount, fee=0.0, pnl=0.0):
-        """Record simulation trade to history"""
-        trade = {
-            'symbol': self.symbol,
-            'side': side.lower(), # buy/sell
-            'price': price,
-            'amount': amount,
-            'cost': price * amount,
-            'fee': {'cost': fee, 'currency': 'USDT'},
-            'timestamp': int(time.time() * 1000),
-            'datetime': datetime.now().strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z',
-            'info': {'pnl': pnl} # Simulate exchange info
-        }
-        self.sim_trades.append(trade)
-        # Keep last 100 trades
-        if len(self.sim_trades) > 100:
-            self.sim_trades = self.sim_trades[-100:]
 
-    def _execute_sim_trade(self, signal_data, current_price):
-        """Execute trade in simulation mode"""
-        signal = signal_data['signal']
-        amount = signal_data.get('amount', 0)
-        
-        # Calculate fee (simplified)
-        fee_rate = self.taker_fee_rate
-        trade_value = amount * current_price
-        fee = trade_value * fee_rate
-        
-        pnl = 0.0
-        
-        if signal == 'BUY':
-            # Opening Long or Closing Short
-            if self.sim_position and self.sim_position['side'] == 'short':
-                # Closing Short (Buy to Cover)
-                # Check if partial close
-                close_amount = amount
-                current_size = self.sim_position['size']
-                
-                if close_amount >= current_size * 0.99: # Full close
-                    close_amount = current_size
-                    is_full_close = True
-                else:
-                    is_full_close = False
-                    
-                entry_price = self.sim_position['entry_price']
-                
-                # PnL = (Entry - Exit) * Size
-                pnl = (entry_price - current_price) * close_amount
-                pnl -= fee # deduct fee
-                
-                self.sim_realized_pnl += pnl
-                self.sim_balance += pnl # update balance with PnL
-                
-                self._record_sim_trade('buy', current_price, close_amount, fee, pnl)
-                
-                if is_full_close:
-                    self.sim_position = None # Closed
-                    self._log(f"🧪 模拟平空(全): {close_amount} @ {current_price} | PnL: {pnl:.2f} U")
-                else:
-                    self.sim_position['size'] -= close_amount
-                    self.sim_position['coin_size'] -= close_amount # Simplified
-                    self._log(f"🧪 模拟平空(分): {close_amount} @ {current_price} | PnL: {pnl:.2f} U")
-                
-            elif self.sim_position and self.sim_position['side'] == 'long':
-                # Adding to Long (Pyramiding)
-                old_size = self.sim_position['size']
-                old_entry = self.sim_position['entry_price']
-                
-                new_size = old_size + amount
-                # Weighted Average Entry Price
-                avg_entry = ((old_size * old_entry) + (amount * current_price)) / new_size
-                
-                self.sim_position['size'] = new_size
-                self.sim_position['coin_size'] = new_size
-                self.sim_position['entry_price'] = avg_entry
-                
-                self.sim_realized_pnl -= fee
-                self.sim_balance -= fee
-                
-                self._record_sim_trade('buy', current_price, amount, fee, 0.0)
-                self._log(f"🧪 模拟加多: {amount} @ {current_price} | NewAvg: {avg_entry:.4f}")
-                
-            else:
-                # Opening Long
-                cost = trade_value + fee
-                # Check balance? (Optional for sim)
-                
-                self.sim_position = {
-                    'side': 'long',
-                    'size': amount,
-                    'coin_size': amount, # Simplified
-                    'entry_price': current_price,
-                    'unrealized_pnl': 0.0,
-                    'leverage': self.leverage,
-                    'symbol': self.symbol,
-                    'mode': 'cash' if self.trade_mode == 'cash' else 'margin'
-                }
-                # Initial fee deduction
-                self.sim_realized_pnl -= fee
-                self.sim_balance -= fee
-                
-                # [Fix] Cash Mode Balance Deduction
-                if self.trade_mode == 'cash':
-                    self.sim_balance -= trade_value
-                
-                self._record_sim_trade('buy', current_price, amount, fee, 0.0)
-                self._log(f"🧪 模拟开多: {amount} @ {current_price} | Fee: {fee:.2f} U")
-
-        elif signal == 'SELL':
-            # Opening Short or Closing Long
-            if self.sim_position and self.sim_position['side'] == 'long':
-                # Closing Long (Sell to Close)
-                close_amount = amount
-                current_size = self.sim_position['size']
-                
-                if close_amount >= current_size * 0.99: # Full close
-                    close_amount = current_size
-                    is_full_close = True
-                else:
-                    is_full_close = False
-                    
-                entry_price = self.sim_position['entry_price']
-                
-                # PnL = (Exit - Entry) * Size
-                pnl = (current_price - entry_price) * close_amount
-                pnl -= fee
-                
-                self.sim_realized_pnl += pnl
-                self.sim_balance += pnl
-                
-                # [Fix] Cash Mode Balance Restoration
-                # sim_balance already added pnl (profit/loss).
-                # For Cash: New Balance = Old Balance + Revenue - Fee
-                # PnL = Revenue - Cost - Fee
-                # Revenue = PnL + Cost + Fee
-                # So we need to add Cost back?
-                # Wait. sim_balance += pnl means: Bal = Bal + (Rev - Cost - Fee)
-                # This is equivalent to: Bal = Bal + Rev - Fee - Cost.
-                # But we already deducted Cost when buying.
-                # So Bal_new = (Bal_old - Cost - Fee_buy) + (Rev - Cost_sell - Fee_sell) ?? No.
-                
-                # Let's trace:
-                # 1. Buy: Bal = 1000. Cost=100. Fee=1. Bal -> 899. (Deducted Cost + Fee)
-                # 2. Sell: Rev=110. Fee=1. PnL = 110-100-1 = 9.
-                #    If we do Bal += PnL -> 899 + 9 = 908.
-                #    Correct Bal should be: 1000 - 1 - 1 + 10 = 1008. (Or 899 + 110 - 1 = 1008).
-                #    So 908 is WRONG. It's missing the Principal (Cost).
-                #    Difference = 1008 - 908 = 100. Exactly the Cost.
-                
-                if self.trade_mode == 'cash':
-                    cost_of_sold = close_amount * entry_price
-                    self.sim_balance += cost_of_sold
-                
-                self._record_sim_trade('sell', current_price, close_amount, fee, pnl)
-                
-                if is_full_close:
-                    self.sim_position = None
-                    self._log(f"🧪 模拟平多(全): {close_amount} @ {current_price} | PnL: {pnl:.2f} U")
-                else:
-                    self.sim_position['size'] -= close_amount
-                    self.sim_position['coin_size'] -= close_amount
-                    self._log(f"🧪 模拟平多(分): {close_amount} @ {current_price} | PnL: {pnl:.2f} U")
-                
-            elif self.sim_position and self.sim_position['side'] == 'short':
-                # Adding to Short
-                old_size = self.sim_position['size']
-                old_entry = self.sim_position['entry_price']
-                
-                new_size = old_size + amount
-                # Weighted Average Entry Price
-                avg_entry = ((old_size * old_entry) + (amount * current_price)) / new_size
-                
-                self.sim_position['size'] = new_size
-                self.sim_position['coin_size'] = new_size
-                self.sim_position['entry_price'] = avg_entry
-                
-                self.sim_realized_pnl -= fee
-                self.sim_balance -= fee
-                
-                self._record_sim_trade('sell', current_price, amount, fee, 0.0)
-                self._log(f"🧪 模拟加空: {amount} @ {current_price} | NewAvg: {avg_entry:.4f}")
-                
-            else:
-                # Opening Short
-                if self.trade_mode == 'cash':
-                    self._log(f"🧪 现货模式无法开空")
-                    return "FAILED", "现货无法开空"
-                    
-                self.sim_position = {
-                    'side': 'short',
-                    'size': amount,
-                    'coin_size': amount,
-                    'entry_price': current_price,
-                    'unrealized_pnl': 0.0,
-                    'leverage': self.leverage,
-                    'symbol': self.symbol,
-                    'mode': 'margin'
-                }
-                self.sim_realized_pnl -= fee
-                self.sim_balance -= fee
-                
-                self._record_sim_trade('sell', current_price, amount, fee, 0.0)
-                self._log(f"🧪 模拟开空: {amount} @ {current_price} | Fee: {fee:.2f} U")
-
-        self._save_sim_state()
-        return "TEST_MODE", f"模拟{signal}成功 | PnL: {self.sim_realized_pnl:.2f}"
 
     async def initialize(self):
         """Async Initialization"""
@@ -573,7 +320,7 @@ class DeepSeekTrader:
         try:
             # [Fix] 测试模式下使用每个交易对自己的模拟余额作为基础资金
             if self.test_mode:
-                base_capital = self.sim_balance
+                base_capital = self.position_manager.sim_balance
             else:
                 # 实盘模式下，优先使用配置的初始本金，如果没有(0)，则使用当前实时余额
                 base_capital = self.initial_balance if self.initial_balance > 0 else (current_balance if current_balance else 0)
@@ -661,66 +408,7 @@ class DeepSeekTrader:
             # self._log(emoji.emojize(f":no_entry: 杠杆设置失败: {e}"), 'error')
             self._log(f"🚫 杠杆设置失败: {e}", 'error')
 
-    def _check_candlestick_pattern(self, data_input):
-        """
-        [Hardcore] Python 硬核识别 "三线战法" (Three-Line Strike)
-        支持输入: DataFrame 或 包含 'kline_data' 的字典
-        返回: 
-            - 'BULLISH_STRIKE' (看涨)
-            - 'BEARISH_STRIKE' (看跌)
-            - None (无形态)
-        """
-        df = None
-        try:
-            # 1. 如果输入是 DataFrame，直接使用
-            if isinstance(data_input, pd.DataFrame):
-                df = data_input
-            # 2. 如果输入是字典 (price_data)，尝试提取 df 或 kline_data
-            elif isinstance(data_input, dict):
-                if 'df' in data_input and isinstance(data_input['df'], pd.DataFrame):
-                    df = data_input['df']
-                elif 'kline_data' in data_input:
-                    # Fallback: 从 kline_data (list of dicts) 重构 DataFrame
-                    df = pd.DataFrame(data_input['kline_data'])
-            
-            if df is None or len(df) < 4:
-                return None
-            
-            # 获取最近 4 根 K 线
-            # 顺序: k1 (最远), k2, k3, k4 (最新)
-            last_4 = df.iloc[-4:].copy()
-            k1, k2, k3, k4 = last_4.iloc[0], last_4.iloc[1], last_4.iloc[2], last_4.iloc[3]
-            
-            # 定义阴阳线
-            # 阳线: close > open
-            # 阴线: close < open
-            def is_bull(k): return float(k['close']) > float(k['open'])
-            def is_bear(k): return float(k['close']) < float(k['open'])
-            
-            # --- 识别看涨三线 (Bullish Strike) ---
-            # 条件: 三连阴 (下台阶) + 一阳吞三阴
-            if (is_bear(k1) and is_bear(k2) and is_bear(k3) and is_bull(k4)):
-                # 验证 "下台阶" (Lower Lows)
-                if (float(k2['low']) < float(k1['low']) and float(k3['low']) < float(k2['low'])):
-                    # 验证 "一阳吞三阴" (最新收盘价 > 第一根开盘价)
-                    # 严格来说是 Close[4] > Open[1]
-                    if float(k4['close']) > float(k1['open']):
-                        return 'BULLISH_STRIKE'
-            
-            # --- 识别看跌三线 (Bearish Strike) ---
-            # 条件: 三连阳 (上台阶) + 一阴吞三阳
-            if (is_bull(k1) and is_bull(k2) and is_bull(k3) and is_bear(k4)):
-                # 验证 "上台阶" (Higher Highs)
-                if (float(k2['high']) > float(k1['high']) and float(k3['high']) > float(k2['high'])):
-                    # 验证 "一阴吞三阳" (最新收盘价 < 第一根开盘价)
-                    if float(k4['close']) < float(k1['open']):
-                        return 'BEARISH_STRIKE'
-                        
-        except Exception as e:
-            # self._log(f"形态识别出错: {e}", 'error')
-            pass
-            
-        return None
+
 
     def normalize_data(self, df):
         """
@@ -931,6 +619,7 @@ class DeepSeekTrader:
 
 
     @exception_handler
+    @retry_async(retries=3, delay=1.0, backoff=2.0)
     async def get_ohlcv(self):
         # 生成缓存键
         cache_key = cache_manager.generate_key(
@@ -1136,8 +825,16 @@ class DeepSeekTrader:
             symbol=self.symbol,
             timeframe=self.timeframe
         )
-        # 缓存时间根据时间周期调整
-        cache_ttl = 30 if 'm' in self.timeframe else 60
+        # [Optimized] Cache TTL tuning
+        # 1m -> 30s
+        # 5m/15m -> 60s
+        # >=1h -> 300s (Reduce CPU load for higher timeframes)
+        cache_ttl = 30
+        if 'h' in self.timeframe or 'd' in self.timeframe:
+             cache_ttl = 300
+        elif self.timeframe in ['5m', '15m', '30m']:
+             cache_ttl = 60
+             
         cache_manager.set(cache_key, result, ttl=cache_ttl)
         
         # [New] Attach DataFrame object to result for immediate use (NOT cached)
@@ -1146,162 +843,17 @@ class DeepSeekTrader:
         
         return result
 
-    async def get_current_position(self):
-        # [New] Test Mode Simulation Interception
-        if self.test_mode:
-            if self.sim_position:
-                # Update unrealized PnL based on current price
-                try:
-                    ticker = await self.exchange.fetch_ticker(self.symbol)
-                    current_price = ticker['last']
-                    
-                    entry = float(self.sim_position['entry_price'])
-                    size = float(self.sim_position['coin_size']) # Use coin_size for calculation
-                    
-                    if self.sim_position['side'] == 'long':
-                        self.sim_position['unrealized_pnl'] = (current_price - entry) * size
-                    else:
-                        self.sim_position['unrealized_pnl'] = (entry - current_price) * size
-                except:
-                    pass
-            return self.sim_position
-
-        try:
-            # Identify if this is a Contract instrument or Spot
-            market_info = self.exchange.market(self.symbol)
-            is_contract = market_info.get('swap') or market_info.get('future') or market_info.get('option') or (market_info.get('type') in ['swap', 'future', 'option'])
-
-            # [Fix] 优先检查交易所返回的标准 Position 数据 (包含合约持仓 和 现货杠杆持仓)
-            # 即使是现货交易对，如果是杠杆模式，也会在这里返回
-            positions = await self.exchange.fetch_positions([self.symbol])
-            for pos in positions:
-                if pos['symbol'] == self.symbol:
-                    contracts = float(pos['contracts']) if pos['contracts'] else 0
-                    if contracts > 0:
-                        # [Fix] 获取合约面值，计算实际持币数量
-                        contract_size = 1.0
-                        try:
-                            market = self.exchange.market(self.symbol)
-                            contract_size = float(market.get('contractSize', 1.0))
-                            # [Fix] Ensure contract_size is 1.0 for Spot/Margin if ever reached here
-                            if not is_contract or contract_size <= 0:
-                                contract_size = 1.0
-                        except:
-                            pass
-
-                        return {
-                            'side': pos['side'],
-                            'size': contracts,
-                            'coin_size': contracts * contract_size, # 实际币数
-                            'entry_price': float(pos['entryPrice']) if pos['entryPrice'] else 0,
-                            'unrealized_pnl': float(pos['unrealizedPnl']) if pos['unrealizedPnl'] else 0,
-                            'leverage': float(pos['leverage']) if pos['leverage'] else self.leverage,
-                            'symbol': pos['symbol']
-                        }
-
-            # [Fix] 增加对现货模式 (Cash) 和 现货杠杆 (Spot Margin) 的持仓支持
-            # 如果是现货类 (非合约)，且上面没有查到 Position (说明没有借币/杠杆仓位)，则检查余额
-            if not is_contract:
-                 # [Fix] Use TOTAL balance (including locked) for position check
-                 spot_bal = await self.get_spot_balance(total=True)
-                 # 只有当持仓价值 > min_cost 时才视为持仓 (忽略粉尘)
-                 current_price = 0
-                 try:
-                     ticker = await self.exchange.fetch_ticker(self.symbol)
-                     current_price = ticker['last']
-                 except:
-                     pass
-                 
-                 min_cost = 5.0
-                 try:
-                     market = self.exchange.market(self.symbol)
-                     cost_min = market.get('limits', {}).get('cost', {}).get('min')
-                     if cost_min is not None:
-                         min_cost = float(cost_min)
-                 except:
-                     pass
-
-                 # [Fix] Use >= comparison to handle exact match
-                 if spot_bal * current_price >= min_cost:
-                     # [Critical Fix] Pass skip_pos=True to avoid infinite recursion
-                     # get_current_position -> get_avg_entry_price -> get_current_position ...
-                     avg_price = await self.get_avg_entry_price(skip_pos=True)
-                     if avg_price == 0: avg_price = current_price # Fallback
-                     
-                     pnl = (current_price - avg_price) * spot_bal
-                     
-                     return {
-                         'side': 'long', # 现货只能做多 (Short由Liabilities处理, 暂不覆盖)
-                         'size': spot_bal,
-                         'coin_size': spot_bal,
-                         'entry_price': avg_price,
-                         'unrealized_pnl': pnl,
-                         'leverage': 1.0, # 现货持仓本身杠杆为1
-                         'symbol': self.symbol,
-                         'mode': 'cash' if self.trade_mode == 'cash' else 'margin'
-                     }
-                 
-                 # 如果没有现货余额，继续检查 fetch_positions (可能在现货杠杆模式下有借币空单?)
-                 # 但 OKX fetch_positions 对现货杠杆的支持有限，通常 Liabilities 单独接口
-                 # 这里暂且认为没有余额就是空仓
-            
-            # [Cleanup] 原先的 positions 逻辑已移到最上方，这里删除冗余代码
-            return None
-        except Exception as e:
-            self._log(f"获取持仓失败: {e}", 'error')
-            return None
 
 
 
-    async def get_avg_entry_price(self, skip_pos=False):
-        try:
-            if not skip_pos:
-                pos = await self.get_current_position()
-                if pos and pos.get('entry_price', 0) > 0:
-                    return pos['entry_price']
-            trades = await self.exchange.fetch_my_trades(self.symbol, limit=100)
-            if not trades: return 0.0
-            for trade in reversed(trades):
-                if trade['side'] == 'buy':
-                    return float(trade['price'])
-            return 0.0
-        except Exception:
-            return 0.0
 
-    async def get_spot_balance(self, total=False):
-        if self.test_mode:
-            # Return simulation balance for spot mode
-            if self.sim_position and self.sim_position.get('mode') == 'cash':
-                 return float(self.sim_position['size'])
-            return 0.0
 
-        try:
-            base_currency = self.symbol.split('/')[0]
-            balance = await self.exchange.fetch_balance()
-            if base_currency in balance:
-                if total:
-                    return float(balance[base_currency]['total'])
-                return float(balance[base_currency]['free'])
-            elif 'info' in balance and 'data' in balance['info']:
-                # [Fix] Check if 'data' list is empty
-                if not balance['info']['data']:
-                     return 0.0
-                     
-                for asset in balance['info']['data'][0]['details']:
-                    if asset['ccy'] == base_currency:
-                        if total:
-                            # OKX V5: cashBal represents total balance
-                            return float(asset.get('cashBal', 0))
-                        return float(asset['availBal'])
-            return 0.0
-        except Exception:
-            return 0.0
 
     async def get_my_trades(self, limit=100):
         """Helper to get recent trades (Real or Simulated)"""
         if self.test_mode:
             # Return last N trades
-            return self.sim_trades[-limit:]
+            return self.position_manager.sim_trades[-limit:]
         
         return await self.exchange.fetch_my_trades(self.symbol, limit=limit)
 
@@ -1352,41 +904,7 @@ class DeepSeekTrader:
             self._log(f"策略自动判断失败: {e}", 'warning')
             return self.allocation, "ERROR"
 
-    def _check_technical_filters(self, signal_type, indicators):
-        """
-        [New] 硬性技术过滤 (Hard Technical Filters)
-        目标: 胜率 > 60%。宁可踏空，不可亏损。
-        """
-        if not indicators:
-            return True, "无指标数据，跳过过滤"
-            
-        rsi = indicators.get('rsi')
-        # 如果 indicators 里没有 trend_ema，我们可能无法判断趋势，只能跳过
-        # 通常 indicators 是从 plotter.calculate_indicators 返回的
-        
-        # 1. RSI 极端值过滤 (防止追涨杀跌)
-        if rsi is not None:
-            if signal_type == 'BUY':
-                # 除非是超强趋势(ADX>40)，否则 RSI > 70 禁止追多
-                if rsi > 70:
-                    adx = indicators.get('adx', 0) or 0
-                    if adx < 40:
-                        return False, f"RSI超买 ({rsi:.1f}) 且趋势未爆发 (ADX {adx:.1f})，禁止追多"
-            elif signal_type == 'SELL':
-                # 除非是超强趋势(ADX>40)，否则 RSI < 30 禁止追空
-                if rsi < 30:
-                    adx = indicators.get('adx', 0) or 0
-                    if adx < 40:
-                        return False, f"RSI超卖 ({rsi:.1f}) 且趋势未爆发 (ADX {adx:.1f})，禁止追空"
 
-        # 2. 波动率过滤 (ATR Ratio)
-        atr_ratio = indicators.get('atr_ratio', 1.0)
-        if atr_ratio < 0.4:
-            # 死鱼盘，禁止开新仓 (平仓除外，但这个 filter 是针对 Entry 的)
-            # 注意: execute_trade 里如果是 closing 会自动处理，这里主要拦截 Opening
-            return False, f"波动率过低 (ATR Ratio {atr_ratio:.2f})，属于死鱼盘"
-
-        return True, "通过"
 
     async def execute_trade(self, signal_data, current_price=None, current_position=None, balance=None):
         """执行交易 (Async - Enhanced Logic)"""
@@ -1540,19 +1058,7 @@ class DeepSeekTrader:
                 self._log(f"🧪 测试模式: {signal_data['signal']} (无法获取价格，跳过)")
                 return "TEST_MODE", "无法获取价格"
 
-        # [New] Update Dynamic Risk Params for Active Trades
-        # We do this before price check to ensure we capture the latest AI advice
-        sl = float(signal_data.get('stop_loss', 0) or 0)
-        tp = float(signal_data.get('take_profit', 0) or 0)
-        
         target_side = 'long' if signal_data['signal'] == 'BUY' else 'short'
-        
-        if sl > 0:
-            self.dynamic_stop_loss = sl
-            self.dynamic_sl_side = target_side
-        if tp > 0:
-            self.dynamic_take_profit = tp
-            self.dynamic_sl_side = target_side
             
         # 2. 价格滑点检查
         if current_price is None:
@@ -1582,6 +1088,32 @@ class DeepSeekTrader:
             
             # 更新后续逻辑使用的价格为最新成交价
             current_realtime_price = real_exec_price 
+            
+            # [Risk] Enforce Stop Loss / Take Profit
+            sl = float(signal_data.get('stop_loss', 0) or 0)
+            tp = float(signal_data.get('take_profit', 0) or 0)
+            
+            # Default Stop Loss if missing (User Requirement: 3-5%)
+            if sl <= 0 and current_realtime_price > 0:
+                 # Default 5% stop loss (using max_loss_rate from config if available)
+                 risk_rate = 0.05
+                 if hasattr(self, 'config') and 'risk_control' in self.config:
+                     risk_rate = float(self.config['risk_control'].get('max_loss_rate', 0.05))
+                 
+                 if target_side == 'long':
+                     sl = current_realtime_price * (1 - risk_rate)
+                 else:
+                     sl = current_realtime_price * (1 + risk_rate)
+                 
+                 self._log(f"🛡️ 强制设置默认止损: {sl:.4f} (按照 {risk_rate*100}% 风控)", 'info')
+            
+            # Update Dynamic Risk Params
+            if sl > 0:
+                self.dynamic_stop_loss = sl
+                self.dynamic_sl_side = target_side
+            if tp > 0:
+                self.dynamic_take_profit = tp
+                self.dynamic_sl_side = target_side
 
             if analysis_price:
                  price_gap_percent = abs(real_exec_price - analysis_price) / analysis_price * 100
@@ -1686,26 +1218,46 @@ class DeepSeekTrader:
         # 基础仓位 (alloc_ratio) * 信心因子 * 波动率惩罚
         
         # [New] 根据自动检测的策略模式，决定是否应用信心折扣
-        # 如果是 MICRO_SNIPER 模式 (小资金)，我们不希望打折，而是满仓梭哈
-        # 如果是其他模式，保持原来的风控逻辑
+        # MICRO_SNIPER (全仓狙击) -> 永远满仓，不打折
+        confidence_factor = 1.0
+        if "MICRO_SNIPER" not in strategy_tag:
+            conf_str = signal_data.get('confidence', 'LOW').upper()
+            if conf_str == 'LOW': confidence_factor = 0.5
+            elif conf_str == 'MEDIUM': confidence_factor = 0.8
+            # HIGH = 1.0
+
+        # [Optimized] 使用 RL 或启发式规则获取建议仓位比例
+        # 替代原有的简单乘法逻辑
+        suggested_ratio = self.position_manager.get_recommended_position_size(
+            signal_data, 
+            getattr(self, 'last_indicators', {}),
+            sentiment_score=signal_data.get('sentiment_score', 50)
+        )
+        
+        # [RL Override] 如果 RL 模块启用，则使用 RL 建议的比例
+        # 注意: get_recommended_position_size 内部已经包含了 confidence 和 volatility 的考量
+        # 但我们为了保守，可能还是会结合 confidence_factor (双重保险)
+        # 或者完全信任 RL (如果 RL 模型已经训练得很好)
+        # 这里采用混合模式: min(RL_Ratio, Confidence_Cap)
+        
+        final_ratio = suggested_ratio
+        if "MICRO_SNIPER" not in strategy_tag:
+             final_ratio = min(suggested_ratio, confidence_factor)
+        
+        self._log(f"🤖 [Smart Sizing] RL建议: {suggested_ratio:.2f} | 信心因子: {confidence_factor:.2f} -> 最终比例: {final_ratio:.2f}", 'info')
+
+        # 计算目标资金量 (USDT)
+        allocation_usdt_limit = 0
         
         # 这里的 allocation 已经是经过 _auto_detect_strategy_mode 修正过的值
-        # 如果 <= 1.0 (例如 0.98 或 0.33)
         if alloc_ratio <= 1.0:
-            # [Hardcore Full-Port] 用户强制要求全仓模式
-            # 无论 ATR/Confidence 如何，只要下单，就打满 99% 的可用资金
-            final_ratio = alloc_ratio # Base allocation (usually 1.0)
-            
-            # 但如果 allocation 确实被手动设得很低 (例如 0.5)，我们还是尊重它作为上限
-            # 这里的逻辑是：移除所有的 confidence_factor 和 volatility_penalty 折扣
-            
-            # self._log(f"🧠 [Smart Sizing] 动态仓位: Base {alloc_ratio} * Conf {confidence_factor} = {final_ratio:.2f}")
-            self._log(f"🔥 [Full Port Mode] 强制全仓出击: 忽略波动率与信心折扣 ({final_ratio*100}%)", 'info')
-            
-            allocation_usdt_limit = base_capital * final_ratio
+            # 比例模式: Base * Alloc * Final_Ratio
+            # 例如: 1000U * 0.33 (分仓) * 0.8 (RL) = 264U
+            allocation_usdt_limit = base_capital * alloc_ratio * final_ratio
         else:
-            # 如果 > 1，说明配置的是固定金额 (例如 "50")
-            allocation_usdt_limit = alloc_ratio
+            # 固定金额模式: Fixed * Final_Ratio
+            # 例如: 100U * 0.8 = 80U
+            allocation_usdt_limit = alloc_ratio * final_ratio
             
         # [Fix] 最小下单金额保护 (Min Notional Guard)
         # 如果计算出的配额 < 11U (OKX通常最小10U)，且总资金充裕，强制提升配额
@@ -1847,6 +1399,18 @@ class DeepSeekTrader:
                  max_physical_token = (available_capital * self.leverage * buffer_rate) / current_realtime_price
             
             trade_amount = min(ai_suggest, max_physical_token)
+            
+            # [Fix] 信号量优先平仓逻辑 (Close First)
+            # 如果是反手 (Flip)，确保下单量至少能覆盖现有持仓，实现先平后开
+            if is_potential_flip and current_position:
+                current_size = float(current_position['size'])
+                if trade_amount < current_size and trade_amount > 0:
+                     # 如果 AI 建议的量小于持仓量，说明只是减仓或平仓，不是真正的反手开仓
+                     # 但如果是 Flip 信号，通常意味着要持有反向仓位
+                     # 我们可以强制提升下单量到 current_size (仅平仓) 或 slightly more (微量反手)
+                     # 考虑到风险，这里至少保证完全平仓
+                     self._log(f"⚠️ 信号反转且建议量 ({trade_amount}) < 持仓量 ({current_size})，自动修正为全平: {current_size}", 'warning')
+                     trade_amount = current_size
             
             # 检查是否真的突破了配额
             # [Logic Fix] 如果是反手 (Flip)，max_trade_limit (Opening Limit) 是很小的 (因为 quota 满了)
@@ -2227,11 +1791,12 @@ class DeepSeekTrader:
                 # 之前报错 51008 可能是因为 Maker 单价格变动导致验资失败。
                 
                 try:
-                    await self.exchange.create_order(
-                        self.symbol, 
-                        order_type, 
+                    # [Enhance] 增加下单重试机制 (针对网络超时等非业务错误)
+                    # 业务错误 (如余额不足) 由内部逻辑处理
+                    await self.order_executor.create_order_with_retry(
                         'buy', 
                         final_order_amount, 
+                        order_type, 
                         limit_price, 
                         params=buy_params
                     )
@@ -2255,11 +1820,10 @@ class DeepSeekTrader:
 
                          if retry_amount > 0:
                              try:
-                                 await self.exchange.create_order(
-                                    self.symbol, 
-                                    'market', # Retry with Market
+                                 await self.order_executor.create_order_with_retry(
                                     'buy', 
                                     retry_amount, 
+                                    'market', # Retry with Market
                                     params=buy_params
                                  )
                                  final_order_amount = retry_amount # Update for log
@@ -2371,11 +1935,11 @@ class DeepSeekTrader:
                     #        limit_price = None
 
                     try:
-                        await self.exchange.create_order(
-                            self.symbol,
-                            order_type, 
+                        # [Enhance] Add Retry for Sell Orders
+                        await self.order_executor.create_order_with_retry(
                             'sell', 
-                            final_sell_amount,
+                            final_sell_amount, 
+                            order_type, 
                             limit_price, 
                             params=sell_params
                         )
@@ -2390,11 +1954,10 @@ class DeepSeekTrader:
                              
                              self._log(f"⚠️ 余额不足 (51008)，尝试减少卖出数量重试: {final_sell_amount} -> {retry_amount}", 'warning')
                              if retry_amount > 0:
-                                 await self.exchange.create_order(
-                                    self.symbol, 
-                                    'market', 
+                                 await self.order_executor.create_order_with_retry(
                                     'sell', 
                                     retry_amount, 
+                                    'market', 
                                     params=sell_params
                                  )
                                  final_sell_amount = retry_amount
@@ -2615,11 +2178,11 @@ class DeepSeekTrader:
                              order_type = 'market'
                              limit_price = None
 
-                    await self.exchange.create_order(
-                        self.symbol, 
-                        order_type, 
+                    # [Enhance] Add Retry for Short Orders
+                    await self.order_executor.create_order_with_retry(
                         'sell', 
                         final_order_amount, 
+                        order_type, 
                         limit_price, 
                         params={'tdMode': self.trade_mode}
                     )
@@ -2756,21 +2319,31 @@ class DeepSeekTrader:
         """获取账户余额和权益 (一次请求)"""
         if self.test_mode:
              # Calculate total equity including unrealized PnL
-             equity = self.sim_balance
-             if self.sim_position:
-                 try:
-                     ticker = await self.exchange.fetch_ticker(self.symbol)
-                     current_price = ticker['last']
-                     entry = float(self.sim_position['entry_price'])
-                     size = float(self.sim_position['coin_size'])
-                     if self.sim_position['side'] == 'long':
-                         u_pnl = (current_price - entry) * size
-                     else:
-                         u_pnl = (entry - current_price) * size
-                     equity += u_pnl
-                 except:
-                     pass
-             return self.sim_balance, equity
+             sim_state = self.position_manager.get_sim_state()
+             balance = sim_state['sim_balance']
+             equity = balance
+             
+             sim_pos = await self.position_manager.get_current_position()
+             if sim_pos:
+                 if self.trade_mode == 'cash':
+                     # [Fix] Cash Mode Equity = Cash Balance + Market Value of Holdings
+                     # sim_pos['size'] is the coin amount
+                     try:
+                         # We need current price. 
+                         # Try to get from position_manager's last updated price if possible, or fetch ticker
+                         ticker = await self.exchange.fetch_ticker(self.symbol)
+                         current_price = ticker['last']
+                         market_value = float(sim_pos['size']) * current_price
+                         equity = balance + market_value
+                     except:
+                         # Fallback if price fetch fails (unlikely in sim)
+                         # Use entry price as approximation or just ignore
+                         equity += sim_pos.get('unrealized_pnl', 0.0) # Wrong for Cash but fallback
+                 else:
+                     # Margin Mode: Equity = Margin Balance + PnL
+                     equity += sim_pos.get('unrealized_pnl', 0.0)
+                 
+             return balance, equity
 
         try:
             params = {}
@@ -3315,14 +2888,28 @@ class DeepSeekTrader:
             self.consecutive_errors += 1
             self._log(f"Run loop failed: {e}", 'error')
             
-            # [Watchdog] 连续错误报警
-            if self.consecutive_errors >= 5:
+            # [Watchdog] 分级报警与熔断
+            if self.consecutive_errors >= 10:
+                # Level 3: Critical - Pause Trading
+                await self.send_notification(
+                    f"🛑 **系统熔断保护**\n连续失败 {self.consecutive_errors} 次\n错误: {str(e)[:100]}\n> **系统将暂停交易 30 分钟!**", 
+                    title=f"💀 严重故障暂停 | {self.symbol}"
+                )
+                await asyncio.sleep(1800) # Sleep 30 mins
+                self.consecutive_errors = 0 # Reset after long sleep to try again
+                
+            elif self.consecutive_errors >= 5:
+                # Level 2: Alert
                 await self.send_notification(
                     f"🚨 **系统危急报警**\n连续失败次数: {self.consecutive_errors}\n最后错误: {str(e)[:100]}", 
-                    title=f"💀 系统崩溃风险 | {self.symbol}"
+                    title=f"⚠️ 系统不稳定 | {self.symbol}"
                 )
-                # 休眠更久，防止死循环刷爆日志
                 await asyncio.sleep(10)
+                
+            elif self.consecutive_errors >= 3:
+                # Level 1: Warning (Log only or minor delay)
+                self._log(f"⚠️ 连续错误 {self.consecutive_errors} 次，正在重试...", 'warning')
+                await asyncio.sleep(5)
                 
             return None
         finally:

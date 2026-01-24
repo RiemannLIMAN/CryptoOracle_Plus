@@ -3,11 +3,16 @@ import logging
 import time
 from openai import AsyncOpenAI
 import httpx
-from core.utils import to_float
+from core.utils import to_float, retry_async
 
 class DeepSeekAgent:
     def __init__(self, api_key, base_url="https://api.deepseek.com/v1", proxy=None):
         self.logger = logging.getLogger("crypto_oracle")
+        
+        # [New] Circuit Breaker State
+        self.failure_count = 0
+        self.last_failure_time = 0
+        self.circuit_open_time = 60 # 60s cooldown
         
         client_params = {
             'api_key': api_key,
@@ -421,6 +426,42 @@ class DeepSeekAgent:
         {market_instruction}
         """
 
+    @retry_async(retries=2, delay=2.0, backoff=2.0)
+    async def _call_deepseek_api(self, role_prompt, prompt):
+        """
+        封装 API 调用以便重试 + 熔断保护
+        """
+        # [Circuit Breaker Check]
+        if self.failure_count >= 3:
+            time_since_fail = time.time() - self.last_failure_time
+            if time_since_fail < self.circuit_open_time:
+                self.logger.warning(f"🔌 DeepSeek 熔断保护中 (剩余 {int(self.circuit_open_time - time_since_fail)}s)")
+                return None
+            else:
+                # Reset after cooldown
+                self.failure_count = 0
+        
+        try:
+            response = await self.client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": role_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=300, 
+                timeout=30, # [Optimized] 30s Timeout
+                response_format={"type": "json_object"}
+            )
+            # Success - Reset breaker
+            self.failure_count = 0
+            return response
+            
+        except Exception as e:
+            self.failure_count += 1
+            self.last_failure_time = time.time()
+            self.logger.error(f"DeepSeek API 调用失败 ({self.failure_count}/3): {e}")
+            raise e
+
     async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0, dynamic_tp=True, btc_change_24h=None, is_surge=False, candlestick_pattern=None):
         """
         调用 DeepSeek 进行市场分析
@@ -445,16 +486,11 @@ class DeepSeekAgent:
             
             req_start = time.time()
             
-            response = await self.client.chat.completions.create(
-                model="deepseek-chat",
-                messages=[
-                    {"role": "system", "content": role_prompt},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=300, 
-                timeout=30,
-                response_format={"type": "json_object"}
-            )
+            # [Enhance] 使用带重试的内部方法
+            response = await self._call_deepseek_api(role_prompt, prompt)
+            
+            if not response:
+                return None
             
             req_time = time.time() - req_start
             # self.logger.info(f"[{symbol}] ✅ DeepSeek 响应完成 (耗时: {req_time:.2f}s)")

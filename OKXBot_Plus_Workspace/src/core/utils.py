@@ -12,12 +12,27 @@ from .exceptions import (
     DataProcessingError, AIError
 )
 
+# [New] Notification Cooldown Cache
+_notification_cooldowns = {}
+
 async def send_notification_async(webhook_url, message, title=None):
     """
     异步发送通知，自动识别飞书与钉钉
     """
     if not webhook_url or "YOUR_WEBHOOK" in webhook_url:
         return
+
+    # [Enhance] Notification Cooldown
+    # Key: type_symbol (Need to infer symbol/type from message/title)
+    # Simple Heuristic: Use Title as key component
+    if title:
+        key = f"{title}"
+        now = time.time()
+        if key in _notification_cooldowns:
+            last_time = _notification_cooldowns[key]
+            if now - last_time < 60: # 60s cooldown
+                return
+        _notification_cooldowns[key] = now
 
     headers = {'Content-Type': 'application/json'}
     payload = {}
@@ -183,6 +198,30 @@ def to_float(value):
             return float(v)
     except Exception: return None
     return None
+
+import asyncio
+
+def retry_async(retries=3, delay=1.0, backoff=2.0, exceptions=(Exception,)):
+    """
+    异步重试装饰器 (Exponential Backoff)
+    """
+    def decorator(func):
+        async def wrapper(*args, **kwargs):
+            current_delay = delay
+            for attempt in range(retries):
+                try:
+                    return await func(*args, **kwargs)
+                except exceptions as e:
+                    logger = logging.getLogger("crypto_oracle")
+                    if attempt == retries - 1:
+                        logger.error(f"❌ {func.__name__} 失败 (尝试 {attempt+1}/{retries}): {e}")
+                        raise e
+                    else:
+                        logger.warning(f"⚠️ {func.__name__} 失败: {e} | {current_delay:.1f}s 后重试 ({attempt+1}/{retries})")
+                        await asyncio.sleep(current_delay)
+                        current_delay *= backoff
+        return wrapper
+    return decorator
 
 def exception_handler(func):
     """

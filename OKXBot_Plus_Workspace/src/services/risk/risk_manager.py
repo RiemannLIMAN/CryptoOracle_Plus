@@ -434,12 +434,12 @@ class RiskManager:
             found_usdt = False
             used_total_eq = False
             if self.is_test_mode:
-                # 测试模式下，使用所有交易对的sim_balance总和作为total_equity
-                # 不包含未实现盈亏，避免权益计算错误
+                # [Fix] 测试模式下，使用所有交易对的sim_balance总和作为total_equity
+                # 必须包含未实现盈亏，否则无法正确反映浮亏
                 eq_sum = 0.0
                 for t in self.traders:
-                    sim_bal, _ = await t.get_account_info()
-                    eq_sum += sim_bal
+                    _, sim_equity = await t.get_account_info()
+                    eq_sum += sim_equity
                 total_equity = eq_sum
                 found_usdt = True
                 used_total_eq = True

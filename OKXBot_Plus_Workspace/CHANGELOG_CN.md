@@ -6,6 +6,35 @@
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
 
+## [v3.7.0] - 2026-01-25 (Hybrid Intelligence & Stability Core)
+
+### 🚀 混合智能架构 (Hybrid Intelligence)
+- **RL 仓位管理 (RL Position Sizing)**:
+  - **机制**: 集成了强化学习 (RL) 模块。根据 ATR 波动率、ADX 趋势强度、情绪指数和信心分数，动态预测最佳仓位比例。
+  - **兜底策略**: 在未训练模型或库缺失时，自动回退到精心设计的启发式规则引擎（死鱼盘减仓、强趋势加仓）。
+  - **激进限制**: 引入了硬性风控——当市场情绪极度恐慌 (Sentiment < 20) 时，强制限制最大开仓比例为 50%，防止模型过度抄底。
+- **情绪过滤插件 (Sentiment Filter)**:
+  - **机制**: 实时拉取 Fear & Greed Index。在 "极度贪婪" (>75) 时禁止追高，在 "极度恐慌" (<25) 时禁止追空。
+  - **可配置**: 阈值支持在 `config.json` 中动态调整。
+
+### 🛡️ 稳定性与风控 (Stability & Risk)
+- **API 智能熔断 (Circuit Breaker)**:
+  - **机制**: 为 DeepSeek API 引入熔断保护。连续失败 3 次自动熔断 60 秒，防止网络波动卡死主线程。
+- **权益计算修正 (Equity Fix)**:
+  - **修复**: 彻底修复了测试模式下现货 (Cash Mode) 的权益计算逻辑。现在能正确统计 `Balance + MarketValue`，消除了双重计算或漏算的隐患。
+- **反手优先平仓 (Close First)**:
+  - **逻辑**: 在触发反手信号 (Flip) 时，如果建议仓位不足以覆盖旧仓位，系统将**强制提升下单量至全平**，确保策略意图彻底执行。
+- **连续错误分级报警 (Graded Error Handling)**:
+  - **分级**: 3次警告 -> 5次报警 -> 10次自动暂停交易 30分钟。
+
+### ⚡ 性能优化 (Performance)
+- **数据库批量写入 (Batch IO)**:
+  - **机制**: 引入 Write Buffer，每 10 条或 5 秒刷盘一次，并添加了联合索引，大幅降低数据库 I/O 开销。
+- **指标缓存调优 (TTL Tuning)**:
+  - **机制**: 根据 Timeframe 动态调整缓存时间 (1m->30s, 1h->300s)，平衡实时性与 CPU 占用。
+- **通知冷却 (Notification Cooldown)**:
+  - **机制**: 同一类型报警在 60秒 内只发送一次，彻底解决高频报警刷屏问题。
+
 ## [v3.6.5] - 2026-01-24 (Three-Line Strike & Smart Trailing SL)
 
 ### 🚀 策略升级 (Strategy Upgrade)

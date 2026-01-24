@@ -18,7 +18,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.6.5 (Three-Line Strike & Smart Trailing SL)"
+SYSTEM_VERSION = "v3.7.0 (Hybrid Intelligence & Stability Core)"
 
 BANNER = r"""
    _____                  __           ____                  __   

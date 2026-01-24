@@ -11,6 +11,8 @@ class DataManager:
         self.db_path = db_path
         self.logger = logging.getLogger("data_manager")
         self._ensure_data_dir()
+        self._buffer = []
+        self._last_flush_time = 0
         
     def _ensure_data_dir(self):
         directory = os.path.dirname(self.db_path)
@@ -38,6 +40,12 @@ class DataManager:
                     volatility_status TEXT,
                     PRIMARY KEY (symbol, timeframe, timestamp)
                 )
+            """)
+            
+            # [Optimization] 创建索引以加速查询
+            await db.execute("""
+                CREATE INDEX IF NOT EXISTS idx_symbol_timeframe_ts 
+                ON klines(symbol, timeframe, timestamp DESC)
             """)
             
             # 2. 信号表 (存储 AI 的决策记录)
@@ -74,35 +82,54 @@ class DataManager:
 
     async def save_klines(self, symbol, timeframe, df):
         """
-        保存 K 线数据 (增量更新)
+        保存 K 线数据 (批量缓冲写入)
         df: 包含 kline 数据和计算好的指标
         """
         if df.empty: return
         
         # 转换数据为 tuple 列表
-        records = []
         for _, row in df.iterrows():
             # 确保指标字段存在，不存在填 None
             rsi = row.get('rsi') if pd.notna(row.get('rsi')) else None
             adx = row.get('adx') if pd.notna(row.get('adx')) else None
             atr = row.get('atr') if pd.notna(row.get('atr')) else None
             macd = row.get('macd') if pd.notna(row.get('macd')) else None
-            # 从外部传入或 df 中获取 status，如果没有则为空
             status = row.get('volatility_status') 
             
-            records.append((
+            self._buffer.append((
                 symbol, timeframe, row['timestamp'].to_pydatetime(),
                 row['open'], row['high'], row['low'], row['close'], row['volume'],
                 rsi, adx, atr, macd, status
             ))
             
-        async with aiosqlite.connect(self.db_path) as db:
-            await db.executemany("""
-                INSERT OR REPLACE INTO klines 
-                (symbol, timeframe, timestamp, open, high, low, close, volume, rsi, adx, atr, macd, volatility_status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, records)
-            await db.commit()
+        # Check Buffer Flush Condition (Size > 10 or Time > 5s)
+        import time
+        now = time.time()
+        if len(self._buffer) >= 10 or (now - self._last_flush_time > 5 and len(self._buffer) > 0):
+             await self._flush_buffer()
+
+    async def _flush_buffer(self):
+        if not self._buffer: return
+        
+        import time
+        try:
+            records = self._buffer[:] # Copy
+            self._buffer = [] # Clear immediately
+            self._last_flush_time = time.time()
+            
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.executemany("""
+                    INSERT OR REPLACE INTO klines 
+                    (symbol, timeframe, timestamp, open, high, low, close, volume, rsi, adx, atr, macd, volatility_status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, records)
+                await db.commit()
+                # self.logger.debug(f"💾 批量写入 {len(records)} 条 K 线数据")
+        except Exception as e:
+            self.logger.error(f"批量写入数据库失败: {e}")
+            # Optional: Restore buffer if failed? 
+            # self._buffer.extend(records) 
+            pass
 
     async def save_signal(self, symbol, signal_data, price):
         """保存 AI 信号记录"""
