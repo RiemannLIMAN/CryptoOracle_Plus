@@ -43,13 +43,25 @@ class SignalProcessor:
 
         return True, "通过"
 
-    def check_candlestick_pattern(self, data_input):
+    def check_candlestick_pattern(self, data_input, indicators=None):
         """
         [Hardcore] Python 硬核识别 "三线战法" (Three-Line Strike)
         支持输入: DataFrame 或 包含 'kline_data' 的字典
+        [Update] 增加 indicators 参数，用于环境过滤 (Market Regime Filter)
         """
+        # [Market Regime Filter] 仅在趋势行情中启用三线战法
+        if indicators:
+            adx = indicators.get('adx', 0)
+            if adx < 20:
+                try:
+                    self.logger.info(f"三线过滤: ADX {adx} < 20")
+                except Exception:
+                    pass
+                return None
+
         df = None
         try:
+
             # 1. 如果输入是 DataFrame，直接使用
             if isinstance(data_input, pd.DataFrame):
                 df = data_input
@@ -62,6 +74,10 @@ class SignalProcessor:
                     df = pd.DataFrame(data_input['kline_data'])
             
             if df is None or len(df) < 4:
+                try:
+                    self.logger.info("三线过滤: K线不足4根")
+                except Exception:
+                    pass
                 return None
             
             # 获取最近 4 根 K 线
@@ -85,7 +101,10 @@ class SignalProcessor:
                         else:
                             # 如果没有成交量配合，可能是假突破，记录但不触发强信号?
                             # 或者我们可以返回一个弱信号
-                            pass
+                            try:
+                                self.logger.info(f"三线弱信号: vol4 {vol4:.2f} <= avg {avg_vol3:.2f}")
+                            except Exception:
+                                pass
             
             # --- 识别看跌三线 (Bearish Strike) ---
             # 条件: 三连阳 (上台阶) + 一阴吞三阳
@@ -98,6 +117,11 @@ class SignalProcessor:
                         
                         if vol4 > avg_vol3:
                             return 'BEARISH_STRIKE'
+                        else:
+                            try:
+                                self.logger.info(f"三线弱信号: vol4 {vol4:.2f} <= avg {avg_vol3:.2f}")
+                            except Exception:
+                                pass
                         
         except Exception as e:
             pass

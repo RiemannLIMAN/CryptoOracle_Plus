@@ -19,14 +19,37 @@ class OrderExecutor:
 
     @retry_async(retries=2, delay=0.5)
     async def create_order_with_retry(self, side, amount, order_type='market', price=None, params={}):
-        return await self.exchange.create_order(
-            self.symbol,
-            order_type,
-            side,
-            amount,
-            price,
-            params=params
-        )
+        try:
+            return await self.exchange.create_order(
+                self.symbol,
+                order_type,
+                side,
+                amount,
+                price,
+                params=params
+            )
+        except Exception as e:
+            error_msg = str(e)
+            # [Auto-Fix] 余额不足 (51008) 自动降级重试
+            if "51008" in error_msg and "Insufficient" in error_msg:
+                # 提取余额不足的提示，尝试按比例减少
+                self.logger.warning(f"⚠️ 余额不足 (51008)，尝试减少数量重试: {amount} -> {amount * 0.95:.4f}")
+                # 递归调用自己，减少 5% 数量，最多递归几次由外部重试控制
+                # 但这里是内部逻辑，为了防止无限递归，我们只尝试一次降级
+                # 由于这是在 retry_async 装饰器内部，抛出异常会触发装饰器的重试
+                # 我们可以在这里直接抛出一个带有特殊标记的异常，或者直接修改 amount
+                
+                # 更好的方式：抛出异常让 retry_async 捕获，但 retry_async 只是重试相同的参数
+                # 所以我们必须在这里手动执行一次降级后的下单
+                return await self.exchange.create_order(
+                    self.symbol,
+                    order_type,
+                    side,
+                    amount * 0.95, # 降级 5%
+                    price,
+                    params=params
+                )
+            raise e # 其他错误继续抛出，让 retry_async 处理
 
     async def execute_sim_trade(self, signal_data, current_price):
         """Execute trade in simulation mode"""

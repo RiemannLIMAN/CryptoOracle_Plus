@@ -18,7 +18,7 @@ from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
 
-SYSTEM_VERSION = "v3.7.0 (Hybrid Intelligence & Stability Core)"
+SYSTEM_VERSION = "v3.8.0 (Dual-Track Monitor & Fast Exit)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -131,6 +131,28 @@ async def main():
     if 'notification' in config.data:
         config['trading']['notification'] = config['notification']
 
+    # [New] 可选日志抑制过滤器（针对噪声警告）
+    try:
+        import logging as _logging
+        suppress_patterns = config['trading'].get('log_suppress_patterns', [])
+        if suppress_patterns:
+            class MsgSuppressFilter(_logging.Filter):
+                def __init__(self, patterns):
+                    super().__init__()
+                    self.patterns = patterns
+                def filter(self, record):
+                    msg = record.getMessage()
+                    for p in self.patterns:
+                        if p in msg and record.levelno <= _logging.WARNING:
+                            return False
+                    return True
+            filt = MsgSuppressFilter(suppress_patterns)
+            for h in _logging.getLogger("crypto_oracle").handlers:
+                h.addFilter(filt)
+            logger.info(f"🔇 已启用日志抑制: {', '.join(suppress_patterns)}")
+    except Exception:
+        pass
+
     # DeepSeek Client (Async)
     deepseek_config = config['models']['deepseek']
     proxy = config['trading'].get('proxy', '')
@@ -230,24 +252,49 @@ async def main():
     # 如果用户想在 config.json 里写 "1m" 来避免报错，但又想 30s 跑一次
     # 我们可以在这里硬编码覆盖 interval
     
-    interval = 30 # Default Loop Interval (30s) - Decoupled from Timeframe
+    # [Smart Interval] 默认轮询间隔设定为 60s
+    # 用户痛点: "现在是看15分钟的K线... 循环周期就定在五分钟或者十五分钟... 代码不对"
+    # 解释: 机器人必须高频轮询 (如 60s) 才能实现:
+    # 1. 及时发现 "三线战法" 等形态的完成 (K线收盘确认)
+    # 2. 实时监控止盈止损 (价格/成交量监控)
+    # 如果死板地等待 15分钟，会导致严重的信号滞后。
     
-    # 正常解析逻辑 (仅用于校验 Timeframe 格式，不再影响 interval)
-    # if 'm' in timeframe: interval = int(timeframe.replace('m', '')) * 60
-    # elif 'h' in timeframe: interval = int(timeframe.replace('h', '')) * 3600
-    # elif 'ms' in timeframe: interval = int(timeframe.replace('ms', '')) / 1000
-    # elif 's' in timeframe: interval = int(timeframe.replace('s', ''))
+    default_interval = 60 # 默认 1分钟检查一次
     
-    # [方案 A] 强制使用 loop_interval (如果存在)，与 timeframe 解耦
-    # 这样可以实现：Timeframe="15m" (看15分钟图)，但每 15秒 (loop_interval) 检查一次
+    # 正常解析逻辑 (仅用于校验 Timeframe 格式)
+    # if 'm' in timeframe: interval = int(timeframe.replace('m', '')) * 60 ...
+    
+    # [方案 A] 优先使用 config 中的 loop_interval (如果存在)
     custom_interval = config['trading'].get('loop_interval')
+    # [Architecture Update] 频率解耦架构
+    # AI 频率: 由 loop_interval 控制 (例如 300s)
+    # 监控频率: 固定 60s (或更短)
+    # 主循环: 必须按最快频率运行 (60s)，但在内部对 AI 任务进行节流 (Throttle)
+    
+    ai_loop_interval = 60 # Default fallback
+    
     if custom_interval and isinstance(custom_interval, (int, float)) and custom_interval > 0:
-        logger.info(f"⚡ [单频模式] K线周期: {timeframe} | 轮询间隔: {custom_interval}s (Config Override)")
-        interval = custom_interval
+        logger.info(f"⚡ [AI配置] AI分析周期: {custom_interval}s (由配置文件控制)")
+        ai_loop_interval = custom_interval
     else:
-        logger.info(f"⏰ K线周期: {timeframe} | 默认轮询间隔: {interval}s (Default)")
+        # 如果没有设定，则使用 Timeframe 动态计算，同原逻辑
+        tf_seconds = 900 
+        if 'm' in timeframe: tf_seconds = int(timeframe.replace('m', '')) * 60
+        elif 'h' in timeframe: tf_seconds = int(timeframe.replace('h', '')) * 3600
+        ai_loop_interval = min(60, max(30, int(tf_seconds / 5)))
+        logger.info(f"⏰ [智能模式] AI分析周期: {ai_loop_interval}s")
 
-    logger.info(f"⏰ 最终轮询间隔: {interval}秒")
+    # 主循环 tick 必须足够快，以满足 1m 监控需求
+    # 因此，我们取 min(ai_loop_interval, 60) 作为物理 tick
+    main_tick_interval = min(ai_loop_interval, 60)
+    logger.info(f"🏎️ [系统核心] 主循环心跳: {main_tick_interval}s (保障软件级高频监控)")
+    
+    # 将 AI 间隔注入到 trading 配置中，供 Trader 内部节流使用
+    config['trading']['actual_ai_interval'] = ai_loop_interval
+
+    logger.info(f"⏰ 最终轮询间隔: {main_tick_interval}秒")
+    
+    interval = main_tick_interval # Compatible with below logic
     
     # [New] 单频心跳机制 (Unified Loop)
     # 移除了旧版的双频模式 (tick_rate + analysis_tick)，现在统一使用 interval 进行轮询
@@ -299,7 +346,7 @@ async def main():
             header = f"📊 MARKET SCAN | {len(results)} Symbols"
             table_lines.append(header) 
             table_lines.append("─" * 160)
-            table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'PERSONA':<15} | {'RSI':<4} | {'ATR':<4} | {'VOL':<4} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
+            table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'PERSONA':<15} | {'RSI':<4} | {'ATR':<4} | {'VOL':<4} | {'PAT':<4} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
             # [Fix] 增加表头分隔线的长度以覆盖所有列
             table_lines.append("─" * 180) 
             
@@ -346,6 +393,13 @@ async def main():
                     sig_icon = "✋"
                     if signal == 'BUY': sig_icon = "🚀"
                     elif signal == 'SELL': sig_icon = "📉"
+                    pat = res.get('pattern', '-')
+                    pat_display = '-'
+                    if pat == 'BULLISH_STRIKE':
+                        pat_display = 'BULL'
+                    elif pat == 'BEARISH_STRIKE':
+                        pat_display = 'BEAR'
+
                     signal_display = f"{sig_icon} {signal}"
                     
                     conf = res['confidence']
@@ -380,7 +434,7 @@ async def main():
                     
                     price_str = f"${res['price']:,.2f}"
                     
-                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {persona_short:<15} | {rsi_str:<4} | {atr_str:<4} | {vol_str:<4} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
+                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {persona_short:<15} | {rsi_str:<4} | {atr_str:<4} | {vol_str:<4} | {pat_display:<4} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
             
             table_lines.append("─" * 180)
             

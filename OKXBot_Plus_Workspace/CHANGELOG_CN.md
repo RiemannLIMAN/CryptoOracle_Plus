@@ -6,6 +6,25 @@
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
 
+## [v3.8.0] - 2026-01-25 (Dual-Track Monitor & Fast Exit)
+
+### 🚀 核心架构升级 (Core Architecture)
+- **双轨并行监控 (Dual-Track Monitoring)**:
+  - **频率解耦**: 彻底分离了 **AI 战略层** (低频, 如 5m/15m) 与 **软件战术层** (高频, 60s)。
+  - **机制**: 主循环强制以 60s 心跳运行，确保对市场的敏捷反应；AI 分析模块则严格遵守 `loop_interval` 配置 (如 300s)，仅在特定时间点唤醒。
+  - **收益**: 既节省了 AI Token 成本，又实现了分钟级的实时风控。
+
+### ⚡ 极速止盈 (Fast Pattern Exit)
+- **1分钟三线战法 (1m Three-Line Strike)**:
+  - **机制**: 在软件战术层 (高频轨道) 中集成了独立的三线战法扫描器。
+  - **逻辑**: 即使 AI 跑在 15m 周期，系统也会每分钟拉取最新的 1m K线。一旦检测到 **看跌三线 (Bearish Strike)** (多单) 或 **看涨三线 (Bullish Strike)** (空单) 形态，立即市价止盈。
+  - **优势**: 实现了 "15分钟看趋势开仓，1分钟看形态逃顶" 的降维打击策略，大幅提高了利润锁定的及时性。
+
+### 🛠️ 逻辑增强 (Logic Enhancement)
+- **持仓数据保鲜 (Fresh Data Feed)**:
+  - **修复**: 在 AI 分析前的最后一秒，强制刷新持仓状态 (`current_pos`)。
+  - **目的**: 确保 AI 在做出决策时，使用的是毫秒级的最新持仓数据，防止因 1m 止盈刚刚触发而导致的数据不同步。
+
 ## [v3.7.0] - 2026-01-25 (Hybrid Intelligence & Stability Core)
 
 ### 🚀 混合智能架构 (Hybrid Intelligence)

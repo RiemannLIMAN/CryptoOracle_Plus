@@ -111,7 +111,9 @@ class DeepSeekTrader:
         
         # [New] Circuit Breaker (Cool-down)
         self.last_stop_loss_time = 0
-        self.cool_down_seconds = 60 # [Optimized] Reduced from 300s to 60s to avoid missing opportunities
+        self.cool_down_seconds = 180 # [Safety] Increase to 180s (3 mins) to prevent rapid churn
+        self.last_trade_time = 0     # [New] Track last trade time
+        self.min_trade_interval = 300 # [New] Minimum 5 mins between OPENING new trades (Closing is always allowed)
         
         # [New] Hot Reload Config
         self.config_path = 'config.json'
@@ -125,6 +127,9 @@ class DeepSeekTrader:
         # [New] Global Circuit Breaker
         self.daily_high_equity = 0.0
         self.high_water_day = datetime.now().strftime('%Y%m%d')
+
+        self.analyze_on_bar_close = bool(common_config.get('analyze_on_bar_close', False))
+        self._last_analyzed_bar_ts = None
 
         # [New] State Persistence
         self.state_file = f"data/state_{self.symbol.replace('/', '_')}.json"
@@ -841,6 +846,9 @@ class DeepSeekTrader:
         # This allows _check_candlestick_pattern to use the DataFrame directly
         result['df'] = df
         
+        # [New] Pass indicators to result for SignalProcessor context awareness
+        # Already included in 'indicators' key above
+        
         return result
 
 
@@ -919,24 +927,45 @@ class DeepSeekTrader:
             self._log("⚡ 移动止盈已执行，跳过本次 AI 信号处理")
             return "EXECUTED", "移动止盈触发"
 
-        # [New] Cool-down Check (Circuit Breaker)
+        # [New] Circuit Breaker (Cool-down)
         # 如果最近刚触发过止损，强制暂停开新仓 (Closing 操作除外)
         # 防止在震荡市中反复止损 (Whipsaw)
         is_opening = False
         if signal_data['signal'] == 'BUY':
              if not current_position or current_position['side'] == 'long': is_opening = True
-             # 如果是 Short -> Buy，那是 Closing/Flip，Flip 部分在后面有逻辑，这里先看 Opening
+             elif current_position['side'] == 'short' and signal_data.get('amount', 0) > 0: is_opening = True # Flip is also opening
         elif signal_data['signal'] == 'SELL':
              if self.trade_mode != 'cash' and (not current_position or current_position['side'] == 'short'): is_opening = True
+             elif current_position and current_position['side'] == 'long' and signal_data.get('amount', 0) > 0: is_opening = True # Flip is also opening
         
-        # 准确判断是否是纯开仓/加仓 (非平仓)
-        # 简单的逻辑: 如果不是 is_closing (后面定义的)，那就有可能是 Opening
-        # 但 is_closing 在后面定义。我们这里先用一个简单的预判。
-        
-        # 更好的位置是在 is_closing 确定之后，但在执行下单之前。
-        # 让我们往下找 is_closing 的定义处 (Line ~1062)
+        # 1. 交易频率限制 (Frequency Limit)
+        # 强制限制开仓间隔，防止高频刷单 (Churning)
+        # 默认间隔 5分钟 (300s)，可通过 min_trade_interval 配置
+        # 仅针对开新仓 (is_opening)，平仓 (Closing) 不受限制以确保风险控制
+        import time
+        now = time.time()
+        if is_opening:
+             # Check Stop Loss Cool-down
+             if self.last_stop_loss_time > 0:
+                 time_since_sl = now - self.last_stop_loss_time
+                 if time_since_sl < self.cool_down_seconds:
+                     self._log(f"🧊 止损冷却中: 剩余 {int(self.cool_down_seconds - time_since_sl)}s (保护期)", 'warning')
+                     return "SKIPPED_COOL_DOWN", "止损保护期"
+             
+             # Check Trade Frequency Cool-down
+             if self.last_trade_time > 0:
+                 time_since_trade = now - self.last_trade_time
+                 # 如果上一笔交易发生还没多久，且这笔也是开仓，则拦截
+                 # 除非是加仓 (Scaling In)? 暂不区分，统一限制，防止 AI 发疯连续下单
+                 # 但如果是 AI 连续喊单，可能是为了分批建仓...
+                 # 为了防止"日内高频刷单"，我们设置一个较短的间隔，比如 3分钟 (180s)
+                 # 或者使用 min_trade_interval (300s)
+                 limit_interval = getattr(self, 'min_trade_interval', 300)
+                 if time_since_trade < limit_interval:
+                      self._log(f"⏳ 交易频率限制: 距离上次开仓仅 {int(time_since_trade)}s (需等待 {limit_interval}s)", 'warning')
+                      return "SKIPPED_FREQ_LIMIT", "交易频率限制"
 
-        # 1. 信心过滤
+        # 2. 信心过滤
         confidence_levels = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
         current_conf_val = confidence_levels.get(signal_data.get('confidence', 'LOW').upper(), 1)
         min_conf_val = confidence_levels.get(self.min_confidence.upper(), 2)
@@ -981,7 +1010,9 @@ class DeepSeekTrader:
 
         # [New] Grid Trader Exemption: Allow LOW confidence BUYs in Low Volatility
         # 网格策略在震荡市中通常信心不高，但这是正常的吸筹行为
-        volatility_status = signal_data.get('volatility_status', 'NORMAL')
+        # [Fix] 变量覆盖问题
+        # 上面 978 行重新获取了 volatility_status，这里直接使用，不再覆盖
+        # volatility_status = signal_data.get('volatility_status', 'NORMAL')
         if volatility_status == 'LOW' and signal_data['signal'] == 'BUY':
             if current_conf_val < min_conf_val:
                 self._log(f"⚠️ 信心豁免(网格): 低波动市场(LOW Volatility)允许低信心吸筹")
@@ -1007,40 +1038,11 @@ class DeepSeekTrader:
 
             return "HOLD", "AI建议观望"
 
-        # [New] Hard Technical Filters (Win Rate > 60%)
-        # 仅当涉及开新仓位时检查 (Opening or Flipping)
-        is_entry = False
-        if signal_data['signal'] == 'BUY':
-             # 没持仓 -> Entry
-             if not current_position: is_entry = True
-             # 持多 -> Entry (加仓)
-             elif current_position['side'] == 'long': is_entry = True
-             # 持空 -> Flip (反手) -> Entry
-             elif current_position['side'] == 'short' and signal_data.get('amount', 0) > 0: is_entry = True
-             
-        elif signal_data['signal'] == 'SELL':
-             # 没持仓 -> Entry (开空)
-             if not current_position: is_entry = True
-             # 持空 -> Entry (加仓)
-             elif current_position['side'] == 'short': is_entry = True
-             # 持多 -> Flip (反手) -> Entry
-             elif current_position['side'] == 'long' and signal_data.get('amount', 0) > 0: is_entry = True
+        # [Disabled] Hard Technical Filters (Win Rate > 60%)
+        # User Feedback: Remove this filter to allow more trades, especially for Shorting
+        # is_entry = False
+        # ... (Original logic commented out or removed)
 
-        if is_entry:
-            tech_pass, tech_msg = self._check_technical_filters(signal_data['signal'], getattr(self, 'last_indicators', {}))
-            if not tech_pass:
-                # 如果是反手，降级为仅平仓
-                is_flipping = False
-                if current_position:
-                    if signal_data['signal'] == 'BUY' and current_position['side'] == 'short': is_flipping = True
-                    if signal_data['signal'] == 'SELL' and current_position['side'] == 'long': is_flipping = True
-                
-                if is_flipping:
-                    self._log(f"🛑 技术面拦截反手: {tech_msg} -> 降级为仅平仓", 'warning')
-                    signal_data['amount'] = 0 # 强制改为仅平仓
-                else:
-                    self._log(f"🛑 技术面拦截开仓: {tech_msg}", 'warning')
-                    return "SKIPPED_TECH", tech_msg
 
         if self.test_mode:
             # Need a price for simulation
@@ -1100,12 +1102,27 @@ class DeepSeekTrader:
                  if hasattr(self, 'config') and 'risk_control' in self.config:
                      risk_rate = float(self.config['risk_control'].get('max_loss_rate', 0.05))
                  
+                 # [ATR Dynamic SL]
+                 # 如果是高波动币种，5% 太窄容易被洗。尝试用 3倍 ATR 作为止损
+                 try:
+                     last_indicators = getattr(self, 'last_indicators', {})
+                     atr_val = last_indicators.get('atr')
+                     if atr_val and atr_val > 0:
+                         dynamic_rate = (atr_val / current_realtime_price) * 3.0
+                         # 限制在 5% - 15% 之间 (太小就用 5%，太大不超过 15%)
+                         new_risk_rate = max(0.05, min(dynamic_rate, 0.15))
+                         if new_risk_rate > risk_rate:
+                             self._log(f"🌊 高波动适配: ATR止损 {new_risk_rate*100:.1f}% > 默认 {risk_rate*100:.1f}%", 'info')
+                             risk_rate = new_risk_rate
+                 except:
+                     pass
+
                  if target_side == 'long':
                      sl = current_realtime_price * (1 - risk_rate)
                  else:
                      sl = current_realtime_price * (1 + risk_rate)
                  
-                 self._log(f"🛡️ 强制设置默认止损: {sl:.4f} (按照 {risk_rate*100}% 风控)", 'info')
+                 self._log(f"🛡️ 强制设置默认止损: {sl:.4f} (按照 {risk_rate*100:.1f}% 风控)", 'info')
             
             # Update Dynamic Risk Params
             if sl > 0:
@@ -1336,41 +1353,44 @@ class DeepSeekTrader:
         if signal_data.get('confidence', '').upper() == 'HIGH':
             # 🦁 激进模式: 允许突破单币种配额，调用账户闲置资金
             # 限制：最多使用账户余额的 90% (保留 10% 作为安全垫/其他币种救急)
-            # [Logic Change] 必须同时受限于 initial_balance (如果配置了)
-            # 即: Global Limit = min(Real_Balance, Configured_Balance) * 0.9
             
-            effective_balance = balance
-            if self.initial_balance > 0:
-                 effective_balance = min(balance, self.initial_balance)
-            
-            # 扣除当前持仓占用的保证金，计算剩余可用资金
-            # 注意: 这里计算的是 "整个 Bot" 的剩余资金
-            used_margin = 0
+            # [Safety Check] 防止在亏损时无限加仓 (Martingale Trap)
+            # 只有当 current_position 盈利时，才允许 aggressive scaling
+            can_scale_aggressively = True
             if current_position:
-                 used_margin = (current_position['size'] * contract_size * current_realtime_price) / self.leverage
+                 entry_price = float(current_position.get('entry_price', 0))
+                 if entry_price > 0:
+                     if current_position['side'] == 'long' and current_realtime_price < entry_price: can_scale_aggressively = False
+                     if current_position['side'] == 'short' and current_realtime_price > entry_price: can_scale_aggressively = False
             
-            # [Logic Fix] 如果是反手信号 (Flip)，预期会释放当前保证金
-            is_potential_flip = False
-            if current_position:
-                if signal_data['signal'] == 'BUY' and current_position['side'] == 'short': is_potential_flip = True
-                if signal_data['signal'] == 'SELL' and current_position['side'] == 'long': is_potential_flip = True
-
-            # [Correct Logic] 资金计算逻辑修正
+            if not can_scale_aggressively:
+                 self._log(f"⚠️ 激进加仓被拦截: 当前持仓浮亏，禁止突破配额", 'warning')
+            else:
+                 self._log(f"🦁 激进模式激活: 突破单币种配额限制 (信心 HIGH)", 'info')
+                 max_trade_limit = max(max_trade_limit, (potential_balance * 0.9 * self.leverage) / current_realtime_price)
+            
+            # [Correct Logic] 资金计算逻辑修正 (Moved Up Logic)
             # 1. 还原当前总权益 (Total Equity)
             #    balance 是可用余额 (Avail)
             #    used_margin 是当前持仓占用
-            #    注意：这里忽略了未实现盈亏(uPnL)对Equity的影响，因为我们只关心本金和占用
+            used_margin = 0
+            if current_position:
+                used_margin = (current_position['size'] * contract_size * current_realtime_price) / self.leverage
+
             current_equity = balance + used_margin
             
             # 2. 确定资金上限 (Cap)
-            #    如果设置了 initial_balance，则不能超过它
             effective_cap = current_equity
             if self.initial_balance > 0:
                 effective_cap = min(current_equity, self.initial_balance)
             
             # 3. 计算可用资金 (Available Capital)
-            #    基本公式: Cap - 当前占用
-            #    如果反手 (Flip)，当前占用会被释放，所以不需要扣除 (margin_to_deduct = 0)
+            #    如果反手 (Flip)，当前占用会被释放，所以不需要扣除
+            is_potential_flip = False
+            if current_position:
+                if signal_data['signal'] == 'BUY' and current_position['side'] == 'short': is_potential_flip = True
+                if signal_data['signal'] == 'SELL' and current_position['side'] == 'long': is_potential_flip = True
+
             margin_to_deduct = 0 if is_potential_flip else used_margin
             available_capital = max(0, effective_cap - margin_to_deduct)
             
@@ -1381,15 +1401,11 @@ class DeepSeekTrader:
                      pnl = current_position.get('unrealized_pnl', 0)
                      available_capital += (pnl - close_fee)
                  else:
-                     # 全仓模式下，Equity 已经包含了 uPnL，所以不需要加 PnL，只扣手续费
                      available_capital -= close_fee
-                 
                  available_capital = max(0, available_capital)
                  self._log(f"🔄 检测到反手信号，预估释放资金: {available_capital:.2f} U")
-            
+
             # 计算物理最大可开仓数量 (Physical Max)
-            # [Full Port] 即使是梭哈，也必须预留 2% 资金作为手续费和滑点缓冲
-            # 否则一旦市场波动，可能会因为保证金不足而开仓失败
             buffer_rate = 0.98 
             
             max_physical_token = 0
@@ -1401,14 +1417,9 @@ class DeepSeekTrader:
             trade_amount = min(ai_suggest, max_physical_token)
             
             # [Fix] 信号量优先平仓逻辑 (Close First)
-            # 如果是反手 (Flip)，确保下单量至少能覆盖现有持仓，实现先平后开
             if is_potential_flip and current_position:
                 current_size = float(current_position['size'])
                 if trade_amount < current_size and trade_amount > 0:
-                     # 如果 AI 建议的量小于持仓量，说明只是减仓或平仓，不是真正的反手开仓
-                     # 但如果是 Flip 信号，通常意味着要持有反向仓位
-                     # 我们可以强制提升下单量到 current_size (仅平仓) 或 slightly more (微量反手)
-                     # 考虑到风险，这里至少保证完全平仓
                      self._log(f"⚠️ 信号反转且建议量 ({trade_amount}) < 持仓量 ({current_size})，自动修正为全平: {current_size}", 'warning')
                      trade_amount = current_size
             
@@ -2618,9 +2629,173 @@ class DeepSeekTrader:
             price_data = await self.get_ohlcv()
             if not price_data: return None
 
+            # [New] Fast Pattern Exit (Monitor by Minute) - User Request: "monitor by minute... fetch volume/price... three-line strategy"
+            # 移至 analyze_on_bar_close 之前，确保即使在 K 线未收盘时也能触发分钟级止盈
+            current_pos = await self.get_current_position()
+            if current_pos:
+                try:
+                    # [Debug] 显性化监控状态：只有持仓时才会打印此日志
+                    # self._log(f"🔍 [1m监控] 正在扫描 {self.symbol} 持仓的三线形态...", 'debug')
+                    
+                    # 1. Fetch 1m data for fast exit monitoring
+                    ohlcv_1m = await self.exchange.fetch_ohlcv(self.symbol, '1m', limit=10)
+                    if ohlcv_1m:
+                         df_1m = pd.DataFrame(ohlcv_1m, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                         # Convert numeric
+                         for col in ['open', 'high', 'low', 'close', 'volume']:
+                             df_1m[col] = df_1m[col].astype(float)
+                         
+                         # 2. Check Pattern on 1m
+                         pat_1m = self.signal_processor.check_candlestick_pattern(df_1m)
+                         
+                         should_close = False
+                         exit_reason = ""
+                         
+                         # 3. Decision Logic
+                         if current_pos['side'] == 'long' and pat_1m == 'BEARISH_STRIKE':
+                             should_close = True
+                             exit_reason = "1m三线战法(看跌) - 极速止盈"
+                         elif current_pos['side'] == 'short' and pat_1m == 'BULLISH_STRIKE':
+                             should_close = True
+                             exit_reason = "1m三线战法(看涨) - 极速止盈"
+                             
+                         if should_close:
+                             self._log(f"⚡ [Fast Exit] 触发极速离场信号: {exit_reason}")
+                             # Execute Close
+                             await self.order_executor.execute_order(
+                                 self.symbol, 'close', 'market', 
+                                 amount=float(current_pos['size']), 
+                                 params={'reduceOnly': True}
+                             )
+                             await self.send_notification(f"⚡ **极速止盈触发**\n原因: {exit_reason}\n周期: 1m监控", title=f"🚀 止盈离场 | {self.symbol}")
+                             # [Fix] 极速止盈后直接返回，不继续等待 K 线收盘
+                             return {
+                                 'symbol': self.symbol,
+                                 'price': price_data['price'],
+                                 'change': price_data['price_change'],
+                                 'signal': 'CLOSE',
+                                 'confidence': 'HIGH',
+                                 'reason': exit_reason,
+                                 'status': 'EXECUTED',
+                                 'summary': 'Fast Exit Triggered',
+                                 'volatility': price_data.get('volatility_status', 'NORMAL'),
+                                 'persona': 'Fast Guard',
+                                 'recommended_sleep': 60.0
+                             }
+                except Exception as e:
+                    self._log(f"Fast exit check failed: {e}", 'warning')
+
+            if self.analyze_on_bar_close:
+                # [Frequency Decoupling]
+                # 即使是 analyze_on_bar_close，我们也需要检查是否到了用户配置的 loop_interval
+                # 否则如果主循环是 60s，AI 也会每 60s 检查一次是否收盘 (这没问题)
+                # 但如果用户想 300s 才检查一次 AI，这里需要节流
+                
+                ai_interval = self.common_config.get('actual_ai_interval', 60)
+                if not hasattr(self, 'last_ai_check_time'):
+                    self.last_ai_check_time = 0
+                
+                # 如果距离上次 AI 检查时间不足 loop_interval (且不是第一次)，则跳过 AI 部分
+                # 但要允许一定的误差 (例如 1秒)，防止因为 sleep 精度导致刚好错过
+                if time.time() - self.last_ai_check_time < (ai_interval - 2):
+                    # 返回一个简单的状态，表明正在监控中
+                    return {
+                        'symbol': self.symbol,
+                        'price': price_data['price'],
+                        'change': price_data['price_change'],
+                        'signal': 'HOLD',
+                        'confidence': 'LOW',
+                        'reason': 'AI冷却中 (Monitoring Mode)',
+                        'status': 'HOLD',
+                        'status_msg': f'监控中 ({int(ai_interval - (time.time() - self.last_ai_check_time))}s)',
+                        'volatility': price_data.get('volatility_status', 'NORMAL'),
+                        'persona': 'Monitor Guard',
+                        'recommended_sleep': 1.0 # 保持活跃
+                    }
+                
+                # 更新检查时间
+                self.last_ai_check_time = time.time()
+                
+                try:
+                    tf = self.timeframe
+                    tf_sec = 0
+                    if tf.endswith('m'):
+                        tf_sec = int(tf[:-1]) * 60
+                    elif tf.endswith('h'):
+                        tf_sec = int(tf[:-1]) * 3600
+                    elif tf.endswith('d'):
+                        tf_sec = int(tf[:-1]) * 86400
+                    last_rec = price_data.get('kline_data', [])[-1]
+                    last_ts = pd.Timestamp(last_rec['timestamp']).timestamp() if last_rec else None
+                    now_ts = time.time()
+                    if last_ts and now_ts < last_ts + tf_sec:
+                        persona_map = {
+                            'HIGH_TREND': 'Trend Hunter (趋势猎人)',
+                            'LOW': 'Grid Trader (网格交易)',
+                            'HIGH_CHOPPY': 'Risk Guardian (风控卫士)',
+                            'NORMAL': 'Day Trader (波段交易)'
+                        }
+                        persona = persona_map.get(price_data.get('volatility_status', 'NORMAL'), 'NORMAL')
+                        return {
+                            'symbol': self.symbol,
+                            'price': price_data['price'],
+                            'change': price_data.get('price_change', 0.0),
+                            'signal': 'HOLD',
+                            'confidence': 'LOW',
+                            'reason': '等待K线收盘',
+                            'summary': '等待K线收盘',
+                            'status': 'HOLD',
+                            'status_msg': '未收盘',
+                            'volatility': price_data.get('volatility_status', 'NORMAL'),
+                            'persona': persona,
+                            'adx': price_data.get('indicators', {}).get('adx'),
+                            'rsi': price_data.get('indicators', {}).get('rsi'),
+                            'atr_ratio': price_data.get('indicators', {}).get('atr_ratio'),
+                            'vol_ratio': price_data.get('indicators', {}).get('vol_ratio'),
+                            'recommended_sleep': max(1.0, min(tf_sec, 60))
+                        }
+                    if last_ts and self._last_analyzed_bar_ts == last_ts:
+                        persona_map = {
+                            'HIGH_TREND': 'Trend Hunter (趋势猎人)',
+                            'LOW': 'Grid Trader (网格交易)',
+                            'HIGH_CHOPPY': 'Risk Guardian (风控卫士)',
+                            'NORMAL': 'Day Trader (波段交易)'
+                        }
+                        persona = persona_map.get(price_data.get('volatility_status', 'NORMAL'), 'NORMAL')
+                        return {
+                            'symbol': self.symbol,
+                            'price': price_data['price'],
+                            'change': price_data.get('price_change', 0.0),
+                            'signal': 'HOLD',
+                            'confidence': 'LOW',
+                            'reason': '本周期已分析',
+                            'summary': '本周期已分析',
+                            'status': 'HOLD',
+                            'status_msg': '已分析',
+                            'volatility': price_data.get('volatility_status', 'NORMAL'),
+                            'persona': persona,
+                            'adx': price_data.get('indicators', {}).get('adx'),
+                            'rsi': price_data.get('indicators', {}).get('rsi'),
+                            'atr_ratio': price_data.get('indicators', {}).get('atr_ratio'),
+                            'vol_ratio': price_data.get('indicators', {}).get('vol_ratio'),
+                            'recommended_sleep': 5.0
+                        }
+                    if last_ts:
+                        self._last_analyzed_bar_ts = last_ts
+                except Exception:
+                    pass
+
             # [Optimized] 获取实时余额用于动态资金计算
             balance, equity = await self.get_account_info()
             
+            # Call Agent
+            # [Fix] 确保在调用 AI 之前获取最新的持仓信息
+            # 即使前面 Fast Exit 已经获取过一次，这里为了保险起见（可能刚才被止盈了），最好再次确认
+            # 但为了性能，如果刚才没触发止盈，复用 current_pos 也可以
+            # 这里我们选择安全起见，复用之前获取的 current_pos，如果它为空，再尝试获取一次
+            if not current_pos:
+                 current_pos = await self.get_current_position()
+
             # [New] Global Circuit Breaker (账户级熔断)
             # 记录当日最高权益 (High Water Mark)
             # [Fix] Reset high water mark when day changes
@@ -2689,6 +2864,10 @@ class DeepSeekTrader:
             if candlestick_pattern:
                 is_surge = True
                 surge_reason = f"形态突袭 ({candlestick_pattern})"
+                try:
+                    self._log(f"📐 三线战法识别: {candlestick_pattern}")
+                except Exception:
+                    pass
             
             vol_ratio = ind.get('vol_ratio')
             if vol_ratio and vol_ratio > 3.0:
@@ -2751,11 +2930,12 @@ class DeepSeekTrader:
                     'rsi': rsi_val,
                     'atr_ratio': ind.get('atr_ratio'),
                     'vol_ratio': ind.get('vol_ratio'),
+                    'pattern': candlestick_pattern or '-',
                     'recommended_sleep': 60.0
                 }
 
-            # Call Agent
-            current_pos = await self.get_current_position()
+            # Call Agent (Wait, we already have current_pos above)
+            # current_pos = await self.get_current_position() # Removed duplicate call
             
             # [New] 实时更新移动止损 (Real Trailing SL)
             if current_pos:
@@ -2880,6 +3060,7 @@ class DeepSeekTrader:
                     'rsi': ind.get('rsi'), # [New]
                     'atr_ratio': ind.get('atr_ratio'), # [New]
                     'vol_ratio': ind.get('vol_ratio'), # [New]
+                    'pattern': candlestick_pattern or '-',
                     'recommended_sleep': recommended_sleep # [New]
                 }
             return None
