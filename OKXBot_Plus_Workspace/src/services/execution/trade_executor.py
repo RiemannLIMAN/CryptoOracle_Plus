@@ -2340,6 +2340,7 @@ class DeepSeekTrader:
                      self.dynamic_stop_loss = breakeven_price
                      # 这里不 return，允许下方的 trailing 逻辑继续尝试能不能提得更高
             
+            
             ohlcv = price_data.get('ohlcv', [])
             # [Fix] 至少需要 4 根 K 线，因为我们要排除当前未收盘的这一根，取前 3 根已完成的
             if len(ohlcv) < 4: return
