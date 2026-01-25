@@ -208,8 +208,6 @@ CryptoOracle 是一个开放源代码项目，我们欢迎任何形式的贡献�
 <img width="400" height="511" alt="image" src="https://github.com/user-attachments/assets/d2a5d2b8-6137-456c-acbe-4ce5d4c3376a" />
 <img width="400" height="494" alt="image" src="https://github.com/user-attachments/assets/25b453f7-3b1a-4766-8019-b8a685d8a4b6" />
 
-
-*   🦄 **OKX 全球邀请码**: `95572792`
 *   👉 **注册链接**: [点击这里注册 OKX (免翻墙)](https://www.okx.com/register?inviteCode=95572792)
 
 
