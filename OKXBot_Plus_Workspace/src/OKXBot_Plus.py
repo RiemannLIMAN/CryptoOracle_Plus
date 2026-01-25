@@ -97,7 +97,7 @@ async def run_system_check(logger, exchange, agent, config):
         )
         logger.info("✅ DeepSeek API 连接成功")
         
-        print("🚀 系统自检完成")
+        # print("🚀 系统自检完成")
         print("="*30 + "\n")
         return total_usdt
         
@@ -203,13 +203,12 @@ async def main():
         
         # 如果不是最后一批，暂停一下
         if i + batch_size < len(config['symbols']):
-            logger.info(f"⏳ 已初始化 {len(traders)}/{len(config['symbols'])} 个交易对，休息 2 秒...")
+            logger.debug(f"⏳ 已初始化 {len(traders)}/{len(config['symbols'])} 个交易对，休息 2 秒...")
             await asyncio.sleep(2)
 
     risk_manager = RiskManager(exchange, config['trading'].get('risk_control', {}), traders)
     
     # 初始化插件系统
-    logger.info("🔌 初始化插件系统...")
     plugin_manager.load_plugins(config, exchange, agent)
     await plugin_manager.initialize_plugins()
     
@@ -231,7 +230,7 @@ async def main():
     logger.info("⏳ 正在预热市场数据...")
     pre_warm_tasks = [trader.get_ohlcv() for trader in traders]
     await asyncio.gather(*pre_warm_tasks, return_exceptions=True)
-    logger.info("✅ 数据预热完成")
+    
     
 
     # [Architecture Update] 频率解耦架构
@@ -260,7 +259,7 @@ async def main():
     await risk_manager.initialize_baseline(start_equity)
     
     # 显示历史战绩
-    risk_manager.display_pnl_history()
+    # risk_manager.display_pnl_history()
     
     # [User Request] 移除繁琐的启动概览表格
     logger.info("🏁 初始化完成，进入主循环...")
@@ -283,15 +282,15 @@ async def main():
         while True:
             current_ts = time.time()
             
-            # 1. 批次执行开始日志
-            current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            logger.info(f"─" * 60)
-            logger.info(f"⏰ 批次执行开始: {current_time_str}")
-            logger.info(f"─" * 60)
+            # 1. 批次执行开始日志 (静默模式)
+            # current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            # logger.info(f"─" * 60)
+            # logger.info(f"⏰ 批次执行开始: {current_time_str}")
+            # logger.info(f"─" * 60)
 
             # 2. 账户监控与风控检查
             # check() 会打印当前的 PnL 状态
-            await risk_manager.check(force_log=True)
+            await risk_manager.check(force_log=False) # [User Request] 关闭风控日志强制打印
             
             # 3. 插件系统 - 每轮循环调用
             await plugin_manager.on_tick({"timestamp": current_ts, "traders": traders})
@@ -310,7 +309,7 @@ async def main():
                 
                 # 如果不是最后一批，暂停一下
                 if i + batch_size < len(traders):
-                    logger.info(f"⏳ 已处理 {len(results)}/{len(traders)} 个交易对，休息 1 秒...")
+                    logger.debug(f"⏳ 已处理 {len(results)}/{len(traders)} 个交易对，休息 1 秒...")
                     await asyncio.sleep(1)
             
             # 4. 结构化表格输出
@@ -328,8 +327,15 @@ async def main():
             # 分隔线长度需要足够长以覆盖所有列
             separator_line = "─" * 180 
             
-            logger.info("📊 MARKET SCAN | {} Symbols".format(len(results)))
-            logger.info(separator_line)
+            # [User Request] 移除表格上方所有冗余打印
+            # logger.info("📊 MARKET SCAN | {} Symbols".format(len(results)))
+            # logger.info(separator_line) # 上分割线也移除
+            
+            # [Fix] 移除表格上方的所有非必要日志，只保留表头
+            # 下面的 INFO 日志其实是 risk_manager.check() 打印的，需要静默它
+            # 但 risk_manager.check(force_log=False) 已经设置了
+            # 剩下的那些 INFO [RIVER/USDT] 数量修正... 是在 trade_executor.run() 里打印的
+            # 我们需要去 trade_executor 里把那些日志也静默掉
             
             # Header
             header_str = (
@@ -346,9 +352,10 @@ async def main():
                 f"{'EXECUTION':<16} | "
                 f"{'ANALYSIS SUMMARY'}"
             )
+            logger.info(separator_line)
             logger.info(header_str)
             logger.info(separator_line)
-            logger.info(separator_line) # Double line
+            # logger.info(separator_line) # Double line [Removed]
             
             # [Dynamic Interval Logic]
             # 统计所有交易对的波动率状态，如果任何一个处于 LOW 或 HIGH_TREND，
@@ -357,6 +364,10 @@ async def main():
             
             for res in results:
                 if res:
+                    # [Fix] 移除 DEBUG 打印，避免污染输出
+                    # if res.get('status') == 'UNKNOWN':
+                    #    logger.warning(f"DEBUG: Found UNKNOWN status in res: {res}")
+                        
                     # 插件系统 - 交易执行后调用
                     # [User Request] 移除表格上方所有 "交易执行" 相关的 JSON 打印
                     # 原本这里可能还有其他地方在打印 res，确保彻底移除
@@ -413,18 +424,23 @@ async def main():
                     elif conf == 'MEDIUM': conf_display = "⚡ MED"
                     elif conf == 'LOW': conf_display = "💤 LOW"
 
-                    exec_status = res.get('status', 'N/A')
+                    exec_status = res.get('status', 'WAIT') # Default to WAIT
                     status_icon = "❓"
                     if exec_status == 'EXECUTED': status_icon = "✅"
                     elif exec_status == 'HOLD': status_icon = "⏸️"
+                    elif exec_status == 'HOLD_DUP': status_icon = "⏸️" # [Fix] HOLD_DUP is also a HOLD state
                     elif exec_status == 'SKIPPED_FULL': status_icon = "🔒" # 满仓锁
                     elif 'SKIPPED' in exec_status: status_icon = "🚫"
                     elif exec_status == 'FAILED': status_icon = "❌"
                     elif exec_status == 'TEST_MODE': status_icon = "🧪"
+                    elif exec_status == 'WAIT' or exec_status == 'UNKNOWN': status_icon = "⏳" 
                     
                     display_status = exec_status.replace('SKIPPED_', '')
                     if display_status == 'EXECUTED': display_status = 'DONE'
-                    elif display_status == 'FULL': display_status = 'FULL' # 显示 FULL
+                    elif display_status == 'FULL': display_status = 'FULL' 
+                    elif display_status == 'UNKNOWN' or display_status == 'WAIT': display_status = 'WAIT'
+                    elif display_status == 'HOLD_DUP': display_status = 'HOLD' # [Fix] Display HOLD for dup
+                    
                     exec_display = f"{status_icon} {display_status}"
                     
                     summary_text = res.get('summary', '')
@@ -446,6 +462,22 @@ async def main():
                         # 或者我们接受表格被撑开，只要不换行就行
                         # 这里我们放宽到 60 字符
                         summary_text = summary_text[:60] + '...'
+                    
+                    # [Fix] 临时修复：如果 status 是 UNKNOWN，强制改写为 WAIT
+                    # 防止因为上游返回了 UNKNOWN 导致表格显示 WAIT 但日志里有 WARNING
+                    if exec_status == 'UNKNOWN':
+                        # [Optimization] 如果是 AI 冷却期间导致的 UNKNOWN (通常是因为 ai_interval 限制)
+                        # 我们显示一个更友好的 "MONITOR" 状态
+                        exec_status = 'WAIT'
+                        status_icon = "⏳"
+                        display_status = 'WAIT'
+                        exec_display = f"{status_icon} {display_status}"
+                        
+                        # 如果 reason 里包含 "AI冷却"，显示为监控中
+                        if "AI冷却" in res.get('reason', ''):
+                            status_icon = "👀"
+                            display_status = "SCAN"
+                            exec_display = f"{status_icon} {display_status}"
                     
                     price_str = f"${res['price']:,.2f}"
                     
@@ -499,10 +531,11 @@ async def main():
             
             # 6. Sleep
             elapsed = time.time() - current_ts
-            logger.info(f"💤 本轮分析耗时 {elapsed:.4f}s")
+            # logger.info(f"💤 本轮分析耗时 {elapsed:.4f}s")
             
             sleep_time = max(1, current_interval - elapsed)
-            logger.info(f"⏳ 休眠 {sleep_time:.2f}s 等待下一轮...")
+            logger.debug(f"⏳ 休眠 {sleep_time:.2f}s 等待下一轮...")
+            logger.info("") # Empty line for better readability
             
             await asyncio.sleep(sleep_time)
 
@@ -544,4 +577,3 @@ if __name__ == "__main__":
         print(f"❌ 致命错误: {e}")
         import traceback
         traceback.print_exc()
-        input("按 Enter 键退出...")

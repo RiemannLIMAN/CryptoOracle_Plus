@@ -69,7 +69,7 @@ class SentimentPlugin(Plugin):
                     if result.get('data'):
                         self.sentiment_cache = result['data'][0]
                         self.last_update = time.time()
-                        self.logger.info(f"🧠 更新市场情绪: {self.sentiment_cache['value']} ({self.sentiment_cache['value_classification']})")
+                        self.logger.debug(f"🧠 更新市场情绪: {self.sentiment_cache['value']} ({self.sentiment_cache['value_classification']})")
         except Exception as e:
             self.logger.error(f"情绪数据获取失败: {e}")
 

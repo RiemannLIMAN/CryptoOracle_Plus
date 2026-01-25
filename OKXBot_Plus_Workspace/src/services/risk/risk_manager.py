@@ -126,7 +126,7 @@ class RiskManager:
         try:
             from core import plotter
             plotter.generate_pnl_chart(csv_path=self.csv_file, output_path=self.chart_path, verbose=False)
-            self.logger.info(f"盈亏折线图已更新: {self.chart_path}")
+            self.logger.debug(f"盈亏折线图已更新: {self.chart_path}")
         except Exception as e:
             self._log(f"生成折线图失败: {e}", 'warning')
 

@@ -71,7 +71,7 @@ class PluginManager:
                                 # 创建插件实例
                                 plugin = obj(config, exchange, agent)
                                 self.plugins.append(plugin)
-                                self.logger.info(f"加载插件: {plugin.name} v{plugin.version}")
+                                self.logger.debug(f"加载插件: {plugin.name} v{plugin.version}")
                     except Exception as e:
                         self.logger.error(f"加载插件 {module_name} 失败: {e}")
         except Exception as e:
@@ -83,7 +83,7 @@ class PluginManager:
             if plugin.enabled:
                 try:
                     await plugin.initialize()
-                    self.logger.info(f"初始化插件: {plugin.name}")
+                    self.logger.debug(f"初始化插件: {plugin.name}")
                 except Exception as e:
                     self.logger.error(f"初始化插件 {plugin.name} 失败: {e}")
     
