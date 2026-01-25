@@ -32,7 +32,9 @@
         "rsi_max": 65,
         "adx_min": 25
       },
-      "token_budget_daily": 999999
+      "token_budget_daily": 999999,
+      "ai_interval": 300,
+      "loop_interval": 60
     },
     "margin_mode": "cross",
     "trade_mode": "cross",
