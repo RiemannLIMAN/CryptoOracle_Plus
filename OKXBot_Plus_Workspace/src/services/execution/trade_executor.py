@@ -1198,22 +1198,22 @@ class DeepSeekTrader:
         allocation_usdt_limit = 0
         base_capital = self.initial_balance if self.initial_balance > 0 else balance
         
-        # [New] Auto Allocation Logic
+        # [New] Auto Allocation Logic & Strategy Detection
+        # 先调用自动检测，获取策略标签和建议配额
+        detected_alloc, strategy_tag = await self._auto_detect_strategy_mode(base_capital)
+        
+        # 解析 alloc_ratio (确保是 float)
         alloc_ratio = 1.0
-        # self.allocation 如果 <= 1 (如 0.5)，则是比例；如果 > 1，则是固定金额
-        # 优先使用 symbol_config 中的 allocation，如果为 auto，则使用 active_symbols_count 计算
-        allocation_setting = self.allocation 
-        
-        if allocation_setting == "auto":
-            # 如果是 auto，默认平分
-            symbol_count = self.active_symbols_count
-            alloc_ratio = 1.0 / max(1, symbol_count)
-        else:
-            try:
-                alloc_ratio = float(allocation_setting)
-            except:
-                alloc_ratio = 1.0 # Fallback
-        
+        try:
+            # 如果检测返回的是 auto (未被修改)，则按活跃币种平分
+            if detected_alloc == 'auto':
+                 symbol_count = max(1, self.active_symbols_count)
+                 alloc_ratio = 1.0 / symbol_count
+            else:
+                 alloc_ratio = float(detected_alloc)
+        except:
+            alloc_ratio = 1.0
+            
         # [Smart Sizing] 动态仓位调整 (Dynamic Position Sizing)
         # 基础仓位 (alloc_ratio) * 信心因子 * 波动率惩罚
         
