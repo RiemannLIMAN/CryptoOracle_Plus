@@ -428,13 +428,49 @@ async def main():
                         summary_text = reason
                     
                     # [Optimization] 如果理由太长被表格截断，先在上面打印完整版
+                    # [Config] 用户希望减少表格上方的打印，仅在真正有交易动作(EXECUTED)时才打印长理由
+                    # 否则监控状态下的长文本只在表格内截断显示
                     if len(summary_text) > 40:
-                        logger.info(f"📜 [详细理由] {symbol_str}: {summary_text}")
-                        summary_text = summary_text[:40] + '...'
+                        # [Modified] 用户明确要求移除表格上方的打印，认为其冗余且浪费时间
+                        # 即使是 EXECUTED 状态，用户也倾向于只看表格或精简信息
+                        # 因此彻底移除此处的 logger.info 调用
+                        # if exec_status == 'EXECUTED':
+                        #    logger.info(f"📜 [详细理由] {symbol_str}: {summary_text}")
+                        
+                        # 表格有足够的宽度 (180字符)，我们可以让 summary 稍微长一点
+                        # 或者我们接受表格被撑开，只要不换行就行
+                        # 这里我们放宽到 60 字符
+                        summary_text = summary_text[:60] + '...'
                     
                     price_str = f"${res['price']:,.2f}"
                     
-                    table_lines.append(f"{symbol_str:<14} | {price_str:<10} | {change_icon} {change_str:<5} | {persona_short:<15} | {rsi_str:<4} | {atr_str:<4} | {vol_str:<4} | {pat_display:<4} | {signal_display:<8} | {conf_display:<8} | {exec_display:<16} | {summary_text}")
+                    # [Optimization] 动态列宽适配
+                    # 确保表格不会因为中文字符宽度问题导致错位
+                    # 中文字符通常占 2 个显示宽度，len() 只算 1 个，所以需要手动补全
+                    def pad_str(s, width):
+                        # 简单的中文宽度补偿算法
+                        import re
+                        chinese_char_count = len(re.findall(r'[\u4e00-\u9fa5]', str(s)))
+                        real_width = len(str(s)) + chinese_char_count
+                        padding = width - real_width
+                        return str(s) + ' ' * max(0, padding)
+
+                    # 重新格式化行，使用 pad_str 处理包含中文的字段 (persona_short, summary_text)
+                    line_str = (
+                        f"{symbol_str:<14} | "
+                        f"{price_str:<10} | "
+                        f"{change_icon} {change_str:<5} | "
+                        f"{pad_str(persona_short, 15)} | "  # Persona 可能含中文
+                        f"{rsi_str:<4} | "
+                        f"{atr_str:<4} | "
+                        f"{vol_str:<4} | "
+                        f"{pat_display:<4} | "
+                        f"{signal_display:<8} | "
+                        f"{conf_display:<8} | "
+                        f"{exec_display:<16} | "
+                        f"{summary_text}"
+                    )
+                    table_lines.append(line_str)
             
             table_lines.append("─" * 180)
             

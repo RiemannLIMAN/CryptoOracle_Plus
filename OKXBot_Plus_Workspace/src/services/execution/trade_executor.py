@@ -2715,6 +2715,18 @@ class DeepSeekTrader:
                          # 2. Check Pattern on 1m
                          pat_1m = self.signal_processor.check_candlestick_pattern(df_1m)
                          
+                         # [User Request] 轨道B运行的时候把一些关键信息打印出来
+                         # 打印当前 1m K线信息，确认数据已获取
+                         # last_close = df_1m.iloc[-1]['close']
+                         # last_vol = df_1m.iloc[-1]['volume']
+                         # prev_vols = df_1m.iloc[-4:-1]['volume'].values
+                         # max_vol3 = max(prev_vols) if len(prev_vols) > 0 else 0
+                         # self._log(f"🚄 [Orbit B] 1m极速监控 | Price: {last_close} | Vol: {last_vol:.2f} (Max3: {max_vol3:.2f}) | Pattern: {pat_1m if pat_1m else 'None'}", 'info')
+                         
+                         # [Update] 仅打印关键触发理由，避免刷屏
+                         # 信息已整合至下方 Monitoring Mode 的 summary 中显示在表格里
+                         pass
+
                          should_close = False
                          exit_reason = ""
                          
@@ -2767,6 +2779,33 @@ class DeepSeekTrader:
                 if time.time() - self.last_ai_check_time < (ai_interval - 2):
                     # 返回一个简单的状态，表明正在监控中
                     # [Fix] 增加必要的字段，防止表格显示为空
+                    monitor_summary = f'监控中 ({int(ai_interval - (time.time() - self.last_ai_check_time))}s)'
+                    
+                    # [Feature] 如果有持仓，显示止盈止损价格和当前盈亏
+                    if current_pos:
+                        # 计算当前浮动盈亏比例
+                        entry_price = float(current_pos.get('avgPx', 0))
+                        if entry_price > 0:
+                            current_price = price_data['price']
+                            if current_pos['side'] == 'long':
+                                pnl_pct = (current_price - entry_price) / entry_price * 100
+                            else:
+                                pnl_pct = (entry_price - current_price) / entry_price * 100
+                            
+                            # 添加 PnL 信息到 summary
+                            pnl_str = f"{pnl_pct:+.2f}%"
+                            monitor_summary = f"持仓监控 | PnL: {pnl_str} | " + monitor_summary
+                            
+                            # 添加止盈止损位显示
+                            if self.dynamic_stop_loss > 0 or self.dynamic_take_profit > 0:
+                                sl_str = f"{self.dynamic_stop_loss:.1f}" if self.dynamic_stop_loss > 0 else "-"
+                                tp_str = f"{self.dynamic_take_profit:.1f}" if self.dynamic_take_profit > 0 else "-"
+                                monitor_summary += f" | SL:{sl_str} TP:{tp_str}"
+
+                    # 如果有 1m 形态，优先显示
+                    if 'pat_1m' in locals() and pat_1m:
+                        monitor_summary = f"⚠️ 形态预警: {pat_1m} | {monitor_summary}"
+
                     return {
                         'symbol': self.symbol,
                         'price': price_data['price'],
@@ -2774,7 +2813,7 @@ class DeepSeekTrader:
                         'signal': 'HOLD',
                         'confidence': 'LOW',
                         'reason': 'AI冷却中 (Monitoring Mode)',
-                        'summary': f'监控中 ({int(ai_interval - (time.time() - self.last_ai_check_time))}s)', # Map to ANALYSIS SUMMARY
+                        'summary': monitor_summary, # Map to ANALYSIS SUMMARY
                         'status': 'HOLD',
                         'status_msg': '监控中', # Simplified status
                         'volatility': price_data.get('volatility_status', 'NORMAL'),
@@ -2782,7 +2821,7 @@ class DeepSeekTrader:
                         'rsi': price_data.get('indicators', {}).get('rsi'),
                         'atr': price_data.get('indicators', {}).get('atr'),
                         'vol_ratio': price_data.get('indicators', {}).get('vol_ratio'),
-                        'pattern': 'None', # Default pattern
+                        'pattern': pat_1m if 'pat_1m' in locals() and pat_1m else '-', # Show 1m pattern if exists
                         'recommended_sleep': 1.0 # 保持活跃
                     }
                 
