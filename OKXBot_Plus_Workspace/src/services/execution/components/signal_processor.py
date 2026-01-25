@@ -92,17 +92,22 @@ class SignalProcessor:
             if (is_bear(k1) and is_bear(k2) and is_bear(k3) and is_bull(k4)):
                 if (float(k2['low']) < float(k1['low']) and float(k3['low']) < float(k2['low'])):
                     if float(k4['close']) > float(k1['open']):
-                        # [Optimization] 成交量确认: 第4根阳线成交量应显著放大 (大于前三根均值)
+                        # [Strict Standard] 成交量严格确认: 第4根K线的成交量必须大于前三根中的最大值
+                        # 这代表了真正的“爆量吞没”，有效防止假突破
                         vol4 = float(k4.get('volume', 0))
-                        avg_vol3 = (float(k1.get('volume', 0)) + float(k2.get('volume', 0)) + float(k3.get('volume', 0))) / 3
+                        max_vol3 = max(float(k1.get('volume', 0)), float(k2.get('volume', 0)), float(k3.get('volume', 0)))
                         
-                        if vol4 > avg_vol3:
-                            return 'BULLISH_STRIKE'
+                        if vol4 > max_vol3:
+                            # [Optimization] 返回具体的 SL/TP 价格点位
+                            # 止损 (看涨): 取四根K线的【最低价】作为硬止损
+                            sl = min(float(k1['low']), float(k2['low']), float(k3['low']), float(k4['low']))
+                            # 止盈: 2倍风险收益比 (Entry + (Entry-SL)*2)
+                            entry = float(k4['close'])
+                            tp = entry + (entry - sl) * 2
+                            return 'BULLISH_STRIKE', {'sl': sl, 'tp': tp}
                         else:
-                            # 如果没有成交量配合，可能是假突破，记录但不触发强信号?
-                            # 或者我们可以返回一个弱信号
                             try:
-                                self.logger.info(f"三线弱信号: vol4 {vol4:.2f} <= avg {avg_vol3:.2f}")
+                                self.logger.info(f"三线弱信号(量能不足): vol4 {vol4:.2f} <= max_prev {max_vol3:.2f}")
                             except Exception:
                                 pass
             
@@ -111,19 +116,25 @@ class SignalProcessor:
             if (is_bull(k1) and is_bull(k2) and is_bull(k3) and is_bear(k4)):
                 if (float(k2['high']) > float(k1['high']) and float(k3['high']) > float(k2['high'])):
                     if float(k4['close']) < float(k1['open']):
-                        # [Optimization] 成交量确认
+                        # [Strict Standard] 成交量严格确认
                         vol4 = float(k4.get('volume', 0))
-                        avg_vol3 = (float(k1.get('volume', 0)) + float(k2.get('volume', 0)) + float(k3.get('volume', 0))) / 3
+                        max_vol3 = max(float(k1.get('volume', 0)), float(k2.get('volume', 0)), float(k3.get('volume', 0)))
                         
-                        if vol4 > avg_vol3:
-                            return 'BEARISH_STRIKE'
+                        if vol4 > max_vol3:
+                            # [Optimization] 返回具体的 SL/TP 价格点位
+                            # 止损 (看跌): 取四根K线的【最高价】作为硬止损
+                            sl = max(float(k1['high']), float(k2['high']), float(k3['high']), float(k4['high']))
+                            # 止盈: 2倍风险收益比 (Entry - (SL-Entry)*2)
+                            entry = float(k4['close'])
+                            tp = entry - (sl - entry) * 2
+                            return 'BEARISH_STRIKE', {'sl': sl, 'tp': tp}
                         else:
                             try:
-                                self.logger.info(f"三线弱信号: vol4 {vol4:.2f} <= avg {avg_vol3:.2f}")
+                                self.logger.info(f"三线弱信号(量能不足): vol4 {vol4:.2f} <= max_prev {max_vol3:.2f}")
                             except Exception:
                                 pass
                         
         except Exception as e:
             pass
             
-        return None
+        return None, {}

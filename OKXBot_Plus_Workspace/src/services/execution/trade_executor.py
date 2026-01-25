@@ -2606,6 +2606,53 @@ class DeepSeekTrader:
         except Exception as e:
             self._log(f"⚠️ 热重载失败: {e}", 'warning')
 
+    async def _check_dynamic_risk_levels(self, current_price, current_pos):
+        """
+        [Orbit B] 实时检查动态止损/止盈 (基于 15m 三线战法计算)
+        """
+        if not current_pos: return
+
+        side = current_pos['side']
+        should_exit = False
+        reason = ""
+
+        # 1. 检查动态止损 (Dynamic SL)
+        if self.dynamic_stop_loss > 0:
+            if side == 'long' and current_price <= self.dynamic_stop_loss:
+                should_exit = True
+                reason = f"三线战法动态止损触发 ({current_price} <= {self.dynamic_stop_loss})"
+            elif side == 'short' and current_price >= self.dynamic_stop_loss:
+                should_exit = True
+                reason = f"三线战法动态止损触发 ({current_price} >= {self.dynamic_stop_loss})"
+
+        # 2. 检查动态止盈 (Dynamic TP)
+        if not should_exit and self.dynamic_take_profit > 0:
+            if side == 'long' and current_price >= self.dynamic_take_profit:
+                should_exit = True
+                reason = f"三线战法动态止盈触发 ({current_price} >= {self.dynamic_take_profit})"
+            elif side == 'short' and current_price <= self.dynamic_take_profit:
+                should_exit = True
+                reason = f"三线战法动态止盈触发 ({current_price} <= {self.dynamic_take_profit})"
+
+        if should_exit:
+            self._log(f"🚨 [Orbit B] {reason}", 'warning')
+            # 执行平仓逻辑
+            await self.order_executor.execute_order(
+                self.symbol, 'close', 'market', 
+                amount=float(current_pos['size']),
+                params={'reduceOnly': True}
+            )
+            # 发送通知
+            await self.send_notification(
+                f"🚨 **动态风控触发**\n原因: {reason}\n当前价: {current_price}", 
+                title=f"🛑 止盈止损 | {self.symbol}"
+            )
+            # 重置状态
+            self.dynamic_stop_loss = 0.0
+            self.dynamic_take_profit = 0.0
+            self.dynamic_sl_side = None
+            await self.save_state()
+            
     async def run(self):
         """Async 单次运行 - 返回结果给调用者进行统一打印"""
         # [New] Hot Reload Check
@@ -2629,9 +2676,29 @@ class DeepSeekTrader:
             price_data = await self.get_ohlcv()
             if not price_data: return None
 
+            # [New] Dynamic Risk Check (Orbit B)
+            # 实时监控动态止盈止损 (基于 15m 三线战法计算出的点位)
+            # 这个逻辑在 Orbit B (60s) 中每次都会运行
+            
+            # [Fix] Move current_pos initialization to the TOP of the risk check logic
+            current_pos = None
+            try:
+                current_pos = await self.get_current_position()
+            except Exception as e:
+                self._log(f"获取持仓失败: {e}", 'warning')
+
+            if current_pos and (self.dynamic_stop_loss > 0 or self.dynamic_take_profit > 0):
+                await self._check_dynamic_risk_levels(price_data['price'], current_pos)
+            
             # [New] Fast Pattern Exit (Monitor by Minute) - User Request: "monitor by minute... fetch volume/price... three-line strategy"
             # 移至 analyze_on_bar_close 之前，确保即使在 K 线未收盘时也能触发分钟级止盈
-            current_pos = await self.get_current_position()
+            # [Fix] current_pos already initialized above
+            # current_pos = None
+            # try:
+            #    current_pos = await self.get_current_position()
+            # except Exception as e:
+            #    self._log(f"获取持仓失败: {e}", 'warning')
+                
             if current_pos:
                 try:
                     # [Debug] 显性化监控状态：只有持仓时才会打印此日志
@@ -2699,17 +2766,23 @@ class DeepSeekTrader:
                 # 但要允许一定的误差 (例如 1秒)，防止因为 sleep 精度导致刚好错过
                 if time.time() - self.last_ai_check_time < (ai_interval - 2):
                     # 返回一个简单的状态，表明正在监控中
+                    # [Fix] 增加必要的字段，防止表格显示为空
                     return {
                         'symbol': self.symbol,
                         'price': price_data['price'],
-                        'change': price_data['price_change'],
+                        'change': price_data.get('price_change', 0.0), # Use .get for safety
                         'signal': 'HOLD',
                         'confidence': 'LOW',
                         'reason': 'AI冷却中 (Monitoring Mode)',
+                        'summary': f'监控中 ({int(ai_interval - (time.time() - self.last_ai_check_time))}s)', # Map to ANALYSIS SUMMARY
                         'status': 'HOLD',
-                        'status_msg': f'监控中 ({int(ai_interval - (time.time() - self.last_ai_check_time))}s)',
+                        'status_msg': '监控中', # Simplified status
                         'volatility': price_data.get('volatility_status', 'NORMAL'),
                         'persona': 'Monitor Guard',
+                        'rsi': price_data.get('indicators', {}).get('rsi'),
+                        'atr': price_data.get('indicators', {}).get('atr'),
+                        'vol_ratio': price_data.get('indicators', {}).get('vol_ratio'),
+                        'pattern': 'None', # Default pattern
                         'recommended_sleep': 1.0 # 保持活跃
                     }
                 
@@ -2860,12 +2933,19 @@ class DeepSeekTrader:
             surge_reason = ""
             
             # 检查三线战法形态
-            candlestick_pattern = self._check_candlestick_pattern(price_data)
+            candlestick_pattern, pat_levels = self._check_candlestick_pattern(price_data)
             if candlestick_pattern:
                 is_surge = True
                 surge_reason = f"形态突袭 ({candlestick_pattern})"
                 try:
                     self._log(f"📐 三线战法识别: {candlestick_pattern}")
+                    # [New] 保存动态止盈止损位
+                    if pat_levels:
+                        self.dynamic_stop_loss = pat_levels.get('sl', 0)
+                        self.dynamic_take_profit = pat_levels.get('tp', 0)
+                        self.dynamic_sl_side = 'long' if 'BULLISH' in candlestick_pattern else 'short'
+                        self._log(f"🎯 设定动态风控位: SL={self.dynamic_stop_loss}, TP={self.dynamic_take_profit}")
+                        asyncio.create_task(self.save_state())
                 except Exception:
                     pass
             
