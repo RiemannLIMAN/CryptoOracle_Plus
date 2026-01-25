@@ -961,8 +961,31 @@ class DeepSeekTrader:
                  # 或者使用 min_trade_interval (300s)
                  limit_interval = getattr(self, 'min_trade_interval', 300)
                  if time_since_trade < limit_interval:
-                      self._log(f"⏳ 交易频率限制: 距离上次开仓仅 {int(time_since_trade)}s (需等待 {limit_interval}s)", 'warning')
-                      return "SKIPPED_FREQ_LIMIT", "交易频率限制"
+                     self._log(f"⏳ 交易频率限制: 距离上次开仓仅 {int(time_since_trade)}s (需等待 {limit_interval}s)", 'warning')
+                     return "SKIPPED_FREQ_LIMIT", "交易频率限制"
+
+        # [New] Strategy Protection (Three-Line Strike & others)
+        # 策略保护机制: 如果当前持仓是由特定策略(如三线战法)触发并设定了动态风控位，
+        # 且新信号是反手(Flip)但非形态确认(Pattern)，则忽略反手，坚持原策略的 SL/TP。
+        if current_position and (self.dynamic_stop_loss > 0 or self.dynamic_take_profit > 0):
+             # Check if SL/TP is relevant to current position side
+             is_relevant = False
+             sl_side = getattr(self, 'dynamic_sl_side', '')
+             if current_position['side'] == 'long' and sl_side == 'long': is_relevant = True
+             if current_position['side'] == 'short' and sl_side == 'short': is_relevant = True
+             
+             if is_relevant:
+                 is_flip = False
+                 if signal_data['signal'] == 'BUY' and current_position['side'] == 'short': is_flip = True
+                 if signal_data['signal'] == 'SELL' and current_position['side'] == 'long': is_flip = True
+                 
+                 if is_flip:
+                     # Only allow flip if the NEW signal is also a Pattern (High Priority)
+                     new_pattern = signal_data.get('pattern')
+                     if not new_pattern:
+                         self._log(f"🛡️ 策略保护: 当前持仓由策略(SL:{self.dynamic_stop_loss})保护，忽略非形态反转信号", 'warning')
+                         signal_data['signal'] = 'HOLD'
+                         return "HOLD_PROTECTED", "策略保护中"
 
         # 2. 信心过滤
         confidence_levels = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
@@ -2318,9 +2341,12 @@ class DeepSeekTrader:
                      # 这里不 return，允许下方的 trailing 逻辑继续尝试能不能提得更高
             
             ohlcv = price_data.get('ohlcv', [])
-            if len(ohlcv) < 3: return
+            # [Fix] 至少需要 4 根 K 线，因为我们要排除当前未收盘的这一根，取前 3 根已完成的
+            if len(ohlcv) < 4: return
             
-            last_3 = ohlcv[-3:] # [k-2, k-1, k]
+            # [Fix] 排除当前 K 线 (ohlcv[-1])，因为它还没收盘，High/Low 不稳定
+            # 使用最近 3 根【已完成】的 K 线作为支撑/阻力参考
+            last_3 = ohlcv[-4:-1] # [k-3, k-2, k-1]
             
             new_sl = None
             if side == 'long':
@@ -3176,6 +3202,8 @@ class DeepSeekTrader:
                 
                 # [Fix] 注入波动率状态，供 execution 阶段做信心豁免
                 signal_data['volatility_status'] = volatility_status
+                # [Fix] Inject pattern into signal_data for execute_trade to use
+                signal_data['pattern'] = candlestick_pattern
                 
                 # [Log Cleanup] 这里的日志移交给上层统一打印
                 reason = signal_data.get('reason', '无理由')
