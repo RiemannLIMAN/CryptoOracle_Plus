@@ -213,11 +213,19 @@ def retry_async(retries=3, delay=1.0, backoff=2.0, exceptions=(Exception,)):
                     return await func(*args, **kwargs)
                 except exceptions as e:
                     logger = logging.getLogger("crypto_oracle")
+                    # [User Request] 余额不足 (Code 51008) 是已知业务逻辑，不需要在 retry 装饰器中打印 ERROR 日志
+                    # 因为 create_order_with_retry 内部已经处理并抛出了简洁的异常
+                    is_insufficient_fund = "51008" in str(e) or "保证金不足" in str(e)
+                    
                     if attempt == retries - 1:
-                        logger.error(f"❌ {func.__name__} 失败 (尝试 {attempt+1}/{retries}): {e}")
+                        # 只有在最后一次尝试失败时才决定是否打印
+                        if not is_insufficient_fund:
+                             logger.error(f"❌ {func.__name__} 失败 (尝试 {attempt+1}/{retries}): {e}")
                         raise e
                     else:
-                        logger.warning(f"⚠️ {func.__name__} 失败: {e} | {current_delay:.1f}s 后重试 ({attempt+1}/{retries})")
+                        # 对于余额不足，重试期间也不需要打印 warning，因为 order_executor 内部已经打印了降级提示
+                        if not is_insufficient_fund:
+                             logger.warning(f"⚠️ {func.__name__} 失败: {e} | {current_delay:.1f}s 后重试 ({attempt+1}/{retries})")
                         await asyncio.sleep(current_delay)
                         current_delay *= backoff
         return wrapper

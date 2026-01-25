@@ -20,7 +20,9 @@ class ExamplePlugin(Plugin):
     async def on_trade(self, trade_data):
         """交易执行后调用"""
         # 处理交易数据
-        self.logger.info(f"交易执行: {trade_data}")
+        # [User Request] 移除 "交易执行: ..." 打印
+        # self.logger.info(f"交易执行: {trade_data}")
+        pass
     
     async def on_error(self, error):
         """发生错误时调用"""

@@ -234,67 +234,39 @@ async def main():
     logger.info("✅ 数据预热完成")
     
 
+    # [Architecture Update] 频率解耦架构
+    # AI 频率: 由 ai_interval 控制 (例如 300s)
+    # 监控频率: 由 loop_interval 控制 (默认 60s)
+    # 主循环: 必须按最快频率运行 (60s)，但在内部对 AI 任务进行节流 (Throttle)
+    
+    # 1. 获取 AI 分析间隔 (Strategy Level)
+    ai_interval_conf = config['trading'].get('strategy', {}).get('ai_interval')
+    if not ai_interval_conf:
+        # 兼容旧配置: 如果没配 ai_interval，尝试从 loop_interval 或 timeframe 推导
+        ai_interval_conf = config['trading'].get('loop_interval', 60)
+    
+    ai_loop_interval = int(ai_interval_conf)
+
+    # 2. 获取主循环间隔 (System Level)
+    sys_loop_interval = config['trading'].get('loop_interval', 60)
+    main_tick_interval = int(sys_loop_interval)
+    
+    # 将 AI 间隔注入到 trading 配置中，供 Trader 内部节流使用
+    config['trading']['actual_ai_interval'] = ai_loop_interval
+
+    interval = main_tick_interval # Compatible with below logic
+
     # 初始化资产基准
     await risk_manager.initialize_baseline(start_equity)
     
     # 显示历史战绩
     risk_manager.display_pnl_history()
     
-    # [新增] 打印分割线，明确初始化阶段结束
-    print("\n" + "=" * 50)
-    logger.info("🏁 初始化完成，进入主循环")
-    print("=" * 50 + "\n")
+    # [User Request] 移除繁琐的启动概览表格
+    logger.info("🏁 初始化完成，进入主循环...")
     
     # --- 进入主循环 ---
     timeframe = config['trading']['timeframe']
-    
-    # [Hack] 即使配置是 "15m"，我们依然可以强制更快的轮询速度
-    # 如果用户想在 config.json 里写 "1m" 来避免报错，但又想 30s 跑一次
-    # 我们可以在这里硬编码覆盖 interval
-    
-    # [Smart Interval] 默认轮询间隔设定为 60s
-    # 用户痛点: "现在是看15分钟的K线... 循环周期就定在五分钟或者十五分钟... 代码不对"
-    # 解释: 机器人必须高频轮询 (如 60s) 才能实现:
-    # 1. 及时发现 "三线战法" 等形态的完成 (K线收盘确认)
-    # 2. 实时监控止盈止损 (价格/成交量监控)
-    # 如果死板地等待 15分钟，会导致严重的信号滞后。
-    
-    default_interval = 60 # 默认 1分钟检查一次
-    
-    # 正常解析逻辑 (仅用于校验 Timeframe 格式)
-    # if 'm' in timeframe: interval = int(timeframe.replace('m', '')) * 60 ...
-    
-    # [方案 A] 优先使用 config 中的 loop_interval (如果存在)
-    custom_interval = config['trading'].get('loop_interval')
-    # [Architecture Update] 频率解耦架构
-    # AI 频率: 由 loop_interval 控制 (例如 300s)
-    # 监控频率: 固定 60s (或更短)
-    # 主循环: 必须按最快频率运行 (60s)，但在内部对 AI 任务进行节流 (Throttle)
-    
-    ai_loop_interval = 60 # Default fallback
-    
-    if custom_interval and isinstance(custom_interval, (int, float)) and custom_interval > 0:
-        logger.info(f"⚡ [AI配置] AI分析周期: {custom_interval}s (由配置文件控制)")
-        ai_loop_interval = custom_interval
-    else:
-        # 如果没有设定，则使用 Timeframe 动态计算，同原逻辑
-        tf_seconds = 900 
-        if 'm' in timeframe: tf_seconds = int(timeframe.replace('m', '')) * 60
-        elif 'h' in timeframe: tf_seconds = int(timeframe.replace('h', '')) * 3600
-        ai_loop_interval = min(60, max(30, int(tf_seconds / 5)))
-        logger.info(f"⏰ [智能模式] AI分析周期: {ai_loop_interval}s")
-
-    # 主循环 tick 必须足够快，以满足 1m 监控需求
-    # 因此，我们取 min(ai_loop_interval, 60) 作为物理 tick
-    main_tick_interval = min(ai_loop_interval, 60)
-    logger.info(f"🏎️ [系统核心] 主循环心跳: {main_tick_interval}s (保障软件级高频监控)")
-    
-    # 将 AI 间隔注入到 trading 配置中，供 Trader 内部节流使用
-    config['trading']['actual_ai_interval'] = ai_loop_interval
-
-    logger.info(f"⏰ 最终轮询间隔: {main_tick_interval}秒")
-    
-    interval = main_tick_interval # Compatible with below logic
     
     # [New] 单频心跳机制 (Unified Loop)
     # 移除了旧版的双频模式 (tick_rate + analysis_tick)，现在统一使用 interval 进行轮询
@@ -343,12 +315,40 @@ async def main():
             
             # 4. 结构化表格输出
             table_lines = []
-            header = f"📊 MARKET SCAN | {len(results)} Symbols"
-            table_lines.append(header) 
-            table_lines.append("─" * 160)
-            table_lines.append(f"{'SYMBOL':<14} | {'PRICE':<10} | {'24H%':<8} | {'PERSONA':<15} | {'RSI':<4} | {'ATR':<4} | {'VOL':<4} | {'PAT':<4} | {'SIGNAL':<8} | {'CONF':<8} | {'EXECUTION':<16} | {'ANALYSIS SUMMARY'}")
-            # [Fix] 增加表头分隔线的长度以覆盖所有列
-            table_lines.append("─" * 180) 
+
+            # [User Request] 移除表格上方所有 "交易执行" 相关的 JSON 打印
+            # 这行代码之前是在表格循环外部打印的，现在将其移除
+            # for res in results:
+            #     if res.get('status') == 'EXECUTED':
+            #         logger.info(f"交易执行: {res}")
+            
+            # [UI] 打印市场扫描表格
+            # 计算动态总宽度，使其与分隔线一致
+            # 目前列宽定义: 14+3 + 10+3 + 8+3 + 15+3 + 4+3 + 4+3 + 4+3 + 4+3 + 8+3 + 8+3 + 16+3 = 119 chars approx + summary
+            # 分隔线长度需要足够长以覆盖所有列
+            separator_line = "─" * 180 
+            
+            logger.info("📊 MARKET SCAN | {} Symbols".format(len(results)))
+            logger.info(separator_line)
+            
+            # Header
+            header_str = (
+                f"{'SYMBOL':<14} | "
+                f"{'PRICE':<10} | "
+                f"{'24H%':<8} | "  # Adjusted width
+                f"{'PERSONA':<15} | "
+                f"{'RSI':<4} | "
+                f"{'ATR':<4} | "
+                f"{'VOL':<4} | "
+                f"{'PAT':<4} | "
+                f"{'SIGNAL':<8} | "
+                f"{'CONF':<8} | "
+                f"{'EXECUTION':<16} | "
+                f"{'ANALYSIS SUMMARY'}"
+            )
+            logger.info(header_str)
+            logger.info(separator_line)
+            logger.info(separator_line) # Double line
             
             # [Dynamic Interval Logic]
             # 统计所有交易对的波动率状态，如果任何一个处于 LOW 或 HIGH_TREND，
@@ -358,8 +358,13 @@ async def main():
             for res in results:
                 if res:
                     # 插件系统 - 交易执行后调用
-                    if res.get('status') == 'EXECUTED':
-                        await plugin_manager.on_trade(res)
+                    # [User Request] 移除表格上方所有 "交易执行" 相关的 JSON 打印
+                    # 原本这里可能还有其他地方在打印 res，确保彻底移除
+                    # if res.get('status') == 'EXECUTED':
+                    #     logger.info(f"交易执行: {res}")
+
+                    # 检查是否有活跃机会 (用于动态心跳)
+                    await plugin_manager.on_trade(res)
                     
                     symbol_str = res['symbol'].split(':')[0]
                     # [Fix] 截断过长的 symbol 名称，防止破坏表格结构
@@ -475,7 +480,8 @@ async def main():
             table_lines.append("─" * 180)
             
             for line in table_lines:
-                logger.info(line)
+                 # 不需要再过滤了，因为 header 已经直接打印了
+                 logger.info(line)
             
             # [Dynamic Interval]
             # 用户要求: 活跃行情的时候不要缩短分析时间，配置多少就按照多少

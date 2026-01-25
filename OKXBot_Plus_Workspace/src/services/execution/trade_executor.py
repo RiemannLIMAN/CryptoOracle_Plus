@@ -293,9 +293,8 @@ class DeepSeekTrader:
                     # 同时更新 risk_control 里的值，确保一致性
                     if self.risk_control:
                         self.risk_control['initial_balance_usdt'] = current_equity
-                else:
-                    self._log(f"✅ 初始资金确认: {self.initial_balance} U (实际: {current_equity:.2f} U, 包含历史盈亏)")
         except Exception as e:
+            # 只有在失败时才打印警告，成功时静默
             self._log(f"⚠️ 资金校准失败: {e}", 'warning')
 
     def _log(self, msg, level='info'):
@@ -886,9 +885,9 @@ class DeepSeekTrader:
                 # 微型资金：建议全仓 (0.95~0.98)，只做现货
                 if current_mode == 'cash' and (current_alloc == 'auto' or float(current_alloc) < 0.9):
                      new_alloc = 0.98
-                     self._log(f"💡 [Auto-Scaling] 资金较小 ({balance_usdt:.2f}U)，自动切换为【全仓狙击模式】(Alloc: 0.98)", 'info')
+                     self._log(f"💡 策略切换: 全仓狙击模式 (资金<{THRESHOLD_MICRO}U)", 'info')
                 elif current_mode != 'cash':
-                     self._log(f"⚠️ [Auto-Scaling] 资金较小 ({balance_usdt:.2f}U) 但处于合约模式，建议切换为现货以防摩擦损耗", 'warning')
+                     self._log(f"⚠️ 建议切换现货模式 (资金较小)", 'warning')
 
             elif balance_usdt < THRESHOLD_SMALL:
                 strategy_tag = "SMALL_DEFENSE (现货分仓防御)"
@@ -898,7 +897,7 @@ class DeepSeekTrader:
                      # 但我们不强制修改用户的明确配置，只在 'auto' 时介入，或打印建议
                      if current_alloc == 'auto':
                          new_alloc = 0.33 # 3等分
-                         self._log(f"💡 [Auto-Scaling] 资金增长 ({balance_usdt:.2f}U)，自动切换为【分仓防御模式】(Alloc: 0.33)", 'info')
+                         self._log(f"💡 策略切换: 分仓防御模式 (资金增长)", 'info')
 
             else:
                 strategy_tag = "WHALE_MIX (组合策略)"
@@ -1261,7 +1260,9 @@ class DeepSeekTrader:
         if "MICRO_SNIPER" not in strategy_tag:
              final_ratio = min(suggested_ratio, confidence_factor)
         
-        self._log(f"🤖 [Smart Sizing] RL建议: {suggested_ratio:.2f} | 信心因子: {confidence_factor:.2f} -> 最终比例: {final_ratio:.2f}", 'info')
+        # [Optimized] 日志简化: 只有当比例被大幅调整时才打印，否则静默
+        if final_ratio < 0.9:
+             self._log(f"🤖 [Smart Sizing] 仓位调整: {final_ratio:.2f}x (信心{confidence_factor:.1f})", 'info')
 
         # 计算目标资金量 (USDT)
         allocation_usdt_limit = 0
@@ -1281,7 +1282,8 @@ class DeepSeekTrader:
         # 只有当总资金 > 11U 时才提升，否则只能 All-in
         if allocation_usdt_limit < 11.0:
             if base_capital > 11.0:
-                self._log(f"⚠️ 资金配额 ({allocation_usdt_limit:.2f} U) 不足最小下单要求，自动提升至 11.0 U")
+                # [Optimized] 简化日志
+                self._log(f"⚠️ 资金修正: {allocation_usdt_limit:.2f}U -> 11.0U (最小限额)", 'info')
                 allocation_usdt_limit = 11.0
             else:
                 # 资金太少，只能梭哈
@@ -1965,14 +1967,20 @@ class DeepSeekTrader:
                              
                              self._log(f"⚠️ 余额不足 (51008)，尝试减少卖出数量重试: {final_sell_amount} -> {retry_amount}", 'warning')
                              if retry_amount > 0:
-                                 await self.order_executor.create_order_with_retry(
-                                    'sell', 
-                                    retry_amount, 
-                                    'market', 
-                                    params=sell_params
-                                 )
-                                 final_sell_amount = retry_amount
-                                 self._log(f"📉 重试卖出成功: {final_sell_amount}")
+                                 # [Critical Fix] 这里也使用 create_order_with_retry，但要避免它抛出冗长异常
+                                 try:
+                                     await self.order_executor.create_order_with_retry(
+                                        'sell', 
+                                        retry_amount, 
+                                        'market', 
+                                        params=sell_params
+                                     )
+                                     final_sell_amount = retry_amount
+                                     self._log(f"📉 重试卖出成功: {final_sell_amount}")
+                                 except Exception as e2:
+                                     # [User Request] 再次简化
+                                     self._log(f"❌ 卖出重试也失败 (Code 51008)", 'error')
+                                     raise Exception("卖出失败: 余额不足") from None
                              else:
                                  raise e
                         else:
@@ -2190,13 +2198,34 @@ class DeepSeekTrader:
                              limit_price = None
 
                     # [Enhance] Add Retry for Short Orders
-                    await self.order_executor.create_order_with_retry(
-                        'sell', 
-                        final_order_amount, 
-                        order_type, 
-                        limit_price, 
-                        params={'tdMode': self.trade_mode}
-                    )
+                    try:
+                        result = await self.order_executor.create_order_with_retry(
+                            'sell', 
+                            final_order_amount, 
+                            order_type, 
+                            limit_price, 
+                            params={'tdMode': self.trade_mode}
+                        )
+                        return {
+                            'status': 'EXECUTED',
+                            'reason': signal_data.get('reason', ''),
+                            'signal': signal_data.get('signal'),
+                            'confidence': signal_data.get('confidence'),
+                            'price': current_realtime_price,
+                            'summary': f"实盘做空成功: {final_order_amount}",
+                            'executed_qty': final_order_amount,
+                            'order_id': result.get('id')
+                        }
+                    except Exception as e:
+                         # [User Request] 下单失败时只返回简洁结果，不打印长JSON
+                         return {
+                             'status': 'FAILED',
+                             'reason': str(e),
+                             'signal': signal_data.get('signal'),
+                             'confidence': signal_data.get('confidence'),
+                             'price': current_realtime_price,
+                             'summary': f"下单失败: {e}"
+                         }
                     self._log(f"📉 开空成功: {trade_amount} Coins ({final_order_amount} sz)")
                     
                     # [New] Reset Dynamic Risk Params on New Entry (Short)
@@ -2226,7 +2255,8 @@ class DeepSeekTrader:
         except Exception as e:
             msg = str(e)
             if "51008" in msg or "Insufficient" in msg:
-                self._log(f"❌ 保证金不足 (Code 51008): 尝试下单 {final_order_amount} 张/币", 'error')
+                # [User Request] 简化错误日志
+                self._log(f"❌ 保证金不足 (Code 51008)", 'error')
                 return "FAILED", "保证金不足"
             else:
                 self._log(f"下单失败: {e}", 'error')
@@ -2635,13 +2665,22 @@ class DeepSeekTrader:
                 reason = f"三线战法动态止盈触发 ({current_price} <= {self.dynamic_take_profit})"
 
         if should_exit:
+            # [Optimization] 动态风控触发时，打印简洁日志
             self._log(f"🚨 [Orbit B] {reason}", 'warning')
-            # 执行平仓逻辑
-            await self.order_executor.execute_order(
-                self.symbol, 'close', 'market', 
-                amount=float(current_pos['size']),
-                params={'reduceOnly': True}
-            )
+            
+            # 执行平仓逻辑 (使用 create_order_with_retry 直接下单，绕过冗余日志)
+            try:
+                await self.order_executor.create_order_with_retry(
+                    side='sell' if current_pos['side'] == 'long' else 'buy',
+                    amount=float(current_pos['size']),
+                    order_type='market',
+                    params={'reduceOnly': True}
+                )
+            except Exception as e:
+                # 即使下单失败，也要让流程继续，不要崩溃
+                self._log(f"❌ [Orbit B] 动态止盈止损下单失败: {e}", 'error')
+                return
+
             # 发送通知
             await self.send_notification(
                 f"🚨 **动态风控触发**\n原因: {reason}\n当前价: {current_price}", 
@@ -2652,7 +2691,7 @@ class DeepSeekTrader:
             self.dynamic_take_profit = 0.0
             self.dynamic_sl_side = None
             await self.save_state()
-            
+
     async def run(self):
         """Async 单次运行 - 返回结果给调用者进行统一打印"""
         # [New] Hot Reload Check
@@ -2741,11 +2780,17 @@ class DeepSeekTrader:
                          if should_close:
                              self._log(f"⚡ [Fast Exit] 触发极速离场信号: {exit_reason}")
                              # Execute Close
-                             await self.order_executor.execute_order(
-                                 self.symbol, 'close', 'market', 
-                                 amount=float(current_pos['size']), 
-                                 params={'reduceOnly': True}
-                             )
+                             # [Critical Fix] 使用 create_order_with_retry 直接下单，绕过 execute_order 的日志
+                             try:
+                                 await self.order_executor.create_order_with_retry(
+                                     side='sell' if current_pos['side'] == 'long' else 'buy',
+                                     amount=float(current_pos['size']),
+                                     order_type='market',
+                                     params={'reduceOnly': True}
+                                 )
+                             except Exception as e:
+                                 self._log(f"❌ [Fast Exit] 极速离场下单失败: {e}", 'error')
+                             
                              await self.send_notification(f"⚡ **极速止盈触发**\n原因: {exit_reason}\n周期: 1m监控", title=f"🚀 止盈离场 | {self.symbol}")
                              # [Fix] 极速止盈后直接返回，不继续等待 K 线收盘
                              return {
