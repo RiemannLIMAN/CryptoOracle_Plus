@@ -1050,13 +1050,23 @@ class DeepSeekTrader:
             if current_position:
                 sl = float(signal_data.get('stop_loss', 0) or 0)
                 tp = float(signal_data.get('take_profit', 0) or 0)
-                # Only update if AI provides a non-zero value
-                if sl > 0: 
-                    self.dynamic_stop_loss = sl
-                    self.dynamic_sl_side = current_position['side']
-                if tp > 0: 
-                    self.dynamic_take_profit = tp
-                    self.dynamic_sl_side = current_position['side']
+                
+                # [Strategy Protection] 
+                # 如果当前处于策略保护状态 (HOLD_PROTECTED)，禁止 AI 在 HOLD 状态下修改止损位
+                # 除非 AI 明确给出了更紧的止损 (且方向正确)
+                is_protected = (self.dynamic_stop_loss > 0)
+                
+                if not is_protected:
+                    # Only update if AI provides a non-zero value and we are not protected
+                    if sl > 0: 
+                        self.dynamic_stop_loss = sl
+                        self.dynamic_sl_side = current_position['side']
+                    if tp > 0: 
+                        self.dynamic_take_profit = tp
+                        self.dynamic_sl_side = current_position['side']
+                else:
+                    # 如果在保护状态下，仅允许更新更"有利"的止损 (Trailling)
+                    pass
 
             return "HOLD", "AI建议观望"
 
@@ -2327,6 +2337,19 @@ class DeepSeekTrader:
             if pnl_pct > breakeven_trigger_pct:
                  breakeven_price = entry_price * (1.001 if side == 'long' else 0.999) # +0.1% to cover fees
                  
+                 # [New] Dynamic Profit Locking (Level 2 & 3)
+                 # Level 2: Lock 50% Profit at 3% Gain
+                 if pnl_pct > 0.03:
+                     lock_price = entry_price + (current_price - entry_price) * 0.5 if side == 'long' else entry_price - (entry_price - current_price) * 0.5
+                     if side == 'long' and lock_price > breakeven_price: breakeven_price = lock_price
+                     elif side == 'short' and lock_price < breakeven_price: breakeven_price = lock_price
+                 
+                 # Level 3: Aggressive Trailing at 5% Gain (Lock 80% Profit)
+                 if pnl_pct > 0.05:
+                     agg_lock_price = entry_price + (current_price - entry_price) * 0.8 if side == 'long' else entry_price - (entry_price - current_price) * 0.8
+                     if side == 'long' and agg_lock_price > breakeven_price: breakeven_price = agg_lock_price
+                     elif side == 'short' and agg_lock_price < breakeven_price: breakeven_price = agg_lock_price
+
                  should_update_be = False
                  if side == 'long' and breakeven_price > self.dynamic_stop_loss:
                      should_update_be = True
@@ -2336,7 +2359,11 @@ class DeepSeekTrader:
                      should_update_be = True
                      
                  if should_update_be:
-                     self._log(f"🛡️ [Breakeven] 浮盈达标 ({pnl_pct*100:.1f}%) -> 强制保本: {breakeven_price:.4f}", 'info')
+                     level_tag = "Level 1 (Breakeven)"
+                     if pnl_pct > 0.05: level_tag = "Level 3 (Aggressive)"
+                     elif pnl_pct > 0.03: level_tag = "Level 2 (Lock Profit)"
+                     
+                     self._log(f"🛡️ [Dynamic Exit] {level_tag} 触发 ({pnl_pct*100:.1f}%) -> 止损上移: {breakeven_price:.4f}", 'info')
                      self.dynamic_stop_loss = breakeven_price
                      # 这里不 return，允许下方的 trailing 逻辑继续尝试能不能提得更高
             

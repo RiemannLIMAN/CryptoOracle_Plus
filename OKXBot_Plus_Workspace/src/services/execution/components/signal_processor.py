@@ -101,9 +101,11 @@ class SignalProcessor:
                             # [Optimization] 返回具体的 SL/TP 价格点位
                             # 止损 (看涨): 取四根K线的【最低价】作为硬止损
                             sl = min(float(k1['low']), float(k2['low']), float(k3['low']), float(k4['low']))
-                            # 止盈: 2倍风险收益比 (Entry + (Entry-SL)*2)
+                            # [Optimization] 放大硬性止盈目标至 5 倍 (R:R = 1:5)
+                            # 原理: 硬性 TP 仅作为"梦想目标"，实际离场交由 Level 3 移动止损 (Dynamic Trailing) 接管
+                            # 这样可以防止在趋势行情中过早止盈 (卖飞)
                             entry = float(k4['close'])
-                            tp = entry + (entry - sl) * 2
+                            tp = entry + (entry - sl) * 5
                             return 'BULLISH_STRIKE', {'sl': sl, 'tp': tp}
                         else:
                             try:
@@ -124,9 +126,9 @@ class SignalProcessor:
                             # [Optimization] 返回具体的 SL/TP 价格点位
                             # 止损 (看跌): 取四根K线的【最高价】作为硬止损
                             sl = max(float(k1['high']), float(k2['high']), float(k3['high']), float(k4['high']))
-                            # 止盈: 2倍风险收益比 (Entry - (SL-Entry)*2)
+                            # [Optimization] 放大硬性止盈目标至 5 倍 (R:R = 1:5)
                             entry = float(k4['close'])
-                            tp = entry - (sl - entry) * 2
+                            tp = entry - (sl - entry) * 5
                             return 'BEARISH_STRIKE', {'sl': sl, 'tp': tp}
                         else:
                             try:
