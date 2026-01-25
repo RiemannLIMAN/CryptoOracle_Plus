@@ -2253,11 +2253,11 @@ class DeepSeekTrader:
             msg = str(e)
             if "51008" in msg or "Insufficient" in msg:
                 # [User Request] 简化错误日志
-                self._log(f"❌ 保证金不足 (Code 51008)", 'error')
-                return {'status': 'FAILED', 'summary': "保证金不足", 'signal': signal_data.get('signal'), 'reason': signal_data.get('reason')}
+                self._log(f"❌ 保证金不足 (Code 51008)", 'debug')
+                return {'status': 'FAILED', 'summary': "保证金不足", 'signal': signal_data.get('signal'), 'reason': signal_data.get('reason'), 'price': current_realtime_price, 'confidence': signal_data.get('confidence')}
             else:
                 self._log(f"下单失败: {e}", 'error')
-                return {'status': 'FAILED', 'summary': f"API错误: {str(e)[:20]}", 'signal': signal_data.get('signal'), 'reason': signal_data.get('reason')}
+                return {'status': 'FAILED', 'summary': f"API错误: {str(e)[:20]}", 'signal': signal_data.get('signal'), 'reason': signal_data.get('reason'), 'price': current_realtime_price, 'confidence': signal_data.get('confidence')}
 
         return {'status': 'SKIPPED', 'summary': "逻辑未覆盖", 'signal': signal_data.get('signal'), 'reason': signal_data.get('reason')}
 
