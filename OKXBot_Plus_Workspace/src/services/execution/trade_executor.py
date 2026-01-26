@@ -2493,9 +2493,32 @@ class DeepSeekTrader:
 
             side = current_pos['side']
             
-            # [Safety Check] 获取持仓均价，确保只有在浮盈状态下才启用移动止损
+            # [Safety Check] 获取持仓均价
             entry_price = float(current_pos.get('entry_price', 0) or 0)
             if entry_price <= 0: return
+
+            # [New] Max Drawdown Per Trade Hard Stop (单笔最大亏损硬止损)
+            # 防止单笔亏损过大 (如 -14%)
+            # Logic: Hard Stop = Entry * (1 - MaxLoss / Leverage)
+            risk_config = self.common_config.get('risk_control', {})
+            max_dd_per_trade = risk_config.get('max_drawdown_per_trade', 0.08) # Default 8%
+            leverage = self.leverage or 1
+            
+            hard_stop_price = 0.0
+            if side == 'long':
+                hard_stop_price = entry_price * (1 - max_dd_per_trade / leverage)
+                # 如果当前价格已经跌破硬止损，或者硬止损比当前动态止损更紧(更高)
+                # 但这里是止损，多单止损越高越好(越安全)，所以我们取 max(dynamic, hard)? 
+                # 不，硬止损是底线。如果 dynamic < hard_stop，说明 dynamic 太宽了，必须提升到 hard_stop。
+                if self.dynamic_stop_loss < hard_stop_price:
+                    self._log(f"🛡️ [Risk Control] 动态止损过宽，强制收紧至最大亏损线 (-{max_dd_per_trade*100}%): {hard_stop_price:.4f}", 'warning')
+                    self.dynamic_stop_loss = hard_stop_price
+            else: # short
+                hard_stop_price = entry_price * (1 + max_dd_per_trade / leverage)
+                # 空单止损越低越好(越安全)。如果 dynamic > hard_stop，说明 dynamic 太宽了，必须降低到 hard_stop。
+                if self.dynamic_stop_loss == 0 or self.dynamic_stop_loss > hard_stop_price:
+                    self._log(f"🛡️ [Risk Control] 动态止损过宽，强制收紧至最大亏损线 (-{max_dd_per_trade*100}%): {hard_stop_price:.4f}", 'warning')
+                    self.dynamic_stop_loss = hard_stop_price
 
             # [Safety Check] 初始化动态止损 (如果为0或None)
             if not self.dynamic_stop_loss or self.dynamic_stop_loss <= 0:
