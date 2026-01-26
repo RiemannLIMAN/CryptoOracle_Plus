@@ -184,6 +184,9 @@ async def main():
     # 这里我们初始化一个新的 DataManager 实例传给 MarketDataService
     # 注意: TradeExecutor 内部也会初始化自己的 DataManager，但这没关系，只要数据库路径一样就行
     data_manager = DataManager(config['trading'].get('db_path', 'data/market_data.db'))
+    # [Fix] 必须显式初始化全局数据库，否则 MarketDataService 写入时会报错 (no such table)
+    await data_manager.initialize()
+    
     market_data_service = MarketDataService(exchange, data_manager, logger)
     
     # Init Traders
