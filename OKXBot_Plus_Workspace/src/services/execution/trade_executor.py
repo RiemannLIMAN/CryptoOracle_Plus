@@ -2525,15 +2525,21 @@ class DeepSeekTrader:
                  breakeven_price = entry_price * (1.001 if side == 'long' else 0.999) # +0.1% to cover fees
                  
                  # [New] Dynamic Profit Locking (Level 2 & 3)
-                 # Level 2: Lock 50% Profit at 3% Gain
+                 # Level 2: Lock 60% Profit at 3% Gain (More aggressive)
                  if pnl_pct > 0.03:
-                     lock_price = entry_price + (current_price - entry_price) * 0.5 if side == 'long' else entry_price - (entry_price - current_price) * 0.5
+                     lock_price = entry_price + (current_price - entry_price) * 0.6 if side == 'long' else entry_price - (entry_price - current_price) * 0.6
                      if side == 'long' and lock_price > breakeven_price: breakeven_price = lock_price
                      elif side == 'short' and lock_price < breakeven_price: breakeven_price = lock_price
                  
-                 # Level 3: Aggressive Trailing at 5% Gain (Lock 80% Profit)
+                 # Level 2.5: Lock 70% Profit at 4% Gain
+                 if pnl_pct > 0.04:
+                     lock_price_2 = entry_price + (current_price - entry_price) * 0.7 if side == 'long' else entry_price - (entry_price - current_price) * 0.7
+                     if side == 'long' and lock_price_2 > breakeven_price: breakeven_price = lock_price_2
+                     elif side == 'short' and lock_price_2 < breakeven_price: breakeven_price = lock_price_2
+
+                 # Level 3: Aggressive Trailing at 5% Gain (Lock 85% Profit)
                  if pnl_pct > 0.05:
-                     agg_lock_price = entry_price + (current_price - entry_price) * 0.8 if side == 'long' else entry_price - (entry_price - current_price) * 0.8
+                     agg_lock_price = entry_price + (current_price - entry_price) * 0.85 if side == 'long' else entry_price - (entry_price - current_price) * 0.85
                      if side == 'long' and agg_lock_price > breakeven_price: breakeven_price = agg_lock_price
                      elif side == 'short' and agg_lock_price < breakeven_price: breakeven_price = agg_lock_price
 
@@ -2548,6 +2554,7 @@ class DeepSeekTrader:
                  if should_update_be:
                      level_tag = "Level 1 (Breakeven)"
                      if pnl_pct > 0.05: level_tag = "Level 3 (Aggressive)"
+                     elif pnl_pct > 0.04: level_tag = "Level 2.5 (Strong Lock)"
                      elif pnl_pct > 0.03: level_tag = "Level 2 (Lock Profit)"
                      
                      self._log(f"🛡️ [Dynamic Exit] {level_tag} 触发 ({pnl_pct*100:.1f}%) -> 止损上移: {breakeven_price:.4f}", 'info')
@@ -2555,20 +2562,27 @@ class DeepSeekTrader:
                      # 这里不 return，允许下方的 trailing 逻辑继续尝试能不能提得更高
             
             
-            ohlcv = price_data.get('ohlcv', [])
-            # [Fix] 至少需要 4 根 K 线，因为我们要排除当前未收盘的这一根，取前 3 根已完成的
-            if len(ohlcv) < 4: return
+            # [Fix] Handle both 'ohlcv' (list of lists) and 'kline_data' (list of dicts)
+            ohlcv_raw = price_data.get('ohlcv') or price_data.get('kline_data', [])
             
-            # [Fix] 排除当前 K 线 (ohlcv[-1])，因为它还没收盘，High/Low 不稳定
-            # 使用最近 3 根【已完成】的 K 线作为支撑/阻力参考
-            last_3 = ohlcv[-4:-1] # [k-3, k-2, k-1]
+            # [Fix] 至少需要 4 根 K 线，因为我们要排除当前未收盘的这一根，取前 3 根已完成的
+            if len(ohlcv_raw) < 4: return
+            
+            # [Fix] 排除当前 K 线，取前 3 根已完成的
+            last_3 = ohlcv_raw[-4:-1] 
             
             new_sl = None
+            
+            # Helper to get high/low from record
+            def get_hl(k):
+                if isinstance(k, dict): return float(k['high']), float(k['low'])
+                return float(k[2]), float(k[3]) # list: [ts, o, h, l, c, v]
+
             if side == 'long':
                 # 只有当当前价格高于开仓价 (浮盈) 时，才考虑移动止损
                 if current_price > entry_price:
                     # 找出最近3根的最低点
-                    lows = [float(k[3]) for k in last_3] # k[3] is Low
+                    lows = [get_hl(k)[1] for k in last_3] 
                     lowest = min(lows)
                     
                     # 只有当新止损位比旧止损位高时 (向上移动)，才更新
@@ -2582,7 +2596,7 @@ class DeepSeekTrader:
                 # 只有当当前价格低于开仓价 (浮盈) 时，才考虑移动止损
                 if current_price < entry_price:
                     # 找出最近3根的最高点
-                    highs = [float(k[2]) for k in last_3] # k[2] is High
+                    highs = [get_hl(k)[0] for k in last_3]
                     highest = max(highs)
                     
                     # 只有当新止损位比旧止损位低时 (向下移动)，才更新
