@@ -2483,7 +2483,14 @@ class DeepSeekTrader:
             return
             
         try:
-            current_price = price_data['price']
+            # [Optimization] Force fetch real-time ticker for accurate trailing
+            # price_data['price'] might be stale (from kline close), especially in fast markets
+            try:
+                ticker = await self.exchange.fetch_ticker(self.symbol)
+                current_price = float(ticker['last'])
+            except:
+                current_price = price_data['price'] # Fallback
+
             side = current_pos['side']
             
             # [Safety Check] 获取持仓均价，确保只有在浮盈状态下才启用移动止损
@@ -3409,6 +3416,58 @@ class DeepSeekTrader:
                     btc_change_24h = price_data['price_change']
             except:
                 pass
+
+            # [Fix] AI Throttling (AI 频率控制)
+            # 即使通过了 Gate，也要检查是否到了 AI 分析间隔
+            # 除非是 Surge 异动，可以适度放宽
+            ai_interval = self.common_config.get('strategy', {}).get('ai_interval', 300)
+            last_ai_time = getattr(self, 'last_ai_analysis_time', 0)
+            time_since_last = time.time() - last_ai_time
+            
+            should_skip_ai = False
+            skip_reason = ""
+            
+            if is_surge:
+                # 异动模式：冷却时间缩短为 60s
+                if time_since_last < 60:
+                    should_skip_ai = True
+                    skip_reason = f"异动冷却 ({int(60 - time_since_last)}s)"
+            else:
+                # 常规模式：严格遵守 ai_interval
+                if time_since_last < ai_interval:
+                    should_skip_ai = True
+                    skip_reason = f"AI冷却 ({int(ai_interval - time_since_last)}s)"
+            
+            if should_skip_ai:
+                persona_map = {
+                    'HIGH_TREND': 'Trend Hunter (趋势猎人)',
+                    'LOW': 'Grid Trader (网格交易)',
+                    'HIGH_CHOPPY': 'Risk Guardian (风控卫士)',
+                    'NORMAL': 'Day Trader (波段交易)'
+                }
+                persona = persona_map.get(volatility_status, volatility_status)
+                return {
+                    'symbol': self.symbol,
+                    'price': price_data['price'],
+                    'change': price_data['price_change'],
+                    'signal': 'HOLD',
+                    'confidence': 'LOW',
+                    'reason': skip_reason,
+                    'summary': f"监控中 | {skip_reason}",
+                    'status': 'HOLD',
+                    'status_msg': skip_reason,
+                    'volatility': volatility_status,
+                    'persona': persona,
+                    'adx': adx_val,
+                    'rsi': rsi_val,
+                    'atr_ratio': ind.get('atr_ratio'),
+                    'vol_ratio': ind.get('vol_ratio'),
+                    'pattern': candlestick_pattern or '-',
+                    'recommended_sleep': 10.0
+                }
+
+            # Update analysis time BEFORE calling AI
+            self.last_ai_analysis_time = time.time()
 
             signal_data = await self.agent.analyze( 
                 self.symbol, 

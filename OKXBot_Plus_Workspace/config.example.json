@@ -1,7 +1,9 @@
 {
   "exchanges": {
     "okx": {
-      "options": {}
+      "options": {
+        "defaultType": "swap"
+      }
     }
   },
   "models": {
@@ -13,28 +15,34 @@
   "trading": {
     "market_type": "swap",      
     "timeframe": "15m",
-    "test_mode": true,
-    
-    "proxy": "http://127.0.0.1:61440",
-    "max_slippage_percent": 1.0,
+    "loop_interval": 10,
+    "test_mode": false,
+    "proxy": "",
+    "max_slippage_percent": 2.0,
     "min_confidence": "MEDIUM",
+    "enable_aggressive_mode": false,
+    "max_concurrent_traders": 5,
+    "db_path": "data/market_data.db",
 
     "strategy": {
+      "enable_4h_filter": true,
+      "ai_interval": 300,
       "signal_limit": 30,
-      "dynamic_tp": true,
       "trailing_stop": {
         "enabled": true,
-        "activation_pnl": 0.01,
-        "callback_rate": 0.003
+        "activation_pnl": 0.02,
+        "callback_rate": 0.005
       },
       "signal_gate": {
-        "rsi_min": 35,
-        "rsi_max": 65,
-        "adx_min": 25
+        "rsi_min": 30,
+        "rsi_max": 70,
+        "adx_min": 15
       },
-      "token_budget_daily": 999999,
-      "ai_interval": 300,
-      "loop_interval": 60
+      "sentiment_filter": {
+        "enabled": true,
+        "extreme_fear_threshold": 25,
+        "extreme_greed_threshold": 75
+      }
     },
     "margin_mode": "cross",
     "trade_mode": "cross",
@@ -43,26 +51,28 @@
       "max_profit_usdt": 0.0,
       "max_loss_usdt": 0.0,
       "max_profit_rate": 0.2,
-      "max_loss_rate": 0.1
+      "max_loss_rate": 0.15
+    },
+    "notification": {
+      "enabled": true,
+      "telegram_token": "",
+      "telegram_chat_id": ""
     }
-  },
-  "notification": {
-    "enabled": false
   },
   "symbols": [
     {
-      "symbol": "SOL/USDT:USDT",
-      "amount": 0.1,
-      "allocation": 0.5,
-      "leverage": 2,
-      "trade_mode": "cross"    
+      "symbol": "BTC/USDT:USDT",
+      "amount": "auto",
+      "allocation": 0.2,
+      "leverage": 5,
+      "trade_mode": "cross"
     },
     {
-      "symbol": "ETH/USDT",
-      "amount": 0.1,
-      "allocation": 0.5,
-      "leverage": 1,
-      "trade_mode": "cash"      
+      "symbol": "ETH/USDT:USDT",
+      "amount": "auto",
+      "allocation": 0.2,
+      "leverage": 5,
+      "trade_mode": "cross"
     }
   ]
 }
