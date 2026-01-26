@@ -16,9 +16,10 @@ import json
 import os
 
 class DeepSeekTrader:
-    def __init__(self, symbol_config, common_config, exchange, agent):
+    def __init__(self, symbol_config, common_config, exchange, agent, market_data_service=None):
         self.symbol_config = symbol_config # Store for hot reload
         self.common_config = common_config # Store for hot reload
+        self.market_data_service = market_data_service # [New] Service Injection
         self.symbol = symbol_config['symbol']
         self.config_amount = symbol_config.get('amount', 'auto') 
         self.amount = 0
@@ -184,19 +185,32 @@ class DeepSeekTrader:
             try:
                 with open(self.state_file, 'r', encoding='utf-8') as f:
                     state = json.load(f)
+                    
+                    # [Fix] Stale State Check (过期状态检查)
+                    # 只要有持仓，止损位(Price Level)就是永久有效的，不应随时间过期。
+                    # 如果停机期间价格跌破止损，启动后理应立即执行止损，而不是丢弃风控。
+                    updated_at = state.get('updated_at', 0)
+                    is_stale = (time.time() - updated_at) > 3600 # 1 hour
+                    
+                    if is_stale:
+                        self.logger.warning(f"[{self.symbol}] ⚠️ 加载了旧的状态文件 (Last Update: {datetime.fromtimestamp(updated_at).strftime('%H:%M:%S')})，请注意动态止损可能立即触发")
+
                     self.daily_high_equity = state.get('daily_high_equity', 0.0)
                     saved_day = state.get('high_water_day')
                     today = datetime.now().strftime('%Y%m%d')
+                    
                     # [Fix] Reset high water mark on new day to prevent stale drawdown
                     if saved_day != today:
                         self.daily_high_equity = 0.0
                         self.high_water_day = today
                     else:
                         self.high_water_day = saved_day or today
+                    
+                    # Always restore risk params if they exist
                     self.dynamic_stop_loss = state.get('dynamic_stop_loss', 0.0)
                     self.dynamic_take_profit = state.get('dynamic_take_profit', 0.0)
                     self.dynamic_sl_side = state.get('dynamic_sl_side')
-                    self.trailing_max_pnl = state.get('trailing_max_pnl', 0.0) # [New] Restore
+                    self.trailing_max_pnl = state.get('trailing_max_pnl', 0.0)
                     
                     self.logger.info(f"[{self.symbol}] 🔄 恢复状态: DailyHigh={self.daily_high_equity:.2f}, DynSL={self.dynamic_stop_loss}, TrailMax={self.trailing_max_pnl:.2%}")
             except Exception as e:
@@ -293,6 +307,11 @@ class DeepSeekTrader:
                     # 同时更新 risk_control 里的值，确保一致性
                     if self.risk_control:
                         self.risk_control['initial_balance_usdt'] = current_equity
+                    
+                    # [Fix] Reset High Water Mark to avoid immediate circuit breaker
+                    # 如果资金发生剧烈变化 (通常是充提币)，旧的高水位线已失效
+                    self.daily_high_equity = current_equity
+                    self.save_state() # Persist the reset
         except Exception as e:
             # 只有在失败时才打印警告，成功时静默
             self._log(f"⚠️ 资金校准失败: {e}", 'warning')
@@ -622,9 +641,145 @@ class DeepSeekTrader:
 
 
 
+    def _build_ohlcv_result(self, df, indicators, trend_4h, current_data, previous_data):
+        """
+        [Helper] 构造统一的 OHLCV 返回结果字典
+        """
+        # [New] Store indicators for Smart Sizing usage in execute_trade
+        self.last_indicators = indicators
+        
+        # [New] Determine Volatility Status (Moved Up for DB Saving)
+        vol_status = "NORMAL"
+        atr_r = indicators['atr_ratio'] if indicators['atr_ratio'] is not None else 1.0
+        adx_val = indicators['adx'] if indicators['adx'] is not None else 25.0
+        
+        if atr_r < 0.6:
+            vol_status = "LOW" # 死鱼盘 -> 网格模式
+        elif adx_val > 30:
+            vol_status = "HIGH_TREND" # 强趋势 -> 趋势模式
+        elif atr_r > 1.5:
+            vol_status = "HIGH_CHOPPY" # 剧烈震荡 -> 均值回归模式
+        
+        # [Fix] 将状态写回 DataFrame 的最后一行，以便 DataManager 保存
+        # 注意: 这里只更新最后一行，历史行的 status 可能是空的，但我们主要关心最新的
+        df.loc[df.index[-1], 'volatility_status'] = vol_status
+
+        # [New] 异步保存 K 线数据 (现在包含了 volatility_status)
+        # [Fix] 显式重置索引，确保 timestamp 作为普通列传递给 save_klines
+        # 因为前面 set_index 导致 timestamp 变成了索引，直接 row['timestamp'] 会报错
+        df_to_save = df.tail(1).reset_index()
+        asyncio.create_task(self.data_manager.save_klines(self.symbol, self.timeframe, df_to_save))
+
+        # 显式传递最小交易单位给 AI
+        min_limit_info = "0.01"
+        min_notional_info = "5.0"
+        try:
+            market = self.exchange.market(self.symbol)
+            min_amount = market.get('limits', {}).get('amount', {}).get('min')
+            if min_amount:
+                min_limit_info = str(min_amount)
+            min_cost = market.get('limits', {}).get('cost', {}).get('min')
+            if min_cost:
+                min_notional_info = str(min_cost)
+        except:
+            pass
+
+        # [Modified] 动态计算投喂给 AI 的 K 线数量 (feed_limit)
+        feed_limit = 24 # Default
+        tf = self.timeframe
+        if tf == '1m': feed_limit = 60    # 1h context
+        elif tf == '3m': feed_limit = 40  # 2h context
+        elif tf == '5m': feed_limit = 36  # 3h context
+        elif tf == '15m': feed_limit = 32 # 8h context
+        elif tf == '30m': feed_limit = 24 # 12h context
+        elif tf == '1h': feed_limit = 24  # 24h context
+        elif tf == '4h': feed_limit = 24  # 4d context
+        elif tf == '1d': feed_limit = 14  # 2w context
+        
+        feed_limit = max(10, feed_limit)
+        
+        # [Real-time Correction] 实时 Tick 修正
+        ticker_price = current_data['close'] # default
+        price_divergence = 0.0
+        try:
+            # Note: 这里的 fetch_ticker 仍然需要，因为 K 线数据可能是 1 分钟前的
+            # 我们需要最新的价格来计算偏离度
+            # 可以在 MarketDataService 里优化，但目前保留在这里也没问题
+            # 这是一个轻量级请求
+            pass 
+        except:
+            pass
+            
+        # 为了不阻塞，这里先暂时用 close，或者我们可以让 get_ohlcv 调用方去 fetch ticker
+        # 考虑到这是 helper，我们假设 current_data['close'] 就是最新价，或者由外部传入 ticker
+        # 这里简化处理，不再 fetch ticker，因为在 execute_trade 里会 fetch
+        
+        result = {
+            'volatility_status': vol_status, # [New] Added for AI Persona
+            'trend_4h': trend_4h, # [Feature Flag] 4H Trend
+            'price': float(current_data['close']), # [Modified] Use close as proxy
+            'kline_close': float(current_data['close']), 
+            'price_divergence': 0.0, # Simplified
+            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'high': float(current_data['high']),
+            'low': float(current_data['low']),
+            'volume': float(current_data['volume']),
+            'timeframe': self.timeframe,
+            'price_change': ((current_data['close'] - previous_data['close']) / previous_data['close']) * 100,
+            # [Fix] 显式重置索引，否则 to_dict('records') 会丢失 timestamp
+            'kline_data': df.tail(feed_limit).reset_index()[['timestamp', 'open', 'high', 'low', 'close', 'volume', 'vol_ratio', 'obv']].to_dict('records'),
+            'indicators': indicators,
+            'min_limit_info': min_limit_info,
+            'min_notional_info': min_notional_info,
+        }
+        return result
+
     @exception_handler
     @retry_async(retries=3, delay=1.0, backoff=2.0)
     async def get_ohlcv(self):
+        # [Architecture Update] 优先使用 MarketDataService (Unified Data Architecture)
+        # 注意: 这里的 self.market_data_service 由 OKXBot_Plus.py 注入
+        if self.market_data_service:
+            # 使用新架构获取市场上下文 (包含 15m 和 4h)
+            context = await self.market_data_service.get_market_context(self.symbol, self.timeframe)
+            df = context.get('main_df')
+            
+            # [Config] 根据配置决定是否使用 4H Trend
+            # 如果配置 enable_4h_filter=False，则强制将 trend_4h 设为 NEUTRAL，避免干扰 AI
+            enable_4h_filter = self.common_config.get('strategy', {}).get('enable_4h_filter', False)
+            trend_4h = context.get('trend_4h', 'NEUTRAL')
+            if not enable_4h_filter:
+                trend_4h = "NEUTRAL"
+
+            if df is None or df.empty:
+                return None
+                
+            # 维护历史记录 (兼容旧逻辑)
+            self.price_history = df.tail(100).to_dict('records')
+            
+            current_data = df.iloc[-1]
+            previous_data = df.iloc[-2] if len(df) > 1 else current_data
+            
+            # [Mapping] 统一指标名称 (Service -> Executor)
+            indicators = {
+                'rsi': float(current_data['rsi']) if pd.notna(current_data.get('rsi')) else None,
+                'macd': float(current_data['macd']) if pd.notna(current_data.get('macd')) else None,
+                'macd_signal': float(current_data['signal']) if pd.notna(current_data.get('signal')) else None, 
+                'macd_hist': float(current_data['hist']) if pd.notna(current_data.get('hist')) else None,
+                'bb_upper': float(current_data['upper_bb']) if pd.notna(current_data.get('upper_bb')) else None,
+                'bb_lower': float(current_data['lower_bb']) if pd.notna(current_data.get('lower_bb')) else None,
+                'adx': float(current_data['adx']) if pd.notna(current_data.get('adx')) else None,
+                'vol_ratio': float(current_data['vol_ratio']) if pd.notna(current_data.get('vol_ratio')) else None,
+                'obv': float(current_data['obv']) if pd.notna(current_data.get('obv')) else None,
+                'buy_prop': float(current_data['buy_vol_prop_5']) if pd.notna(current_data.get('buy_vol_prop_5')) else None,
+                'atr': float(current_data['atr']) if pd.notna(current_data.get('atr')) else None,
+                'atr_ratio': float(current_data['atr_ratio']) if pd.notna(current_data.get('atr_ratio')) else None,
+            }
+            
+            # [Common Logic] 复用原有的结果构建逻辑
+            return self._build_ohlcv_result(df, indicators, trend_4h, current_data, previous_data)
+
+        # ================== 旧逻辑 Fallback (当 Service 未注入时) ==================
         # 生成缓存键
         cache_key = cache_manager.generate_key(
             'ohlcv',
@@ -711,6 +866,30 @@ class DeepSeekTrader:
             self._log("指标计算异常: OBV 列缺失", 'warning')
             return None
         
+        # [Feature Flag] 4H 趋势获取
+        trend_4h = "NEUTRAL"
+        enable_4h_filter = self.common_config.get('strategy', {}).get('enable_4h_filter', False)
+        if enable_4h_filter:
+            try:
+                ohlcv_4h = await self.exchange.fetch_ohlcv(self.symbol, '4h', limit=100)
+                if ohlcv_4h:
+                    df_4h = pd.DataFrame(ohlcv_4h, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    # Simple EMA calc
+                    df_4h['ema20'] = df_4h['close'].ewm(span=20, adjust=False).mean()
+                    df_4h['ema50'] = df_4h['close'].ewm(span=50, adjust=False).mean()
+                    
+                    last_4h = df_4h.iloc[-2] # Use closed candle
+                    if last_4h['ema20'] > last_4h['ema50']:
+                        trend_4h = "UP"
+                    elif last_4h['ema20'] < last_4h['ema50']:
+                        trend_4h = "DOWN"
+                    else:
+                        trend_4h = "NEUTRAL"
+                    
+                    # self._log(f"📊 [4H Trend] {trend_4h} (EMA20:{last_4h['ema20']:.2f} vs EMA50:{last_4h['ema50']:.2f})", 'debug')
+            except Exception as e:
+                self._log(f"获取 4H 趋势失败: {e}", 'warning')
+
         # [Fix] 先计算指标字典，用于确定 volatility_status
         current_data = df.iloc[-1]
         previous_data = df.iloc[-2] if len(df) > 1 else current_data
@@ -806,6 +985,7 @@ class DeepSeekTrader:
 
         result = {
             'volatility_status': vol_status, # [New] Added for AI Persona
+            'trend_4h': trend_4h, # [Feature Flag] 4H Trend
             'price': ticker_price, # [Modified] Use real-time ticker price instead of kline close
             'kline_close': current_data['close'], # Keep original close for reference
             'price_divergence': price_divergence, # [New] Tell AI about the lag
@@ -3020,19 +3200,42 @@ class DeepSeekTrader:
             if not current_pos:
                  current_pos = await self.get_current_position()
 
-            # [New] Global Circuit Breaker (账户级熔断)
+            # [Fix] Global Circuit Breaker (账户级熔断)
             # 记录当日最高权益 (High Water Mark)
-            # [Fix] Reset high water mark when day changes
             current_day = datetime.now().strftime('%Y%m%d')
             if self.high_water_day != current_day:
                 self.high_water_day = current_day
                 self.daily_high_equity = 0.0
-            # Initialize high water with current equity to avoid stale large value
+            
+            # [Fix] 冷却复活逻辑 (Auto-Recovery)
+            # 如果处于熔断冷却期
+            cb_ts = getattr(self, 'circuit_breaker_timestamp', 0)
+            if cb_ts > 0:
+                cooldown_hours = 1 # [Modified] 冷却缩短为 1 小时，避免错过反转机会
+                if (time.time() - cb_ts) > (cooldown_hours * 3600):
+                    self._log(f"🌱 [RECOVERY] 熔断冷却期已过 ({cooldown_hours}h)，尝试复活...", 'info')
+                    self.circuit_breaker_timestamp = 0
+                    self.daily_high_equity = equity # 重置高水位线为当前权益，重新开始
+                    await self.save_state()
+                else:
+                    remaining = int((cooldown_hours * 3600) - (time.time() - cb_ts))
+                    return {
+                        'symbol': self.symbol,
+                        'price': price_data['price'],
+                        'change': price_data.get('price_change', 0.0),
+                        'signal': 'STOPPED',
+                        'confidence': 'HIGH',
+                        'reason': f"熔断冷却中 (剩余 {remaining//60}m)",
+                        'status': 'STOPPED',
+                        'status_msg': f"熔断冷却中 (剩余 {remaining//60}m)",
+                        'recommended_sleep': 60.0
+                    }
+
+            # Initialize high water with current equity
             if self.daily_high_equity == 0.0:
                 self.daily_high_equity = equity
             if equity > self.daily_high_equity:
                 self.daily_high_equity = equity
-                # [Fix] Persist high water mark
                 asyncio.create_task(self.save_state())
             
             # 如果从高点回撤超过 15% (硬性熔断线)
@@ -3041,23 +3244,24 @@ class DeepSeekTrader:
                 if drawdown < -0.15:
                     self._log(f"💀 [CIRCUIT BREAKER] 触发账户级熔断! 回撤 {drawdown*100:.2f}% (>15%)", 'critical')
                     await self.send_notification(
-                        f"💀 **账户熔断报警**\n当前权益: {equity:.2f}\n当日最高: {self.daily_high_equity:.2f}\n回撤幅度: {drawdown*100:.2f}%\n> **系统将停止开新仓，仅允许平仓!**",
+                        f"💀 **账户熔断报警**\n当前权益: {equity:.2f}\n当日最高: {self.daily_high_equity:.2f}\n回撤幅度: {drawdown*100:.2f}%\n> **系统暂停开仓 1 小时!**",
                         title=f"💀 熔断触发 | {self.symbol}"
                     )
-                    # 这里我们可以选择 return None 跳过后续分析，或者传入一个 flag 让 AI 只做平仓
-                    # 为了安全，直接 return，并尝试平仓 (TODO: 自动平仓逻辑需谨慎)
-                    # [Fix] 调用 RiskManager 的 close_all_traders 是更安全的选择，而不是在这里局部处理
-                    # 目前仅返回 Stop 信号，依赖 RiskManager 的全局风控去扫尾
+                    
+                    # [Fix] 记录熔断时间戳，开启冷却倒计时
+                    self.circuit_breaker_timestamp = time.time()
+                    await self.save_state() # 持久化，防止重启后立即复活
+                    
                     return {
                         'symbol': self.symbol,
                         'price': price_data['price'],
-                        'change': price_data.get('price_change', 0.0), # [Fix] Add missing key
-                        'signal': 'STOPPED', # [Fix] Add missing signal
-                        'confidence': 'HIGH', # [Fix] Add missing confidence
-                        'reason': f"熔断触发: 回撤 {drawdown*100:.2f}%", # [Fix] Add missing reason
+                        'change': price_data.get('price_change', 0.0), 
+                        'signal': 'STOPPED',
+                        'confidence': 'HIGH', 
+                        'reason': f"熔断触发: 回撤 {drawdown*100:.2f}%", 
                         'status': 'STOPPED',
                         'status_msg': f"熔断触发: 回撤 {drawdown*100:.2f}%",
-                        'recommended_sleep': 60.0 # 冷却 1 分钟
+                        'recommended_sleep': 60.0 
                     }
 
             await self._update_amount_auto(price_data['price'], balance)

@@ -41,6 +41,15 @@ class SignalProcessor:
         if vol_ratio < 0.8:
             return False, f"成交量低迷 (Vol Ratio {vol_ratio:.2f} < 0.8)，流动性不足"
 
+        # [Feature Flag] 4H 趋势共振过滤 (Resonance Filter)
+        # 仅当 trend_4h 参数存在且有效时检查
+        trend_4h = indicators.get('trend_4h')
+        if trend_4h and trend_4h != "NEUTRAL":
+            if signal_type == 'BUY' and trend_4h == 'DOWN':
+                return False, f"逆大势 (4H Trend DOWN)，禁止开多"
+            if signal_type == 'SELL' and trend_4h == 'UP':
+                return False, f"逆大势 (4H Trend UP)，禁止开空"
+
         return True, "通过"
 
     def check_candlestick_pattern(self, data_input, indicators=None):

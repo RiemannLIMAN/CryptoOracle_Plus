@@ -17,8 +17,10 @@ from core.plugin import plugin_manager
 from services.strategy.ai_strategy import DeepSeekAgent
 from services.execution.trade_executor import DeepSeekTrader
 from services.risk.risk_manager import RiskManager
+from services.data.market_data_service import MarketDataService # [New] Import MarketDataService
+from services.data.data_manager import DataManager
 
-SYSTEM_VERSION = "v3.8.0 (Dual-Track Monitor & Fast Exit)"
+SYSTEM_VERSION = "v3.9.0 (Unified Data Architecture)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -178,6 +180,12 @@ async def main():
     exchange = ccxt.okx(exchange_params)
     await exchange.load_markets()
     
+    # [New] Initialize MarketDataService
+    # 这里我们初始化一个新的 DataManager 实例传给 MarketDataService
+    # 注意: TradeExecutor 内部也会初始化自己的 DataManager，但这没关系，只要数据库路径一样就行
+    data_manager = DataManager(config['trading'].get('db_path', 'data/market_data.db'))
+    market_data_service = MarketDataService(exchange, data_manager, logger)
+    
     # Init Traders
     traders = []
     
@@ -195,7 +203,13 @@ async def main():
         batch_traders = []
         
         for symbol_conf in batch_symbols:
-            trader = DeepSeekTrader(symbol_conf, config['trading'], exchange, agent)
+            trader = DeepSeekTrader(
+                symbol_conf, 
+                config['trading'], 
+                exchange, 
+                agent,
+                market_data_service=market_data_service # [New] Inject Service
+            )
             await trader.initialize()
             batch_traders.append(trader)
         

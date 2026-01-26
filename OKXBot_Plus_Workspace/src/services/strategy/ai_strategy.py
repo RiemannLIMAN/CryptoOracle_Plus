@@ -267,6 +267,13 @@ class DeepSeekAgent:
         if atr_ratio_val < 0.5: volatility_factor_status = "💤 极度萎缩 (死鱼盘)"
         elif atr_ratio_val > 2.0: volatility_factor_status = "🌊 极度活跃 (巨浪)"
         
+        # [Feature Flag] 4H Trend Context
+        trend_4h = price_data.get('trend_4h', 'NEUTRAL')
+        trend_4h_msg = ""
+        if trend_4h != "NEUTRAL":
+            trend_icon = "📈" if trend_4h == "UP" else "📉"
+            trend_4h_msg = f"Trend 4H: {trend_4h} {trend_icon} (基于EMA20/50)"
+        
         return f"""【技术指标】
         RSI(14): {rsi_str}
         MACD: {macd_str}
@@ -274,7 +281,8 @@ class DeepSeekAgent:
         ADX(14): {adx_str} (趋势强度 >30为强) | ATR(14): {atr_str}
         Volatility Factor: ATR Ratio {atr_ratio_val:.2f} ({volatility_factor_status})
         Volume: 当前量比 {vol_ratio_val:.2f} ({vol_status})
-        Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能量潮)"""
+        Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能量潮)
+        {trend_4h_msg}"""
 
     def _build_fund_status_message(self, balance, price_data):
         """
@@ -330,7 +338,7 @@ class DeepSeekAgent:
         return """
         【狙击镜分析流程 (Sniper Scope)】
         请按以下步骤思考（体现在 reason 中）：
-        1. **趋势预判**: 基于当前 K 线组合和量能，预测未来 4 小时的主流趋势（UP/DOWN/SIDEWAYS）及其概率。
+        1. **趋势预判**: 结合【4H Trend】与当前 15m 走势。若 4H 为 UP，优先寻找回调做多机会；若 4H 为 DOWN，优先寻找反弹做空机会。
         2. **形态识别 (三线战法 Three-Line Strike)**:
            - **看涨三线 (Bullish Strike)**: 连续三根阴线后，出现一根吞没大阳线。 -> **HIGH CONFIDENCE BUY** (若做空立即反手)
            - **看跌三线 (Bearish Strike)**: 连续三根阳线后，出现一根吞没大阴线。 -> **HIGH CONFIDENCE SELL** (若做多立即反手)

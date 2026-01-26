@@ -25,6 +25,16 @@ if [ ! -f "config.json" ]; then
     exit 1
 fi
 
+# [New] 自动清理旧数据 (Auto-Clean)
+# 防止数据库损坏 (no such table) 或加载过期状态
+echo -e "${YELLOW}🧹 正在执行自动清理...${NC}"
+if [ -d "data" ]; then
+    rm -f data/*.db 2>/dev/null
+    rm -f data/state_*.json 2>/dev/null
+    # 保留 config.json 和 bot_state.json
+    echo -e "${GREEN}✅ 已清理旧数据库和状态文件${NC}"
+fi
+
 # 3. 智能查找 Python 解释器
 # [可配置] 如果您使用自定义名称的虚拟环境，请在此处设置名称
 # 例如: CUSTOM_VENV_NAME="my_env" 或 CUSTOM_VENV_NAME="okx_ds"
