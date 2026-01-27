@@ -21,12 +21,9 @@
     "max_slippage_percent": 2.0,
     "min_confidence": "MEDIUM",
     "enable_aggressive_mode": false,
-    "max_concurrent_traders": 5,
-    "db_path": "data/market_data.db",
-
     "strategy": {
       "enable_4h_filter": true,
-      "ai_interval": 300,
+      "ai_interval": 60,
       "signal_limit": 30,
       "trailing_stop": {
         "enabled": true,
@@ -47,17 +44,16 @@
     "margin_mode": "cross",
     "trade_mode": "cross",
     "risk_control": {
-      "initial_balance_usdt": 100.0,
-      "max_profit_usdt": 0.0,
-      "max_loss_usdt": 0.0,
-      "max_profit_rate": 0.2,
-      "max_loss_rate": 0.15
-    },
-    "notification": {
-      "enabled": true,
-      "telegram_token": "",
-      "telegram_chat_id": ""
+      "initial_balance_usdt": 30.0,
+      "max_loss_usdt": 10.0,
+      "max_loss_rate": 0.15,
+      "max_drawdown_per_trade": 0.08
     }
+  },
+  "notification": {
+    "enabled": true,
+    "telegram_token": "",
+    "telegram_chat_id": ""
   },
   "symbols": [
     {

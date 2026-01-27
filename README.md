@@ -1,9 +1,8 @@
-# 🤖 CryptoOracle: AI 驱动的量化交易终端 (v3.6.4 Async Core)
+# 🤖 CryptoOracle: AI 驱动的量化交易终端
 
 > **"像华尔街专业人士一样思考，像算法机器人一样执行。"**
 
-CryptoOracle 是一个集成 **DeepSeek-V3** 大模型与 **CCXT** 交易框架的下一代量化交易系统。
-v3.6 版本采用了全新的 **AsyncIO 异步内核** 与 **组件化架构**，实现了从单体脚本到企业级工程的蜕变。
+CryptoOracle 是一个集成 **DeepSeek** 大模型与 **CCXT** 交易框架的下一代量化交易系统。它采用全新的 **AsyncIO 异步内核** 与 **组件化架构**，实现了从单体脚本到企业级工程的蜕变。
 
 ---
 
@@ -11,43 +10,40 @@ v3.6 版本采用了全新的 **AsyncIO 异步内核** 与 **组件化架构**�
 
 ### 1. 🧠 **双脑协同决策 (Hybrid AI Strategy)**
 *   **左脑 (硬计算)**: 实时计算 MACD/RSI/布林带等指标，使用 **100根** 历史数据确保数学精确性。
-*   **右脑 (软感知)**: DeepSeek-V3 接收 **15根** 最新 K 线（黄金分割窗口），专注于识别 W底、M头等形态。
+*   **右脑 (软感知)**: DeepSeek 接收最新 K 线（黄金分割窗口），专注于识别 W底、M头等形态。
 *   **动态人格切换**: 根据 **ADX 趋势强度** 自动切换交易风格：
     *   🦁 **激进型 (Trend)**: ADX > 25，允许追涨杀跌，忽略超买信号。
     *   🦉 **避险型 (Defensive)**: 波动大但无趋势，仅在布林带极端位置博反弹。
     *   🐼 **网格型 (Grid)**: ADX < 20，横盘震荡高抛低吸。
     *   🚀 **异动唤醒 (Surge Override)**: 当检测到 **成交量爆增 (>3x)** 或 **价格瞬间剧烈波动 (>0.5%)** 时，强制绕过 ADX/RSI 门禁，确保不错过任何突发大行情。
-*   **高信心特权**: 当 AI 给出 **HIGH** 信心信号时，自动触发“激进模式”，突破常规配置限制，允许在配额范围内最大化投入。
+*   **高信心特权**: 当 AI 给出 **HIGH** 信心信号时，自动触发“激进模式”，突破常规配置限制。
 
 ### 2. ⚡ **毫秒级异步内核 (Async High-Frequency Core)**
 *   **全异步架构**: 基于 Python `asyncio` 重写，I/O 非阻塞。支持同时监控 **50+** 交易对而无延迟。
 *   **极速轮询**: 支持 `1s` 甚至 `500ms` 的 K 线监测频率，比传统轮询机器人快 10 倍。
-*   **智能降频**: 虽然轮询很快，但 AI 并不需要每次都思考。通过 `strategy.history_limit` 和内部逻辑，系统会智能决定何时调用 DeepSeek 进行深度分析，既保证了对突发风控的毫秒级响应，又节省了昂贵的 Token 成本。
-*   **智能 API 降级 (Smart Downgrade)**: 当配置了 `1s` 或 `500ms` 等毫秒级周期时，系统会自动请求 `1m` (1分钟) K线数据。
-    *   **原理**: 交易所通常不支持秒级 K 线请求，但 1分钟 K 线的 `close` 价格是实时更新的（等于最新成交价）。
-    *   **效果**: 您依然能以毫秒级频率获取最新的市场价格和实时指标，同时避免了 API 报错。
-*   **配置建议**:
-    *   **高频剥头皮**: 设置 `timeframe: "1s"`，配合高杠杆和小资金。
+*   **智能降频**: 智能决定何时调用 DeepSeek 进行深度分析，既保证了对突发风控的毫秒级响应，又节省了昂贵的 Token 成本。
+*   **智能 API 降级 (Smart Downgrade)**: 自动适配交易所 API 限制，以毫秒级频率获取最新的市场价格和实时指标。
 
 ### 3. 🛡️ **机构级风控体系 (Institutional Risk Control)**
 *   **资金舱壁 (Capital Isolation)**: 每个币种拥有独立资金配额，杜绝单一币种亏损拖累全局。
-*   **零点校准 (Zero-Start Baseline)**: 启动时自动消除系统初始化导致的时间差微小波动，确保 PnL 统计从 0 开始，精确反映 Session 盈亏。
-*   **四重执行熔断 (Execution Gates)**:
+*   **零点校准 (Zero-Start Baseline)**: 启动时自动消除系统初始化导致的时间差微小波动，精确反映 Session 盈亏。
+*   **多重执行熔断 (Execution Gates)**:
     1.  **滑点保护**: 下单前毫秒级比对价格，偏差 > 1% 立即终止。
     2.  **微利拦截**: 实时计算 Taker 费率，拦截扣除手续费后无利可图的“无效交易”。
     3.  **信心过滤**: 严格执行配置的最低信心门槛。
-    4.  **最小额适配**: 自动补足金额以满足交易所最小下单限制（避免 `InvalidOrder`）。
-*   **全局账户熔断**: 实时监控总权益，触发全局止盈/止损线时，自动清仓并停机。
+    4.  **账户级熔断**: 15% 回撤强制冷静 1 小时。
+    5.  **防连续止损**: 单次止损后强制冷却 15 分钟。
+    6.  **移动止盈**: 实时追踪最高浮盈，回撤自动锁利。
 
 ### 4. 🔬 **精细化运营 (Operational Excellence)**
 *   **自动费率校准**: 启动时自动获取账户 VIP 等级对应的真实手续费率。
 *   **诊断式报错**: 下单失败时，发送包含账户余额、缺口金额、AI 建议值的详细诊断报告。
 *   **安全优先**: 强制要求 API Key 存储于环境变量，拒绝明文配置。
-*   **可视化战绩**: 内置 `plotter.py` 引擎，支持生成专业级 **PnL 资金曲线图** (Equity Curve) 和 **盈亏分布散点图**，复盘分析更直观。
-*   **多渠道通知**: 支持 **DingTalk (钉钉)**、**Feishu (飞书)**、**Telegram** 等多渠道实时推送交易信号与异常告警（需配置 Webhook）。
-*   **模拟/实盘双模**: 提供 `test_mode` 模拟交易功能，在零风险环境下验证策略有效性，不仅是回测，更是实时的“纸面交易” (Paper Trading)。
+*   **可视化战绩**: 内置 `plotter.py` 引擎，支持生成专业级 **PnL 资金曲线图** (Equity Curve)。
+*   **多渠道通知**: 支持 **DingTalk (钉钉)**、**Feishu (飞书)**、**Telegram** 等多渠道实时推送交易信号与异常告警。
+*   **模拟/实盘双模**: 提供 `test_mode` 模拟交易功能，在零风险环境下验证策略有效性。
 
-### 5. ⚙️ 轮询周期与 AI 协同 (Polling & AI Synergy) **[v3.0]**
+### 5. ⚙️ 轮询周期与 AI 协同 (Polling & AI Synergy)
 
 为了在毫秒级监控与 AI 成本之间取得平衡，我们引入了独特的协同机制：
 
@@ -57,25 +53,10 @@ v3.6 版本采用了全新的 **AsyncIO 异步内核** 与 **组件化架构**�
     *   检查 `history_limit` 是否满足（数据量不足时不打扰 AI）。
     *   检查 `signal_limit`（避免在短时间内对同一信号重复请求 AI）。
 3.  **按需唤醒 (On-Demand Wakeup)**: 只有当本地预判认为“有行情”时，才会打包所有数据发送给 DeepSeek 进行深度决策。
-    *   **优势**: 既实现了 7x24 小时毫秒级盯盘，又将 AI 调用频率控制在合理范围，大幅降低 API 成本。
 
 ---
 
-## 🆚 版本对比：v3.1 (Async) vs v2.3 (Classic)
-
-| 特性维度 | v2.3 (经典版) | v3.1 (重构版) | 核心优势 |
-| :--- | :--- | :--- | :--- |
-| **🏗️ 系统架构** | **单体脚本 (Monolith)**<br>单文件 2000行，修改维护困难 | **模块化工程 (Modular)**<br>MVC 分层设计，易于扩展与维护 | **企业级规范**<br>代码清晰，耦合度低 |
-| **🚀 执行内核** | **同步阻塞 (Sync)**<br>串行轮询，币种越多延迟越高 | **异步并发 (AsyncIO)**<br>多协程并行，监控50+币种零延迟 | **速度提升 10x+**<br>毫秒级响应市场变化 |
-| **💎 功能完整性** | **已具备核心功能**<br>含费率校准、诊断报告、信心特权 | **完美复刻 + 增强**<br>完整移植所有经典功能，且支持测试模式参数 | **零缺失**<br>无缝迁移，体验更佳 |
-| **� 可视化** | **纯文本日志**<br>仅控制台/文件文本输出 | **文本 + 图表**<br>自动生成 `.png` 资金曲线图，直观复盘 | **数据可视化**<br>一图胜千言 |
-| **�️ 稳定性** | `schedule` 库调度<br>易受网络波动影响阻塞主线程 | `asyncio` 事件循环<br>原生异步调度，网络IO不阻塞主逻辑 | **高可用**<br>7x24h 稳如泰山 |
-
-> **💡 总结**: v3.1 并非简单的功能堆砌，而是对底层引擎的**彻底重构**。它继承了 v2.3 的所有优秀策略（费率校准、微利拦截、信心特权等），并将其植入到更强大、更快速的**异步内核**中。
-
----
-
-### 6. 🛠️ 故障排查工具 (Diagnostic Tool)
+## ️ 故障排查工具 (Diagnostic Tool)
 *   **一键诊断**: 内置 `test/test_connection.py`，可独立运行以测试 OKX API、DeepSeek API 及 Webhook 通知的连通性，无需启动主程序即可快速定位网络或配置问题。
 
 ## 📂 项目结构 (File Structure)
@@ -106,9 +87,8 @@ OKXBot_Plus_Workspace/
 │           └── risk_manager.py     # -> 全局熔断与仓位管理
 ├── test/                 # [测试] 单元测试与诊断工具
 │   └── test_connection.py  #     -> 网络与API连通性诊断
-├── doc/                  # [文档] 详细使用手册
-│   ├── CONFIG_README.md  #     -> 配置详解
-│   ├── STRATEGY_DETAILS.md #   -> 策略逻辑说明
+├── docs/                 # [文档] 详细使用手册
+│   ├── CONFIGURATION.md  #     -> 配置详解
 │   └── ...
 ├── log/                  # [日志] 运行日志
 └── png/                  # [图表] PnL 资金曲线图
@@ -148,13 +128,6 @@ python -m venv okx_ds
 .\okx_ds\Scripts\activate
 ```
 
-**Conda (可选):**
-```bash
-cd OKXBot_Plus_Workspace
-conda create -n okx_ds python=3.10
-conda activate okx_ds
-```
-
 ```bash
 # 安装依赖
 pip install -r requirements.txt
@@ -173,7 +146,7 @@ cp .env.example .env
 
 ```bash
 cp config.example.json config.json
-# 根据 CONFIG_README.md 调整资金分配与交易对
+# 根据 docs/CONFIGURATION.md 调整资金分配与交易对
 ```
 
 ### 4. 启动机器人
@@ -185,10 +158,10 @@ cp config.example.json config.json
 
 ## 📄 文档索引 (Documentation)
 
-*   **[配置指南 (Config Guide)](doc/CONFIG_README.md)**: 详解 `config.json` 各项参数。
+*   **[配置指南 (Config Guide)](docs/CONFIGURATION.md)**: 详解 `config.json` 各项参数。
 *   **[项目运行逻辑手册 (Project Execution Logic)](doc/PROJECT_EXECUTION_LOGIC.md)**: 深入理解系统启动、异步调度与数据流转。
 *   **[核心交易与资金管理手册 (Trading & Capital Manual)](doc/TRADING_AND_RISK_MANUAL.md)**: 详解双脑决策、资金隔离、风控熔断机制。
-*   **[架构分析 (Architecture)](doc/ARCHITECTURE_ANALYSIS.md)**: v3.0 异步架构深度解析。
+*   **[架构分析 (Architecture)](doc/ARCHITECTURE_ANALYSIS.md)**: 异步架构深度解析。
 
 ---
 
@@ -202,17 +175,8 @@ CryptoOracle 是一个开放源代码项目，我们欢迎任何形式的贡献�
 *   **代码贡献**: 欢迎提交 Pull Request (PR) 修复 Bug 或添加新功能。
 *   **文档改进**: 帮助完善中文/英文文档。
 
-### ☕ 赞助支持 (Sponsorship)
-如果您觉得本项目对您有帮助，或者您通过它获得了不错的收益，欢迎请作者喝一杯咖啡，这将激励我们持续更新与维护！
-
-<img width="400" height="511" alt="image" src="https://github.com/user-attachments/assets/d2a5d2b8-6137-456c-acbe-4ce5d4c3376a" />
-<img width="400" height="494" alt="image" src="https://github.com/user-attachments/assets/25b453f7-3b1a-4766-8019-b8a685d8a4b6" />
-
-*   👉 **注册链接**: [点击这里注册 OKX (免翻墙)](https://www.okx.com/register?inviteCode=95572792)
-
-
 ### 📬 联系我们 (Contact)
-*   Email: 1211018392@qq.com (示例)
+*   Email: 1211018392@qq.com
 
 ---
 

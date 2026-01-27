@@ -6,6 +6,27 @@
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
 
+## [v3.9.0] - 2026-01-27 (Risk Fortification & Docs Update)
+
+### 🛡️ 机构级风控加固 (Institutional Risk Fortification)
+- **15分钟强制冷却 (Extended Cool-down)**:
+  - **机制**: 将单次止损后的冷却时间从 3分钟 (180s) 延长至 **15分钟 (900s)**。
+  - **目的**: 确保在单边暴跌行情中，机器人能完整跳过至少一根 15m K 线，避免在同一根 K 线的下跌途中反复接飞刀。
+  - **移除特权**: 彻底移除了“高信心豁免”机制。现在无论 AI 信心多高，止损后都必须强制冷静，杜绝上头赌博。
+- **账户级熔断优化 (Account Circuit Breaker)**:
+  - **机制**: 简化熔断条件为纯粹的 **15% 回撤**。移除了“绝对亏损金额”的额外判断，确保小资金账户也能享受到同等严格的风控保护。
+  - **持久化**: 熔断状态（如剩余冷却时间）支持本地持久化，重启后依然生效。
+- **移动止盈修复 (Trailing Stop Fix)**:
+  - **严重修复**: 修复了移动止盈检查逻辑被置于信号门禁（Signal Gate）之后的问题。
+  - **现状**: 无论市场指标多么糟糕（导致 AI 信号被拦截），移动止盈检查都会在每轮循环的最开始**强制执行**，确保利润能及时落袋。
+
+### 📚 文档全面升级 (Documentation Overhaul)
+- **通用化重构**: 
+  - `README.md` 去除了具体的版本号限制，重构为更通用的项目介绍文档，聚焦于核心架构与长期价值。
+- **配置文档同步**: 
+  - `docs/CONFIGURATION.md` 全面更新，详细解释了新增的 `ai_interval`、`risk_control` 等参数。
+  - `config.example.json` 结构已同步至最新版代码逻辑。
+
 ## [v3.8.0] - 2026-01-25 (Dual-Track Monitor & Fast Exit)
 
 ### 🚀 核心架构升级 (Core Architecture)

@@ -3040,14 +3040,6 @@ class DeepSeekTrader:
                          # 2. Check Pattern on 1m
                          pat_1m = self.signal_processor.check_candlestick_pattern(df_1m)
                          
-                         # [User Request] 轨道B运行的时候把一些关键信息打印出来
-                         # 打印当前 1m K线信息，确认数据已获取
-                         # last_close = df_1m.iloc[-1]['close']
-                         # last_vol = df_1m.iloc[-1]['volume']
-                         # prev_vols = df_1m.iloc[-4:-1]['volume'].values
-                         # max_vol3 = max(prev_vols) if len(prev_vols) > 0 else 0
-                         # self._log(f"🚄 [Orbit B] 1m极速监控 | Price: {last_close} | Vol: {last_vol:.2f} (Max3: {max_vol3:.2f}) | Pattern: {pat_1m if pat_1m else 'None'}", 'info')
-                         
                          # [Update] 仅打印关键触发理由，避免刷屏
                          # 信息已整合至下方 Monitoring Mode 的 summary 中显示在表格里
                          pass
@@ -3416,9 +3408,9 @@ class DeepSeekTrader:
             # Call Agent (Wait, we already have current_pos above)
             # current_pos = await self.get_current_position() # Removed duplicate call
             
-            # [New] 实时更新移动止损 (Real Trailing SL)
-            if current_pos:
-                await self._update_real_trailing_sl(price_data, current_pos)
+            # [Moved Up] 实时更新移动止损已移至 Gate 检查之前
+            # if current_pos:
+            #    await self._update_real_trailing_sl(price_data, current_pos)
             
             # [New] 获取账户总权益并计算 PnL
             current_pnl = 0.0
