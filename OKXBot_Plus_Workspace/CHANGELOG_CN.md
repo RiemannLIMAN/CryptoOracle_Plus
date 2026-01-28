@@ -6,6 +6,24 @@
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
 
+## [v3.9.5] - 2026-01-28 (Dynamic Profit Guard & Logic Refinement)
+
+### 💎 阶梯式动态锁利 (Dynamic Profit Locking)
+- **六级锁利机制 (6-Level Guard)**:
+  - **Level 1 (保本)**: 收益 > 2% -> 止损移至开仓价。
+  - **Level 2 (温和)**: 收益 > 5% -> 锁定 60% 利润。
+  - **Level 3 (强势)**: 收益 > 10% -> 锁定 75% 利润。
+  - **Level 4 (激进)**: 收益 > 20% -> 锁定 85% 利润。
+  - **Level 5 (冲天)**: 收益 > 50% -> 锁定 92% 利润。
+  - **Level 6 (巅峰)**: 收益 > 100% -> 锁定 95% 利润。
+- **软件监控模式**: 完全采用本地软件实时监控，不再频繁修改交易所硬止损单，保护利润的同时减少 API 暴露。
+
+### 🛠️ 关键逻辑修复 (Critical Bug Fixes)
+- **状态同步修复 (State Sync Fix)**: 修复了 `trailing_max_pnl` 在重启或模块重置时无法正确传递给监控组件的问题，确保“最高水位线”记忆不丢失。
+- **做空盈亏修正 (Short PnL Fix)**: 补全了做空 (Short) 持仓的盈亏计算公式，彻底解决空单移动止盈不生效的 Bug。
+- **熔断阈值同步**: 账户熔断逻辑现已与配置文件中的 `max_loss_rate` 强关联，支持热重载。
+- **调试增强**: 增加了 `🔍 [Trailing]` 专用调试日志，可实时查看每个币种的盈亏比率、水位线及锁利执行状态。
+
 ## [v3.9.0] - 2026-01-27 (Risk Fortification & Docs Update)
 
 ### 🛡️ 机构级风控加固 (Institutional Risk Fortification)

@@ -222,11 +222,21 @@ class DeepSeekTrader:
 
     async def check_trailing_stop(self, current_position=None):
         """检查并执行移动止盈 (Trailing Stop)"""
-        return await self.position_manager.check_trailing_stop(
+        # [Fix] Sync state to PositionManager before check
+        if self.position_manager.trailing_max_pnl == 0.0 and self.trailing_max_pnl > 0.0:
+            self.position_manager.trailing_max_pnl = self.trailing_max_pnl
+
+        triggered = await self.position_manager.check_trailing_stop(
             current_position, 
             save_callback=self.save_state, 
             notification_callback=self.send_notification
         )
+        
+        # [Fix] Sync state back from PositionManager
+        if self.position_manager.trailing_max_pnl > self.trailing_max_pnl:
+            self.trailing_max_pnl = self.position_manager.trailing_max_pnl
+            
+        return triggered
 
     async def get_current_position(self):
         return await self.position_manager.get_current_position()
@@ -2547,24 +2557,40 @@ class DeepSeekTrader:
             if pnl_pct > breakeven_trigger_pct:
                  breakeven_price = entry_price * (1.001 if side == 'long' else 0.999) # +0.1% to cover fees
                  
-                 # [New] Dynamic Profit Locking (Level 2 & 3)
-                 # Level 2: Lock 60% Profit at 3% Gain (More aggressive)
-                 if pnl_pct > 0.03:
-                     lock_price = entry_price + (current_price - entry_price) * 0.6 if side == 'long' else entry_price - (entry_price - current_price) * 0.6
-                     if side == 'long' and lock_price > breakeven_price: breakeven_price = lock_price
-                     elif side == 'short' and lock_price < breakeven_price: breakeven_price = lock_price
+                 # [Refined] Dynamic Profit Locking Levels (Higher PnL -> Tighter Stop)
+                 # Base Breakeven is already set above. Now we check for higher profit levels.
                  
-                 # Level 2.5: Lock 70% Profit at 4% Gain
-                 if pnl_pct > 0.04:
-                     lock_price_2 = entry_price + (current_price - entry_price) * 0.7 if side == 'long' else entry_price - (entry_price - current_price) * 0.7
-                     if side == 'long' and lock_price_2 > breakeven_price: breakeven_price = lock_price_2
-                     elif side == 'short' and lock_price_2 < breakeven_price: breakeven_price = lock_price_2
-
-                 # Level 3: Aggressive Trailing at 5% Gain (Lock 85% Profit)
-                 if pnl_pct > 0.05:
-                     agg_lock_price = entry_price + (current_price - entry_price) * 0.85 if side == 'long' else entry_price - (entry_price - current_price) * 0.85
-                     if side == 'long' and agg_lock_price > breakeven_price: breakeven_price = agg_lock_price
-                     elif side == 'short' and agg_lock_price < breakeven_price: breakeven_price = agg_lock_price
+                 lock_ratio = 0.0
+                 level_name = "Level 1 (Breakeven)"
+                 
+                 if pnl_pct > 1.00:   # > 100% Profit
+                     lock_ratio = 0.95 # Allow 5% callback of profit
+                     level_name = "Level 6 (Sky High)"
+                 elif pnl_pct > 0.50: # > 50% Profit
+                     lock_ratio = 0.92 # Allow 8% callback
+                     level_name = "Level 5 (To The Moon)"
+                 elif pnl_pct > 0.20: # > 20% Profit
+                     lock_ratio = 0.85 # Allow 15% callback
+                     level_name = "Level 4 (Aggressive)"
+                 elif pnl_pct > 0.10: # > 10% Profit
+                     lock_ratio = 0.75 # Allow 25% callback
+                     level_name = "Level 3 (Strong)"
+                 elif pnl_pct > 0.05: # > 5% Profit
+                     lock_ratio = 0.60 # Allow 40% callback
+                     level_name = "Level 2 (Moderate)"
+                 
+                 if lock_ratio > 0:
+                     profit_amount = (current_price - entry_price) if side == 'long' else (entry_price - current_price)
+                     # Calculate the price that locks 'lock_ratio' of the profit
+                     # Long: Entry + Profit * Ratio
+                     # Short: Entry - Profit * Ratio
+                     lock_price = entry_price + profit_amount * lock_ratio if side == 'long' else entry_price - profit_amount * lock_ratio
+                     
+                     # Ensure we pick the tightest stop (Highest for Long, Lowest for Short)
+                     if side == 'long':
+                         if lock_price > breakeven_price: breakeven_price = lock_price
+                     else: # short
+                         if lock_price < breakeven_price: breakeven_price = lock_price
 
                  should_update_be = False
                  if side == 'long' and breakeven_price > self.dynamic_stop_loss:
@@ -2575,12 +2601,7 @@ class DeepSeekTrader:
                      should_update_be = True
                      
                  if should_update_be:
-                     level_tag = "Level 1 (Breakeven)"
-                     if pnl_pct > 0.05: level_tag = "Level 3 (Aggressive)"
-                     elif pnl_pct > 0.04: level_tag = "Level 2.5 (Strong Lock)"
-                     elif pnl_pct > 0.03: level_tag = "Level 2 (Lock Profit)"
-                     
-                     self._log(f"🛡️ [Dynamic Exit] {level_tag} 触发 ({pnl_pct*100:.1f}%) -> 止损上移: {breakeven_price:.4f}", 'info')
+                     self._log(f"🛡️ [Dynamic Exit] {level_name} 触发 ({pnl_pct*100:.1f}%) -> 止损上移: {breakeven_price:.4f}", 'info')
                      self.dynamic_stop_loss = breakeven_price
                      # 这里不 return，允许下方的 trailing 逻辑继续尝试能不能提得更高
             
@@ -3274,11 +3295,13 @@ class DeepSeekTrader:
                 self.daily_high_equity = equity
                 asyncio.create_task(self.save_state())
             
-            # 如果从高点回撤超过 15% (硬性熔断线)
+            # 如果从高点回撤超过设定阈值 (硬性熔断线)
             if self.daily_high_equity > 0:
+                max_loss_rate = self.risk_control.get('max_loss_rate', 0.15)
                 drawdown = (equity - self.daily_high_equity) / self.daily_high_equity
-                if drawdown < -0.15:
-                    self._log(f"💀 [CIRCUIT BREAKER] 触发账户级熔断! 回撤 {drawdown*100:.2f}% (>15%)", 'critical')
+                
+                if drawdown < -max_loss_rate:
+                    self._log(f"💀 [CIRCUIT BREAKER] 触发账户级熔断! 回撤 {drawdown*100:.2f}% (>{max_loss_rate*100:.0f}%)", 'critical')
                     await self.send_notification(
                         f"💀 **账户熔断报警**\n当前权益: {equity:.2f}\n当日最高: {self.daily_high_equity:.2f}\n回撤幅度: {drawdown*100:.2f}%\n> **系统暂停开仓 1 小时!**",
                         title=f"💀 熔断触发 | {self.symbol}"

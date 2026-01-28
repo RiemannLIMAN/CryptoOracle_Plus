@@ -246,9 +246,19 @@ class PositionManager:
                     if size > 0:
                         entry = float(current_position['entry_price'])
                         if entry > 0:
-                             if current_position['side'] == 'long':
-                                 pnl_ratio = (float(unrealized_pnl) / (size * entry))
-                                 has_valid_pnl = True
+                             # [Fix] Calculate PnL Ratio for both Long and Short
+                             # PnL Ratio = Unrealized PnL / Initial Position Value (Notional)
+                             # Note: This is ROI (Return on Investment) if leverage = 1, or Price Change % if leverage > 1?
+                             # Actually: PnL / Notional = Price Change % (approx).
+                             # If user wants ROE (Return on Equity), we should divide by Margin (Notional / Leverage).
+                             # But usually Trailing Stop is based on Price Movement %.
+                             # Let's stick to PnL / Notional for now (conservative).
+                             pnl_ratio = (float(unrealized_pnl) / (size * entry))
+                             has_valid_pnl = True
+                             
+                             # [Debug] Print PnL calculation details
+                             if abs(pnl_ratio) > 0.01:
+                                 self.logger.info(f"🔍 [Trailing] {self.symbol} PnL:{unrealized_pnl:.2f} Size:{size} Entry:{entry:.4f} Ratio:{pnl_ratio:.2%} Max:{self.trailing_max_pnl:.2%}")
                 except (ValueError, TypeError):
                     pass
             
