@@ -24,6 +24,7 @@ png/
 *.log
 OKXBot_Plus_Workspace/test/
 OKXBot_Plus_Workspace/data/
+OKXBot_Plus_Workspace/tools/
 OKXBot_Plus_Workspace/__pycache__/
 
 # PyInstaller / Build
