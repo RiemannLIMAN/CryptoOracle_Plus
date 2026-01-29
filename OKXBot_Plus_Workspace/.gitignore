@@ -1,42 +1,15 @@
-# Python
+# Local test directory
+test/
+# Log files
+log/*.log
+# Data files
+data/*.db
+data/*.csv
+data/*.json
+# Python bytecode
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Config & Secrets (Important!)
-.env
-.env.local
-config.json
-# Keep example files
-!config.example.json
-!.env.example
-
-# Logs & Data
-log/
-png/
-*.log
-
-# Runtime Data
-data/*
-!data/.gitkeep
-
-
-# PyInstaller / Build
-build/
-dist/
-*.spec
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-
-# Generated Docs
-*.pdf
+*.py[cod]
+*$py.class
+# OS generated files
+.DS_Store
+Thumbs.db
