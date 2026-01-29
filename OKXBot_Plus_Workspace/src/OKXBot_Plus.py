@@ -272,13 +272,10 @@ async def main():
 
     interval = main_tick_interval # Compatible with below logic
 
-    # 初始化资产基准
+    # [User Request] 恢复启动概览表格
     await risk_manager.initialize_baseline(start_equity)
+    risk_manager.display_pnl_history()
     
-    # 显示历史战绩
-    # risk_manager.display_pnl_history()
-    
-    # [User Request] 移除繁琐的启动概览表格
     logger.info("🏁 初始化完成，进入主循环...")
     
     # --- 进入主循环 ---

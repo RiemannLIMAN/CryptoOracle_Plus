@@ -320,7 +320,7 @@ class RiskManager:
             if df.empty: return
             
             # [Reverted] 恢复为经典的 "历史盈亏回顾" 标题，这才是用户记忆中的设计
-            header = "\n" + "="*40 + f"\n� 历史盈亏回顾 (共 {len(df)} 条记录)\n" + "="*40
+            header = "\n" + "="*40 + f"\n 历史盈亏回顾 (共 {len(df)} 条记录)\n" + "="*40
             self.logger.info(header)
             # print(header) # Duplicate print removed
               
@@ -832,6 +832,58 @@ class RiskManager:
                 _, e = await t.get_account_info()
                 sim_eq += e
             current_usdt_equity = sim_eq
+
+        # 1. 先获取所有交易对的价格，用于后续估值
+        symbols = [t.symbol for t in self.traders]
+        prices = {}
+        try:
+            tickers = await self.exchange.fetch_tickers(symbols)
+            for s, t in tickers.items():
+                prices[s] = t['last']
+        except Exception as e:
+            self._log(f"初始化获取价格失败: {e}", 'warning')
+
+        # 2. [New] 在盘点开始前，简单打印账户可用资产及估值情况
+        try:
+            balance = await self.exchange.fetch_balance()
+            total_usdt_avail = balance.get('USDT', {}).get('free', 0.0)
+            
+            # 收集持有的非零资产
+            other_assets_info = []
+            held_currencies = [c for c, d in balance.get('total', {}).items() if c != 'USDT' and d > 0.00001]
+            
+            # 如果持有资产较多，尝试批量获取价格用于估值
+            asset_prices = {}
+            if held_currencies:
+                try:
+                    # 构造现货交易对名称进行查询 (如 SOL/USDT)
+                    price_query_symbols = [f"{c}/USDT" for c in held_currencies]
+                    tickers = await self.exchange.fetch_tickers(price_query_symbols)
+                    for s, t in tickers.items():
+                        base = s.split('/')[0]
+                        asset_prices[base] = t['last']
+                except:
+                    pass
+
+            for currency in held_currencies:
+                amount = balance['total'][currency]
+                price = asset_prices.get(currency)
+                if price:
+                    valuation = amount * price
+                    other_assets_info.append(f"{amount:.4f} {currency} (≈ {valuation:.2f} U)")
+                else:
+                    other_assets_info.append(f"{amount:.4f} {currency}")
+            
+            asset_summary = f"💰 当前可用余额: {total_usdt_avail:.2f} USDT"
+            if other_assets_info:
+                # 换行显示持有资产，避免单行太长
+                assets_str = ", ".join(other_assets_info[:6])
+                self.logger.info(f"\n{'='*50}\n{asset_summary}\n📦 持有资产: {assets_str}\n{'='*50}")
+            else:
+                self.logger.info(f"\n{'='*50}\n{asset_summary}\n{'='*50}")
+        except:
+            pass
+
         sep_line = "-" * 115
         header = f"\n{sep_line}\n📊 资产初始化盘点 (Asset Initialization)\n{sep_line}"
         # 使用纯英文表头以确保对齐
@@ -845,15 +897,6 @@ class RiskManager:
         
         total_position_value = 0.0
         
-        symbols = [t.symbol for t in self.traders]
-        prices = {}
-        try:
-            tickers = await self.exchange.fetch_tickers(symbols)
-            for s, t in tickers.items():
-                prices[s] = t['last']
-        except Exception as e:
-            self._log(f"初始化获取价格失败: {e}", 'warning')
-
         for trader in self.traders:
             quota = 0.0
             allocation_str = "N/A"
@@ -965,6 +1008,7 @@ class RiskManager:
         
         # [New] 显示当前资金总数 (响应用户需求)
         self.logger.info(f"💰 当前资金总数 (Total Equity): {real_total_equity:.2f} U")
+        self.logger.info("✨ 初始化完成，进入主循环... (Initialization complete, entering main loop...)")
         
         if self.initial_balance and self.initial_balance > 0:
             # [Logic Change] 智能基准模式 (Smart Baseline)

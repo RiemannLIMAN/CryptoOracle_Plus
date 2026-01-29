@@ -161,17 +161,21 @@ def setup_logger(name="crypto_oracle"):
     today_str = datetime.now().strftime('%Y%m%d')
     log_filename = os.path.join(log_dir, f"crypto_oracle_{today_str}.log")
 
+    # [v3.9.6] Debug Mode Support
+    # 优先检查环境变量，如果没有则默认 INFO
+    log_level_str = os.getenv('LOG_LEVEL', 'INFO').upper()
+    log_level = logging.DEBUG if log_level_str == 'DEBUG' else logging.INFO
+
     # 强制输出到 stdout，确保控制台可见
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
+    console_handler.setLevel(log_level)
     
     # 使用 RotatingFileHandler，最大 10MB，保留 3 个备份
-    # 这样既不会无限增长，也不会产生一堆文件
     file_handler = RotatingFileHandler(log_filename, maxBytes=10*1024*1024, backupCount=3, encoding='utf-8')
-    file_handler.setLevel(logging.INFO)
+    file_handler.setLevel(log_level)
 
     logging.basicConfig(
-        level=logging.INFO,
+        level=log_level,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
             file_handler,

@@ -337,6 +337,8 @@ class DeepSeekTrader:
             self.logger.error(f"[{self.symbol}] {msg}")
         elif level == 'warning':
             self.logger.warning(f"[{self.symbol}] {msg}")
+        elif level == 'debug':
+            self.logger.debug(f"[{self.symbol}] {msg}")
 
     async def send_notification(self, message, title=None):
         if not self.notification_config.get('enabled', False):
@@ -1195,7 +1197,7 @@ class DeepSeekTrader:
                 return "SKIPPED_TECH", tech_reason
             elif tech_reason:
                 # 软过滤：降级信心
-                self._log(f"📉 技术软过滤: {tech_reason} (降级信心为 LOW)", 'info')
+                self._log(f"📉 技术软过滤: {tech_reason} (降级信心为 LOW)", 'debug')
                 signal_data['confidence'] = 'LOW'
 
         # 2. 信心过滤
@@ -1252,14 +1254,14 @@ class DeepSeekTrader:
                 current_conf_val = max(current_conf_val, 2) # 强制提权到 MEDIUM
 
         if current_conf_val < min_conf_val:
-            self._log(f"✋ 信心不足: {signal_data.get('confidence')} < {self.min_confidence} (过滤: {signal_data.get('reason', '无')})", 'info')
+            self._log(f"✋ 信心不足: {signal_data.get('confidence')} < {self.min_confidence} (过滤: {signal_data.get('reason', '无')})", 'debug')
             signal_data['signal'] = 'HOLD'
             return "SKIPPED_CONF", f"信心不足 {signal_data.get('confidence')}"
 
         if signal_data['signal'] == 'HOLD':
             # [Refined] 记录更详细的 HOLD 原因日志
             hold_reason = signal_data.get('reason', 'AI建议观望')
-            self._log(f"⏸️ HOLD 状态: {hold_reason}", 'info')
+            self._log(f"⏸️ HOLD 状态: {hold_reason}", 'debug')
             
             # [New] Update Dynamic Risk Params even on HOLD
             if current_position:
