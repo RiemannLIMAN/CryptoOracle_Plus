@@ -352,6 +352,11 @@ async def main():
             # 我们需要去 trade_executor 里把那些日志也静默掉
             
             # Header
+            summary_line = risk_manager.get_summary_line(results)
+            if summary_line:
+                logger.info(f"─" * 60)
+                logger.info(summary_line)
+            
             header_str = (
                 f"{'SYMBOL':<14} | "
                 f"{'PRICE':<10} | "

@@ -3240,6 +3240,7 @@ class DeepSeekTrader:
                         persona = persona_map.get(price_data.get('volatility_status', 'NORMAL'), 'NORMAL')
                         return {
                             'symbol': self.symbol,
+                            'has_position': current_pos is not None,
                             'price': price_data['price'],
                             'change': price_data.get('price_change', 0.0),
                             'signal': 'HOLD',
@@ -3266,6 +3267,7 @@ class DeepSeekTrader:
                         persona = persona_map.get(price_data.get('volatility_status', 'NORMAL'), 'NORMAL')
                         return {
                             'symbol': self.symbol,
+                            'has_position': current_pos is not None,
                             'price': price_data['price'],
                             'change': price_data.get('price_change', 0.0),
                             'signal': 'HOLD',
@@ -3319,6 +3321,7 @@ class DeepSeekTrader:
                     remaining = int((cooldown_hours * 3600) - (time.time() - cb_ts))
                     return {
                         'symbol': self.symbol,
+                        'has_position': current_pos is not None,
                         'price': price_data['price'],
                         'change': price_data.get('price_change', 0.0),
                         'signal': 'STOPPED',
@@ -3354,6 +3357,7 @@ class DeepSeekTrader:
                     
                     return {
                         'symbol': self.symbol,
+                        'has_position': current_pos is not None,
                         'price': price_data['price'],
                         'change': price_data.get('price_change', 0.0), 
                         'signal': 'STOPPED',
@@ -3451,6 +3455,7 @@ class DeepSeekTrader:
                 self.consecutive_errors = 0
                 return {
                     'symbol': self.symbol,
+                    'has_position': current_pos is not None,
                     'price': price_data['price'],
                     'change': price_data['price_change'],
                     'signal': 'HOLD',
@@ -3541,6 +3546,7 @@ class DeepSeekTrader:
                 persona = persona_map.get(volatility_status, volatility_status)
                 return {
                     'symbol': self.symbol,
+                    'has_position': current_pos is not None,
                     'price': price_data['price'],
                     'change': price_data['price_change'],
                     'signal': 'HOLD',

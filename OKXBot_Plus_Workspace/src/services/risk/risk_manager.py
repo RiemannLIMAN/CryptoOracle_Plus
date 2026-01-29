@@ -432,6 +432,29 @@ class RiskManager:
             
         return False
 
+    def get_summary_line(self, results):
+        """获取简短的资金与持仓摘要 (用于表格上方打印)"""
+        if not hasattr(self, 'current_equity'):
+            return ""
+            
+        pnl_pct = (self.current_pnl / self.smart_baseline * 100) if self.smart_baseline > 0 else 0.0
+        
+        # 统计持仓数量
+        pos_count = 0
+        if results:
+            for res in results:
+                if res and res.get('has_position'):
+                    pos_count += 1
+        
+        pnl_icon = "📈" if self.current_pnl >= 0 else "📉"
+        
+        summary = (
+            f"💰 当前权益: {self.current_equity:.2f} U | "
+            f"{pnl_icon} 盈亏: {self.current_pnl:+.2f} U ({pnl_pct:+.2f}%) | "
+            f"📦 持仓: {pos_count} 个交易对"
+        )
+        return summary
+
     async def check(self, force_log=False):
         """执行风控检查 (Async)"""
         try:
@@ -557,8 +580,10 @@ class RiskManager:
             # 则认为是充值，自动上调 deposit_offset 以抵消影响
             
             # PnL = (Total - Offset) - Baseline
+            self.current_equity = current_total_value
             adjusted_equity = current_total_value - self.deposit_offset
-            raw_pnl = adjusted_equity - self.smart_baseline
+            self.current_pnl = adjusted_equity - self.smart_baseline
+            raw_pnl = self.current_pnl
             
             # [Fix] 首次运行 PnL 异常检测 (Startup Anomaly Check)
             # 只有当 Baseline 为 None (全新启动) 时，才允许激进的 PnL 归零逻辑
