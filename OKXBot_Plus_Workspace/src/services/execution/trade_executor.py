@@ -3612,6 +3612,9 @@ class DeepSeekTrader:
                     
                     if isinstance(result, tuple) and len(result) == 2:
                         exec_status, exec_msg = result
+                    elif isinstance(result, dict) and 'status' in result:
+                        exec_status = result['status']
+                        exec_msg = result.get('summary', '')
                     elif result is None:
                         # execute_trade might return None if it just returned without value in some paths (legacy)
                         pass
