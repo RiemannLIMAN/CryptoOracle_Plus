@@ -104,6 +104,17 @@ OKXBot_Plus_Workspace/
 #### 创建虚拟环境 (推荐)
 为了避免依赖冲突，建议使用虚拟环境运行机器人。
 
+**Conda (推荐用于 RL 模块):**
+```bash
+# 1. 创建环境
+conda create -n okx_ds python=3.10 -y
+
+# 2. 激活环境
+conda activate okx_ds
+```
+
+**Python Venv (原生虚拟环境):**
+
 **Linux/Mac:**
 ```bash
 # 1. 进入项目目录

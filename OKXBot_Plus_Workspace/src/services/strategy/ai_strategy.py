@@ -70,6 +70,7 @@ class DeepSeekAgent:
     "stop_loss": 止损价格(数字，0表示不设置),
     "take_profit": 止盈价格(数字，0表示不设置),
     "confidence": "HIGH" | "MEDIUM" | "LOW",
+    "position_ratio": 建议仓位比例(0.1-1.0，根据盈亏比和趋势强度动态决定),
     "amount": 建议交易数量,
     "direction_prediction": {
         "trend": "UP" | "DOWN" | "SIDEWAYS",
@@ -516,6 +517,7 @@ class DeepSeekAgent:
                 signal_data['signal'] = str(signal_data.get('signal', '')).upper()
                 signal_data['stop_loss'] = to_float(signal_data.get('stop_loss'))
                 signal_data['take_profit'] = to_float(signal_data.get('take_profit'))
+                signal_data['position_ratio'] = to_float(signal_data.get('position_ratio', 1.0))
                 
                 ai_amount = to_float(signal_data.get('amount'))
                 # [Fix] 允许 AI 建议 0 数量 (即仅平仓不反手)，不强制覆盖为 default_amount

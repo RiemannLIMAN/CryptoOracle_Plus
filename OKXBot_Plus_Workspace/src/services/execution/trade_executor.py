@@ -325,7 +325,7 @@ class DeepSeekTrader:
                     # [Fix] Reset High Water Mark to avoid immediate circuit breaker
                     # 如果资金发生剧烈变化 (通常是充提币)，旧的高水位线已失效
                     self.daily_high_equity = current_equity
-                    self.save_state() # Persist the reset
+                    await self.save_state() # Persist the reset
         except Exception as e:
             # 只有在失败时才打印警告，成功时静默
             self._log(f"⚠️ 资金校准失败: {e}", 'warning')
@@ -1498,6 +1498,15 @@ class DeepSeekTrader:
             sentiment_score=signal_data.get('sentiment_score', 50)
         )
         
+        # [v3.9.6 Optimized] AI 智能调仓优先
+        # 如果 AI 明确给出了 position_ratio，则将其作为重要参考，并与 RL/Heuristic 结果进行融合
+        ai_suggested_ratio = signal_data.get('position_ratio')
+        if ai_suggested_ratio is not None and 0 < ai_suggested_ratio <= 1.0:
+            # 融合逻辑: 取 AI 建议与系统计算的最小值 (保守策略) 或 加权平均
+            # 这里采用：如果 AI 建议更保守，听 AI 的；如果 AI 更激进，则受限于系统风控
+            suggested_ratio = min(suggested_ratio, ai_suggested_ratio)
+            self._log(f"🧠 [AI Sizing] AI 建议比例: {ai_suggested_ratio:.2f}, 系统校准后: {suggested_ratio:.2f}", 'debug')
+
         # [RL Override] 如果 RL 模块启用，则使用 RL 建议的比例
         # 注意: get_recommended_position_size 内部已经包含了 confidence 和 volatility 的考量
         # 但我们为了保守，可能还是会结合 confidence_factor (双重保险)

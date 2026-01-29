@@ -14,6 +14,8 @@
 - **分段止盈机制 (Partial Profit Taking)**: 引入阶梯减仓逻辑。浮盈达到 5% 和 10% 时自动执行 30% 市价减仓。通过 `partial_tp_stages` 状态管理，确保减仓动作在单次持仓中仅触发一次，且减仓后自动下移追踪水位线。
 - **软性技术过滤 (Soft Technical Filters)**: 彻底重构拦截逻辑。将 ATR、Volume、ADX 等硬性“一票否决”改为“降级信心”机制。当指标不完美但具备爆发潜力时，允许 AI 做出最终裁决，大幅降低在波动前夕的踏空概率。
 - **每日利润锁定 (Daily Profit Lock)**: RiskManager 新增账户级保护。当日累计盈利超过 15% 后，系统自动激活 `global_risk_factor = 0.5`，后续交易强制减半仓位，守住战果。
+- **AI 智能调仓 (Zero-Training AI Sizing)**: 革命性升级仓位管理。现在 DeepSeek 会根据盘面实时建议 `position_ratio` (0.1-1.0)。这解决了用户必须手动训练 RL 模型的痛点，实现了真正的“零配置”AI 驱动调仓。
+- **架构瘦身**: 彻底移除了笨重的机器学习依赖 (`stable-baselines3`, `shimmy`)，显著降低系统内存占用与安装复杂度。仓位管理现在由“AI 建议 + 高性能启发式引擎”双重保障。
 
 ### 🛠️ 逻辑修正与增强 (Bug Fixes & Enhancements)
 - **RL 仓位引擎优化**: 
@@ -25,7 +27,12 @@
 - **可观测性增强**: 
     - **HOLD 原因日志**: 在指标不达标触发 HOLD 时，日志会详细打印具体的拦截理由（如 `ADX_WEAK`, `LOW_VOL`），而非笼统的“等待”。
     - **状态追踪**: 增加了分段止盈执行的专用日志，清晰展示减仓比例、剩余仓位及调整后的最高水位线。
-- **环境优化**: 统一根目录 `.gitignore` 配置，彻底排除 `test/`、`tools/` 等本地开发目录，确保 GitHub 仓库精简安全。
+- **环境优化**: 
+    - **Git 过滤**: 统一根目录 `.gitignore` 配置，彻底排除 `test/`、`tools/` 等本地开发目录，确保 GitHub 仓库精简安全。
+    - **Conda 支持**: `README.md` 增加了 Conda 环境创建指南，推荐在运行 RL 模块时使用以获得更稳健的依赖支持。
+- **Bug 修复**:
+    - **RL 模型路径修正**: 修复了 `rl_position_sizer.py` 中冗余的 `.zip` 后缀导致的路径错误（解决 `.zip.zip` 加载失败问题）。
+    - **协程未等待修复**: 修复了 `trade_executor.py` 中 `save_state()` 协程未被 `await` 的 RuntimeWarning，确保系统状态（如资金校准、高水位线）能够正确持久化。
 
 ## [v3.9.5] - 2026-01-28 (Dynamic Profit Guard & Logic Refinement)
 

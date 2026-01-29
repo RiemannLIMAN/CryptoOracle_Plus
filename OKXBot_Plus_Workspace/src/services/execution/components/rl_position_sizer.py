@@ -1,57 +1,22 @@
-try:
-    import numpy as np
-    from stable_baselines3 import PPO
-    HAS_RL_LIB = True
-except ImportError:
-    HAS_RL_LIB = False
 
-class RLPositionSizer:
-    def __init__(self, model_path="models/rl_position_model.zip", logger=None):
+class SmartPositionSizer:
+    def __init__(self, logger=None):
         self.logger = logger
-        self.model = None
-        self.enabled = False
-        
-        if HAS_RL_LIB:
-            try:
-                # 尝试加载预训练模型
-                # 注意：如果文件不存在，这里会抛出异常
-                self.model = PPO.load(model_path)
-                self.enabled = True
-                if self.logger:
-                    self.logger.info(f"🤖 RL模型加载成功: {model_path}")
-            except Exception as e:
-                if self.logger:
-                    self.logger.warning(f"RL模型加载失败或未找到 ({e})，将使用规则引擎兜底")
-        else:
-            if self.logger:
-                self.logger.info("未检测到 stable-baselines3 库，RL 模式不可用 (请 pip install stable-baselines3 shimmy)")
+        if self.logger:
+            self.logger.info("🧠 [Smart Sizing] 已激活 [AI + 启发式规则] 混合调仓模式")
 
     def predict(self, observation):
         """
-        根据观测状态预测仓位比例
+        根据观测状态预测仓位比例 (启发式兜底)
         observation: [volatility, trend_strength, confidence, pnl_ratio, market_sentiment]
         return: float (0.0 - 1.0)
         """
-        if self.enabled and self.model:
-            try:
-                # deterministic=True for consistent output
-                action, _ = self.model.predict(observation, deterministic=True)
-                # 假设 action 是 0-1 之间的连续值 (Box space)
-                # 如果是离散值，需做映射
-                if isinstance(action, (list, np.ndarray)):
-                    return float(np.clip(action[0], 0.1, 1.0))
-                return float(action)
-            except Exception as e:
-                if self.logger:
-                    self.logger.error(f"RL推理失败: {e}")
-                return self._heuristic_fallback(observation)
-        else:
-            return self._heuristic_fallback(observation)
+        return self._heuristic_fallback(observation)
 
     def _heuristic_fallback(self, observation):
         """
-        [规则引擎兜底]
-        当没有模型时，使用启发式规则模拟 RL 行为
+        [规则引擎]
+        使用启发式规则模拟智能调仓行为
         Obs: [volatility, trend_strength, confidence, pnl_ratio, sentiment]
         """
         try:
@@ -76,16 +41,15 @@ class RLPositionSizer:
                 base_size *= 0.6 # 震荡减仓
                 
             # 3. 情绪调整 (Sentiment Adjustment)
-            # [v3.9.6 Optimized] 移除极度恐慌加仓逻辑，改为防御减仓
             if sentiment > 80: # 极度贪婪
-                base_size *= 0.6 # [Refined] 贪婪减仓加强至 0.6
+                base_size *= 0.6 
             elif sentiment < 20: # 极度恐慌
-                base_size *= 0.3 # [Modified] 极度恐慌时显著减仓，防止抄底爆仓
+                base_size *= 0.3 
                 
             # [Risk] 限制单次最大加仓倍数
             max_position_ratio = 1.0
             if sentiment < 20:
-                 max_position_ratio = 0.5 # 即使信心再高，极度恐慌下也只给 50% 额度
+                 max_position_ratio = 0.5 
                  
             base_size = min(base_size, max_position_ratio)
                 

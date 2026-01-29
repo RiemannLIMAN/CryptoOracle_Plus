@@ -1,6 +1,6 @@
 import asyncio
 from core.utils import to_float
-from .rl_position_sizer import RLPositionSizer
+from .rl_position_sizer import SmartPositionSizer
 
 class PositionManager:
     def __init__(self, exchange, symbol, trade_mode, test_mode, logger):
@@ -13,8 +13,8 @@ class PositionManager:
         self.trailing_max_pnl = 0.0
         self.trailing_config = {}
         
-        # RL Module
-        self.rl_sizer = RLPositionSizer(logger=self.logger)
+        # [v3.9.6] Smart Sizing Module (AI + Heuristic)
+        self.rl_sizer = SmartPositionSizer(logger=self.logger)
         
         # Simulation State
         self.sim_position = None 
