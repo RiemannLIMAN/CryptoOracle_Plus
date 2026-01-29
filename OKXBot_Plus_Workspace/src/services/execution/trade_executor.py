@@ -1252,11 +1252,15 @@ class DeepSeekTrader:
                 current_conf_val = max(current_conf_val, 2) # 强制提权到 MEDIUM
 
         if current_conf_val < min_conf_val:
-            self._log(f"✋ 信心不足: {signal_data.get('confidence')} < {self.min_confidence}, 强制观望", 'debug')
+            self._log(f"✋ 信心不足: {signal_data.get('confidence')} < {self.min_confidence} (过滤: {signal_data.get('reason', '无')})", 'info')
             signal_data['signal'] = 'HOLD'
             return "SKIPPED_CONF", f"信心不足 {signal_data.get('confidence')}"
 
         if signal_data['signal'] == 'HOLD':
+            # [Refined] 记录更详细的 HOLD 原因日志
+            hold_reason = signal_data.get('reason', 'AI建议观望')
+            self._log(f"⏸️ HOLD 状态: {hold_reason}", 'info')
+            
             # [New] Update Dynamic Risk Params even on HOLD
             if current_position:
                 sl = float(signal_data.get('stop_loss', 0) or 0)
@@ -3056,6 +3060,11 @@ class DeepSeekTrader:
 
             if current_pos and (self.dynamic_stop_loss > 0 or self.dynamic_take_profit > 0):
                 await self._check_dynamic_risk_levels(price_data['price'], current_pos)
+            
+            # [v3.9.6 New] Orbit C: 实时检查移动止盈与分段止盈 (Trailing Stop & Partial TP)
+            # 无论 AI 是否分析，每轮循环都必须检查持仓风险
+            if current_pos:
+                await self.check_trailing_stop(current_pos)
             
             # [New] Fast Pattern Exit (Monitor by Minute) - User Request: "monitor by minute... fetch volume/price... three-line strategy"
             # 移至 analyze_on_bar_close 之前，确保即使在 K 线未收盘时也能触发分钟级止盈

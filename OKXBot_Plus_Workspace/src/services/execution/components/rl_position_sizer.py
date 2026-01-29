@@ -78,7 +78,7 @@ class RLPositionSizer:
             # 3. 情绪调整 (Sentiment Adjustment)
             # [v3.9.6 Optimized] 移除极度恐慌加仓逻辑，改为防御减仓
             if sentiment > 80: # 极度贪婪
-                base_size *= 0.7 # 减仓防回调
+                base_size *= 0.6 # [Refined] 贪婪减仓加强至 0.6
             elif sentiment < 20: # 极度恐慌
                 base_size *= 0.3 # [Modified] 极度恐慌时显著减仓，防止抄底爆仓
                 

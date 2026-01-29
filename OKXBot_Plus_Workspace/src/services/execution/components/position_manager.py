@@ -294,14 +294,17 @@ class PositionManager:
                 self.logger.info(f"💰 [Partial TP] 触及 10% 利润节点，执行 30% 分批减仓")
                 await self.exchange.create_market_order(self.symbol, side, current_size * 0.3, params=close_params)
                 self.partial_tp_stages.append('stage_10')
+                # [Refined] 减仓后重置追踪点，让剩余仓位从当前盈亏水平重新追踪
+                self.trailing_max_pnl = pnl_ratio * 0.7 
                 if notification_callback:
                     await notification_callback(f"💰 [Partial TP] {self.symbol} 触及 10% 节点，已减仓 30%")
-                # 减仓后不 return，允许继续检查移动止盈
 
             elif pnl_ratio >= 0.05 and 'stage_5' not in self.partial_tp_stages:
                 self.logger.info(f"💰 [Partial TP] 触及 5% 利润节点，执行 30% 分批减仓")
                 await self.exchange.create_market_order(self.symbol, side, current_size * 0.3, params=close_params)
                 self.partial_tp_stages.append('stage_5')
+                # [Refined] 减仓后重置追踪点
+                self.trailing_max_pnl = pnl_ratio * 0.7
                 if notification_callback:
                     await notification_callback(f"💰 [Partial TP] {self.symbol} 触及 5% 节点，已减仓 30%")
 
