@@ -21,6 +21,9 @@ class PositionManager:
         self.sim_balance = 10000.0 # Default sim balance
         self.sim_trades = []
         self.sim_realized_pnl = 0.0
+        
+        # [v3.9.6 New] Risk Control Factor (0.0 - 1.0)
+        self.global_risk_factor = 1.0
 
     def set_trailing_config(self, config):
         self.trailing_config = config
@@ -71,7 +74,10 @@ class PositionManager:
             
             obs = [volatility, trend, confidence, pnl_ratio, sentiment]
             
-            return self.rl_sizer.predict(obs)
+            base_ratio = self.rl_sizer.predict(obs)
+            
+            # [v3.9.6 New] Apply Global Risk Factor
+            return base_ratio * self.global_risk_factor
             
         except Exception as e:
             self.logger.error(f"仓位计算失败: {e}")
@@ -211,13 +217,18 @@ class PositionManager:
         except Exception:
             return 0.0
 
-    async def check_trailing_stop(self, current_position, save_callback=None, notification_callback=None):
-        """检查并执行移动止盈 (Trailing Stop)"""
+    async def check_trailing_stop(self, current_position, indicators=None, save_callback=None, notification_callback=None):
+        """
+        检查并执行移动止盈 (Trailing Stop)
+        [v3.9.6 Optimized] 动态回调比例 (ATR驱动) + 分段止盈机制
+        """
         if not self.trailing_config.get('enabled', False):
             return False
 
         if not current_position:
             self.trailing_max_pnl = 0.0
+            # [New] 重置分段止盈标记
+            self.partial_tp_stages = []
             return False
             
         if self.trade_mode == 'cash':
@@ -228,17 +239,11 @@ class PositionManager:
             has_valid_pnl = False
             
             if 'uplRatio' in current_position:
-                 try:
-                     pnl_ratio = float(current_position['uplRatio'])
-                     has_valid_pnl = True
-                 except (ValueError, TypeError):
-                     pass
-            elif 'percentage' in current_position:
-                 try:
-                     pnl_ratio = float(current_position['percentage']) / 100.0
-                     has_valid_pnl = True
-                 except (ValueError, TypeError):
-                     pass
+                try:
+                    pnl_ratio = float(current_position['uplRatio'])
+                    has_valid_pnl = True
+                except (ValueError, TypeError):
+                    pass
             elif 'unrealized_pnl' in current_position and 'size' in current_position:
                 try:
                     unrealized_pnl = float(current_position['unrealized_pnl'])
@@ -246,59 +251,78 @@ class PositionManager:
                     if size > 0:
                         entry = float(current_position['entry_price'])
                         if entry > 0:
-                             # [Fix] Calculate PnL Ratio for both Long and Short
-                             # PnL Ratio = Unrealized PnL / Initial Position Value (Notional)
-                             # Note: This is ROI (Return on Investment) if leverage = 1, or Price Change % if leverage > 1?
-                             # Actually: PnL / Notional = Price Change % (approx).
-                             # If user wants ROE (Return on Equity), we should divide by Margin (Notional / Leverage).
-                             # But usually Trailing Stop is based on Price Movement %.
-                             # Let's stick to PnL / Notional for now (conservative).
                              pnl_ratio = (float(unrealized_pnl) / (size * entry))
                              has_valid_pnl = True
-                             
-                             # [Debug] Print PnL calculation details
-                             if abs(pnl_ratio) > 0.01:
-                                 self.logger.info(f"🔍 [Trailing] {self.symbol} PnL:{unrealized_pnl:.2f} Size:{size} Entry:{entry:.4f} Ratio:{pnl_ratio:.2%} Max:{self.trailing_max_pnl:.2%}")
                 except (ValueError, TypeError):
                     pass
             
             if not has_valid_pnl:
                 return False
 
-            activation_pnl = self.trailing_config.get('activation_pnl', 0.01)
-            callback_rate = self.trailing_config.get('callback_rate', 0.003)
+            # 1. 动态计算回调比例 (ATR驱动)
+            # [Optimized] 高波动放宽，低波动收紧
+            atr_ratio = indicators.get('atr_ratio', 1.0) if indicators else 1.0
+            base_callback = self.trailing_config.get('callback_rate', 0.005)
+            
+            if atr_ratio > 2.0:         # 极高波动 (山寨币暴涨)
+                dynamic_callback = 0.025 # 2.5% 回撤触发
+            elif atr_ratio > 1.5:       # 高波动
+                dynamic_callback = 0.015 # 1.5% 回撤触发
+            elif atr_ratio < 0.8:       # 极低波动
+                dynamic_callback = 0.003 # 0.3% 回撤触发
+            else:
+                dynamic_callback = base_callback
 
-            # 1. 更新最高水位线
+            activation_pnl = self.trailing_config.get('activation_pnl', 0.01)
+
+            # 2. 更新最高水位线
             if pnl_ratio > self.trailing_max_pnl:
                 self.trailing_max_pnl = pnl_ratio
                 if self.trailing_max_pnl > 0.01 and save_callback: 
                     asyncio.create_task(save_callback())
 
-            # 2. 检查是否激活
+            # 3. [New] 分段止盈机制 (Partial Profit Taking)
+            # 达到 5% 利润平 30%，10% 利润平 30%
+            if not hasattr(self, 'partial_tp_stages'):
+                self.partial_tp_stages = []
+            
+            current_size = float(current_position['size'])
+            side = 'buy' if current_position['side'] == 'short' else 'sell'
+            close_params = {'reduceOnly': True, 'tdMode': self.trade_mode}
+
+            if pnl_ratio >= 0.10 and 'stage_10' not in self.partial_tp_stages:
+                self.logger.info(f"💰 [Partial TP] 触及 10% 利润节点，执行 30% 分批减仓")
+                await self.exchange.create_market_order(self.symbol, side, current_size * 0.3, params=close_params)
+                self.partial_tp_stages.append('stage_10')
+                if notification_callback:
+                    await notification_callback(f"💰 [Partial TP] {self.symbol} 触及 10% 节点，已减仓 30%")
+                # 减仓后不 return，允许继续检查移动止盈
+
+            elif pnl_ratio >= 0.05 and 'stage_5' not in self.partial_tp_stages:
+                self.logger.info(f"💰 [Partial TP] 触及 5% 利润节点，执行 30% 分批减仓")
+                await self.exchange.create_market_order(self.symbol, side, current_size * 0.3, params=close_params)
+                self.partial_tp_stages.append('stage_5')
+                if notification_callback:
+                    await notification_callback(f"💰 [Partial TP] {self.symbol} 触及 5% 节点，已减仓 30%")
+
+            # 4. 检查是否激活移动止盈
             if self.trailing_max_pnl >= activation_pnl:
-                # 3. 检查回撤
+                # 5. 检查回撤
                 drawdown = self.trailing_max_pnl - pnl_ratio
-                if drawdown >= callback_rate:
-                    self.logger.info(f"⚡ 触发移动止盈! 最高: {self.trailing_max_pnl*100:.2f}%, 当前: {pnl_ratio*100:.2f}%, 回撤: {drawdown*100:.2f}%")
+                if drawdown >= dynamic_callback:
+                    self.logger.info(f"⚡ 触发移动止盈! 最高: {self.trailing_max_pnl*100:.2f}%, 当前: {pnl_ratio*100:.2f}%, 回撤: {drawdown*100:.2f}% (阈值:{dynamic_callback*100:.2f}%)")
                     
-                    # 执行平仓
-                    close_params = {}
-                    if self.trade_mode != 'cash':
-                        close_params['reduceOnly'] = True
-                        close_params['tdMode'] = self.trade_mode
-                    
-                    size = current_position['size']
-                    side = 'buy' if current_position['side'] == 'short' else 'sell'
-                    
-                    await self.exchange.create_market_order(self.symbol, side, size, params=close_params)
+                    await self.exchange.create_market_order(self.symbol, side, current_size, params=close_params)
                     
                     if notification_callback:
                         msg = f"⚡ 移动止盈触发 ({self.symbol})\n锁定收益: {pnl_ratio*100:.2f}%\n最高浮盈: {self.trailing_max_pnl*100:.2f}%"
                         await notification_callback(msg)
                     
                     self.trailing_max_pnl = 0.0
+                    self.partial_tp_stages = []
                     return True
 
         except Exception as e:
             self.logger.error(f"Trailing Stop Check Failed: {e}")
             return False
+        return False

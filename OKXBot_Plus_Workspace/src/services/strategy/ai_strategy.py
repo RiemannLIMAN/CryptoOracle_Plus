@@ -29,10 +29,11 @@ class DeepSeekAgent:
         base_role = "身份: 具备机构视角的顶级加密货币狙击手 (Institutional Crypto Sniper)。\n"
         base_role += "核心能力: 能够识别市场噪音与真实信号，擅长在极端行情中保持绝对冷静。\n"
         base_role += "当前目标: **盈亏比优先 (R:R Ratio > 2.0)**。追求单边暴利，宁可止损 3 次，也要抓住 1 次大趋势。\n"
+        base_role += "战术原则: 在高波动（ATR_ratio>2.0）时，必须全仓跟随趋势，设置宽松止损+分段止盈（5%平30%、10%平30%、剩余移动止盈）。永远拒绝低胜率震荡交易，宁可空仓等待单边机会。\n"
         
         # [New] 动态人格注入 (Dynamic Persona Injection) - 复刻 V2 经典逻辑
         if volatility_status == "HIGH_TREND":
-            base_role += "【当前模式: 激进趋势猎人 (Aggressive Trend Hunter)】\n市场处于单边剧烈波动。**必须**紧咬趋势，果断全仓出击。不要在意短期回调，重点关注 '量价共振' 和 '关键位突破'。\n"
+            base_role += "【当前模式: 激进趋势猎人 (Aggressive Trend Hunter)】\n市场处于单边剧烈波动。**必须**紧咬趋势，果断全仓出击。不要在意短期回调，重点关注 '量价共振' 和 '关键位突破'。利用分级止盈锁定利润。\n"
         elif volatility_status == "HIGH_CHOPPY":
             base_role += "【当前模式: 风控卫士 (Risk Guardian)】\n市场处于剧烈震荡，多空分歧巨大。请切换为'均值回归'思维，严禁追单。仅在价格触及布林带外轨或极端超买超卖时，执行反向猎杀（Mean Reversion）。\n"
         elif volatility_status == "LOW":

@@ -58,6 +58,11 @@ class RiskManager:
         self.chart_path = os.path.join(self.chart_dir, f"pnl_chart_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png")
         self.last_chart_display_time = 0
         self.is_initialized = False # [Fix] 强制初始化标记，确保每次重启都重新校准 offset
+        
+        # [v3.9.6 New] Daily Profit Lock Tracking
+        self.daily_start_equity = 0.0
+        self.daily_date = ""
+        self.is_risk_reduced = False
 
     def load_state(self):
         # 不加载历史基准资金，始终使用配置文件中的初始资金
@@ -470,6 +475,28 @@ class RiskManager:
             
             if total_equity <= 0:
                 return
+
+            # [v3.9.6 New] Daily Profit Lock Logic
+            today = datetime.now().strftime('%Y-%m-%d')
+            if self.daily_date != today:
+                self.daily_date = today
+                self.daily_start_equity = total_equity
+                self.is_risk_reduced = False
+                self._log(f"📅 新的一天开始，初始权益: {self.daily_start_equity:.2f} U", 'info')
+
+            if self.daily_start_equity > 0 and not self.is_risk_reduced:
+                daily_pnl_pct = (total_equity - self.daily_start_equity) / self.daily_start_equity
+                if daily_pnl_pct > 0.15: # 当日盈利 > 15%
+                    self.is_risk_reduced = True
+                    self._log(f"💎 [DAILY PROFIT LOCK] 当日收益率 {daily_pnl_pct*100:.2f}% 已达标 (15%)，触发防御模式（降低仓位比例）", 'info')
+                    await self.send_notification(
+                        f"💎 **每日利润锁定触发**\n当日收益率: `{daily_pnl_pct*100:.2f}%`\n> **系统已自动调低仓位比例，保护利润!**",
+                        title="💎 利润保护 | 全局"
+                    )
+                    # 动态调低所有交易员的仓位建议
+                    for trader in self.traders:
+                        if hasattr(trader, 'position_manager'):
+                            trader.position_manager.global_risk_factor = 0.5 # 降至 50% 仓位
 
             # [Fix] 每次重启强制进入初始化流程，重新计算 offset，而不是仅依赖 baseline 是否为空
             if not self.is_initialized:

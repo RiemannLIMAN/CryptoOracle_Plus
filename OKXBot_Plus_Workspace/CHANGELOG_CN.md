@@ -6,6 +6,19 @@
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
 
+## [v3.9.6] - 2026-01-29 (Alpha Sniper Optimization)
+
+### 🚀 策略核心升级 (Strategy Core Upgrade)
+- **动态移动止盈 (ATR Trailing)**: 移动止盈的回撤阈值现已与 ATR 波动率挂钩。高波动时自动放宽（防止被洗），低波动时自动收紧（锁定微利）。
+- **分段止盈机制 (Partial Profit Taking)**: 引入阶梯止盈。浮盈达到 5% 和 10% 时自动执行 30% 减仓，剩余仓位继续追踪大行情。
+- **软性技术过滤 (Soft Technical Filters)**: 将 ATR、Volume、ADX 等硬拦截改为“降级信心”机制。减少起爆前夜的踏空率，同时让 AI 保持最终决策权。
+- **每日利润锁定 (Daily Profit Lock)**: RiskManager 新增每日利润保护。当日累计盈利超过 15% 后，系统自动调低后续交易仓位（降至 50%），防止回吐。
+
+### 🛠️ 逻辑修正与增强 (Bug Fixes & Enhancements)
+- **RL 仓位管理修正**: 修复了极度恐慌 (Sentiment < 20) 时的反向加仓逻辑，改为防御性减仓，显著降低崩盘风险。
+- **AI 提示词强化**: 注入“高波动全仓趋势”与“分段止盈”指令，提升 AI 在单边行情中的攻击力。
+- **Git 环境优化**: 统一合并根目录 `.gitignore`，排除 `test/` 和 `tools/` 等本地敏感目录。
+
 ## [v3.9.5] - 2026-01-28 (Dynamic Profit Guard & Logic Refinement)
 
 ### 💎 阶梯式动态锁利 (Dynamic Profit Locking)

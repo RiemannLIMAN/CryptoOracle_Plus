@@ -226,8 +226,12 @@ class DeepSeekTrader:
         if self.position_manager.trailing_max_pnl == 0.0 and self.trailing_max_pnl > 0.0:
             self.position_manager.trailing_max_pnl = self.trailing_max_pnl
 
+        # [v3.9.6] Pass indicators for dynamic callback calculation
+        indicators = getattr(self, 'last_indicators', {})
+
         triggered = await self.position_manager.check_trailing_stop(
             current_position, 
+            indicators=indicators,
             save_callback=self.save_state, 
             notification_callback=self.send_notification
         )
@@ -1176,6 +1180,23 @@ class DeepSeekTrader:
                          self._log(f"🛡️ 策略保护: 当前持仓由策略(SL:{self.dynamic_stop_loss})保护，忽略非形态反转信号", 'warning')
                          signal_data['signal'] = 'HOLD'
                          return "HOLD_PROTECTED", "策略保护中"
+
+        # [v3.9.6] Soft Technical Filters (ATR, Vol, RSI, ADX)
+        # 不再硬拦截，而是根据市场恶劣程度降级信心
+        is_entry = False
+        if signal_data['signal'] == 'BUY' and (not current_position or current_position['side'] == 'short'): is_entry = True
+        if signal_data['signal'] == 'SELL' and (not current_position or current_position['side'] == 'long'): is_entry = True
+        
+        if is_entry:
+            tech_valid, tech_reason = self._check_technical_filters(signal_data['signal'], getattr(self, 'last_indicators', {}))
+            if not tech_valid:
+                self._log(f"⚠️ 技术硬拦截: {tech_reason} (强制观望)", 'warning')
+                signal_data['signal'] = 'HOLD'
+                return "SKIPPED_TECH", tech_reason
+            elif tech_reason:
+                # 软过滤：降级信心
+                self._log(f"📉 技术软过滤: {tech_reason} (降级信心为 LOW)", 'info')
+                signal_data['confidence'] = 'LOW'
 
         # 2. 信心过滤
         confidence_levels = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}

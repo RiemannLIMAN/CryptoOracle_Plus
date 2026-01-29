@@ -6,51 +6,48 @@ class SignalProcessor:
 
     def check_technical_filters(self, signal_type, indicators):
         """
-        [New] 硬性技术过滤 (Hard Technical Filters)
-        目标: 胜率 > 60%。宁可踏空，不可亏损。
+        检查技术指标过滤条件 (ATR, Volume, RSI, ADX)
+        [v3.9.6 Optimized] 软过滤机制：不再直接拦截 (return False)，而是降级信心 (LOW)。
         """
-        if not indicators:
-            return True, "无指标数据，跳过过滤"
-            
-        rsi = indicators.get('rsi')
+        reason = []
+        is_valid = True  # 默认为 True，仅在极度恶劣情况下才 False
         
-        # 1. RSI 极端值过滤 (防止追涨杀跌)
-        if rsi is not None:
-            if signal_type == 'BUY':
-                # 除非是超强趋势(ADX>40)，否则 RSI > 70 禁止追多
-                if rsi > 70:
-                    adx = indicators.get('adx', 0) or 0
-                    if adx < 40:
-                        return False, f"RSI超买 ({rsi:.1f}) 且趋势未爆发 (ADX {adx:.1f})，禁止追多"
-            elif signal_type == 'SELL':
-                # 除非是超强趋势(ADX>40)，否则 RSI < 30 禁止追空
-                if rsi < 30:
-                    adx = indicators.get('adx', 0) or 0
-                    if adx < 40:
-                        return False, f"RSI超卖 ({rsi:.1f}) 且趋势未爆发 (ADX {adx:.1f})，禁止追空"
-
-        # 2. 波动率过滤 (ATR Ratio)
-        atr_ratio = indicators.get('atr_ratio', 1.0)
-        # [Config] ATR 阈值提高到 1.0 (平均水平)，拒绝死鱼盘
-        if atr_ratio < 1.0:
-            return False, f"波动率过低 (ATR Ratio {atr_ratio:.2f} < 1.0)，属于死鱼盘"
-
-        # 3. 成交量过滤 (Volume Ratio)
-        # [Config] 要求成交量至少达到过去均值的 80%
-        vol_ratio = indicators.get('vol_ratio', 1.0)
-        if vol_ratio < 0.8:
-            return False, f"成交量低迷 (Vol Ratio {vol_ratio:.2f} < 0.8)，流动性不足"
-
-        # [Feature Flag] 4H 趋势共振过滤 (Resonance Filter)
-        # 仅当 trend_4h 参数存在且有效时检查
-        trend_4h = indicators.get('trend_4h')
-        if trend_4h and trend_4h != "NEUTRAL":
-            if signal_type == 'BUY' and trend_4h == 'DOWN':
-                return False, f"逆大势 (4H Trend DOWN)，禁止开多"
-            if signal_type == 'SELL' and trend_4h == 'UP':
-                return False, f"逆大势 (4H Trend UP)，禁止开空"
-
-        return True, "通过"
+        try:
+            # 1. ATR 波动率过滤 (ATR_Ratio < 1.0 -> 波动过小，或者是死鱼)
+            atr_ratio = indicators.get('atr_ratio', 1.0)
+            if atr_ratio < 1.0:
+                # [Optimized] 不拦截，改为标记低信心
+                # is_valid = False
+                reason.append(f"低波动(ATR:{atr_ratio:.1f})->降级信心")
+                
+            # 2. 成交量过滤 (Vol_Ratio < 0.8 -> 量能不足)
+            vol_ratio = indicators.get('vol_ratio', 1.0)
+            if vol_ratio < 0.8:
+                # [Optimized] 不拦截，改为标记低信心
+                # is_valid = False
+                reason.append(f"低量(Vol:{vol_ratio:.1f})->降级信心")
+                
+            # 3. RSI 极端值过滤 (超买/超卖区域禁止追单，但允许反转)
+            rsi = indicators.get('rsi', 50)
+            if signal_type == 'BUY' and rsi > 75:
+                # 追涨风险极大，建议拦截
+                is_valid = False
+                reason.append(f"RSI超买({rsi:.0f})禁止追多")
+            elif signal_type == 'SELL' and rsi < 25:
+                # 追空风险极大，建议拦截
+                is_valid = False
+                reason.append(f"RSI超卖({rsi:.0f})禁止追空")
+                
+            # 4. ADX 趋势强度过滤 (ADX < 20 -> 无趋势震荡)
+            # [Optimized] 提高阈值至 20 (原 15)
+            adx = indicators.get('adx', 20)
+            if adx < 20:
+                reason.append(f"弱趋势(ADX:{adx:.0f})->降级信心")
+                
+        except Exception as e:
+            pass
+            
+        return is_valid, " | ".join(reason)
 
     def check_candlestick_pattern(self, data_input, indicators=None):
         """

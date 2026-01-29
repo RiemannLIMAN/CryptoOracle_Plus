@@ -75,16 +75,17 @@ class RLPositionSizer:
             elif trend < 20:
                 base_size *= 0.6 # 震荡减仓
                 
-            # 3. 情绪反向调整
+            # 3. 情绪调整 (Sentiment Adjustment)
+            # [v3.9.6 Optimized] 移除极度恐慌加仓逻辑，改为防御减仓
             if sentiment > 80: # 极度贪婪
                 base_size *= 0.7 # 减仓防回调
             elif sentiment < 20: # 极度恐慌
-                base_size *= 1.1 # 抄底加仓 (激进)
+                base_size *= 0.3 # [Modified] 极度恐慌时显著减仓，防止抄底爆仓
                 
-            # [Risk] 限制单次最大加仓倍数，防止在恐慌时过度激进 (e.g. 抄底爆仓)
-            max_position_ratio = 1.0 # Default max 100% of allocated
+            # [Risk] 限制单次最大加仓倍数
+            max_position_ratio = 1.0
             if sentiment < 20:
-                 max_position_ratio = 0.5 # 极度恐慌时，即使想抄底，也只给 50% 的额度
+                 max_position_ratio = 0.5 # 即使信心再高，极度恐慌下也只给 50% 额度
                  
             base_size = min(base_size, max_position_ratio)
                 
