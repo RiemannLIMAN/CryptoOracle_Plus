@@ -1,4 +1,4 @@
-# 🏗️ 技术架构深度解析 (v3.9.6)
+# 🏗️ 技术架构深度解析 (v3.9.7)
 
 CryptoOracle 并非传统的“线性轮询”脚本，而是一个基于 **AsyncIO** 的**三轨异步 (Triple-Track Async)** 决策执行系统。
 
@@ -11,57 +11,56 @@ CryptoOracle 并非传统的“线性轮询”脚本，而是一个基于 **Asyn
 ### 轨道 A: 战略决策轨 (Strategy Orbit)
 *   **频率**: 低频 (15m/1h)。
 *   **核心逻辑**: 
-    *   聚合 K 线、指标、情绪数据。
-    *   调用 **DeepSeek-V3** 进行语义级分析。
+    *   聚合 K 线、技术指标（MACD, RSI, 布林带）、市场情绪。
+    *   调用 **DeepSeek-V3** 进行语义级分析与形态识别。
     *   **产出**: 交易信号（Long/Short/Neutral）及 AI 建议仓位比 (`position_ratio`)。
 *   **代码实现**: 
     *   [ai_strategy.py](file:///d:/local_open_project/OKX_Plus_workspace/OKXBot_Plus_Workspace/src/services/strategy/ai_strategy.py): 核心 AI 提示词与决策引擎。
     *   [trade_executor.py](file:///d:/local_open_project/OKX_Plus_workspace/OKXBot_Plus_Workspace/src/services/execution/trade_executor.py) -> `analyze_on_bar_close()`: 触发决策的开关。
-*   **设计初衷**: AI 擅长识别“大势”，但不擅长捕捉“插针”。将 AI 放在低频轨道可以最大限度降低 Token 成本并提升信号稳定性。
 
 ### 轨道 B: 执行同步轨 (Execution Orbit)
 *   **频率**: 事件驱动 (Event-Driven)。
 *   **核心逻辑**: 
-    *   订单生命周期管理（下单、撤单、重试）。
-    *   资产余额双重审计（交易所 API + 本地状态机）。
+    *   **RL 智能调仓**: 接收 AI 信号，结合本地 [rl_position_sizer.py](file:///d:/local_open_project/OKX_Plus_workspace/OKXBot_Plus_Workspace/src/services/execution/components/rl_position_sizer.py) 进行二次风险加权。
+    *   **订单生命周期管理**: 自动下单、撤单、重试。
+    *   **熔断保护**: 自动识别连续失败并触发 10 分钟冷却。
 *   **代码实现**: 
     *   [order_executor.py](file:///d:/local_open_project/OKX_Plus_workspace/OKXBot_Plus_Workspace/src/services/execution/components/order_executor.py): 负责带有自动重试与“51008 余额不足”降级逻辑的下单执行。
-*   **设计初衷**: 确保下单逻辑的原子性，防止在网络波动时出现“重单”或“漏单”。
 
 ### 轨道 C: 战术风控轨 (Tactical/Risk Orbit)
 *   **频率**: **极高频 (10s)**。
 *   **核心逻辑**: 
-    *   **移动止盈 (Trailing Stop)**: 实时计算当前价格与追踪水位线的距离。
-    *   **分段止盈 (Partial TP)**: 监控浮盈阶梯，触发市价平仓。
-    *   **每日利润锁定**: 监控账户总额，触线后强制执行减仓逻辑。
+    *   **移动止盈 (Trailing Stop)**: 实时追踪价格水位，自动锁定利润。
+    *   **分段止盈 (Partial TP)**: 阶梯式平仓，降低持仓风险。
+    *   **每日利润锁定**: 账户收益达标后自动强制减仓保护战果。
 *   **代码实现**: 
-    *   [trade_executor.py](file:///d:/local_open_project/OKX_Plus_workspace/OKXBot_Plus_Workspace/src/services/execution/trade_executor.py) -> `run()` 循环前半部分: 每 10-20s 强制执行风控检查。
-    *   `check_trailing_stop()`: 独立于 AI 的高频止盈逻辑。
-*   **设计初衷**: **这是 v3.9.6 的灵魂。** 即使 AI 正在卡顿或 API 响应变慢，轨道 C 也会独立运行，确保您的本金在插针行情中得到毫秒级的保护。
+    *   [trade_executor.py](file:///d:/local_open_project/OKX_Plus_workspace/OKXBot_Plus_Workspace/src/services/execution/trade_executor.py) -> `run()` 循环前半部分: 独立于 AI 逻辑的强制风控扫描。
 
 ---
 
-## 2. 数据流与冲突处理
+## 2. 核心模块详解：RL 智能调仓 (Smart Position Sizing)
 
-### 2.1 零点校准 (Zero-Start Baseline)
-系统启动时，会立即拍摄一张“资产快照”存入 SQLite 数据库。
-*   **解决痛点**: 解决了“因为账户原本就有持仓而导致盈亏计算混乱”的问题。
-*   **实现**: 所有的盈亏计算均基于 `(当前余额 - 启动快照余额)`。
-*   **代码参考**: [risk_manager.py](file:///d:/local_open_project/OKX_Plus_workspace/OKXBot_Plus_Workspace/src/services/risk/risk_manager.py) 的初始快照逻辑。
+[rl_position_sizer.py](file:///d:/local_open_project/OKX_Plus_workspace/OKXBot_Plus_Workspace/src/services/execution/components/rl_position_sizer.py) 是系统的“油门与刹车”。它在 AI 给出 `position_ratio` 后，会根据以下 5 个实时维度进行二次过滤：
 
-### 2.2 信号冲突逻辑
-当轨道 A 生成了一个“做多”信号，但轨道 C 正因为“触发账户级回撤熔断”而处于冷却期时：
-*   **优先级**: **轨道 C (风控) > 轨道 A (信号)**。
-*   **处理**: 系统会记录该信号但拒绝执行，并在日志中输出 `RiskGate: Blocked by drawdown protection`。
+| 维度 | 计算逻辑 | 调仓行为 |
+| :--- | :--- | :--- |
+| **波动率 (ATR)** | 比较当前 ATR 与 20 周期平均值 | 波动激增 (>2x) 减仓 50%，防止插针爆仓 |
+| **趋势强度 (ADX)** | 检测 ADX 指标值 | 强趋势 (>50) 增加 20% 仓位，弱震荡 (<20) 减仓 40% |
+| **AI 信心度** | 匹配 DeepSeek 返回的信心等级 | HIGH 加码 20%，LOW 强制砍半 |
+| **市场情绪** | 对接 Sentiment 插件 | 极度贪婪/恐慌时主动收缩 40-70% 风险敞口 |
+| **盈亏反馈** | 当前持仓的浮盈百分比 | 浮亏时禁止任何形式的加仓动作 |
 
 ---
 
-## 3. 架构瘦身与性能
+## 3. 全新热重载机制 (v3.9.7)
 
-在 v3.9.6 中，我们移除了原有的 TensorBoard 和大型 ML 库依赖：
-*   **内存占用**: 从 1.2GB 降低至 **150MB** 左右。
-*   **冷启动速度**: 提升 400%。
-*   **稳定性**: 减少了底层 C++ 库冲突导致的 `Segmentation Fault`。
+在 [OKXBot_Plus.py](file:///d:/local_open_project/OKX_Plus_workspace/OKXBot_Plus_Workspace/src/OKXBot_Plus.py) 中，主循环实现了真正的“不停机动态同步”：
+
+1.  **文件监听**: 每一轮循环都会通过 `os.path.getmtime` 监测 `config.json` 的修改时间。
+2.  **增量同步**:
+    *   **新增币种**: 自动初始化 `DeepSeekTrader` 实例并加入异步执行池。
+    *   **移除币种**: 优雅停止对应的协程任务并释放资源。
+    *   **参数更新**: 实时更新运行中 Trader 的杠杆、分配权重等参数。
 
 ---
 
@@ -70,31 +69,13 @@ CryptoOracle 并非传统的“线性轮询”脚本，而是一个基于 **Asyn
 我们将根据**资金安全、系统稳定、执行效率**三个维度，对当前已知问题进行优先级排序：
 
 ### 🔴 P0: 核心风险 (已解决)
-
-#### 4.1 重试死循环与熔断缺失 (Circuit Breaker)
-*   **状态**: ✅ 已修复。在 `order_executor` 中实现了熔断逻辑。
-*   **优化**: 引入“交易对熔断器”。若单个币种连续下单失败 3 次，强制进入 10 分钟的冷却期。
-
-#### 4.2 零点校准的持久化一致性 (Snapshot Integrity)
-*   **状态**: ✅ 已修复。加固了 `risk_manager` 的持久化恢复逻辑。
-*   **优化**: 强化 `risk_manager` 的持久化逻辑，重启时优先检索 24 小时内的最近基准快照。
-
----
+*   **4.1 交易对熔断器**: ✅ 已修复。连续下单失败 3 次触发 10 分钟冷却。
+*   **4.2 零点校准持久化**: ✅ 已修复。支持 24h 内快照自动恢复，重启不丢盈亏基准。
+*   **4.3 反手逻辑优化**: ✅ 已修复。允许高信心/明确指令突破策略保护，极速反转。
 
 ### 🟡 P1: 稳定性隐患 (已解决)
-
-#### 4.3 内存指标数据积压 (Memory Bloat)
-*   **状态**: ✅ 已修复。所有历史记录列表已替换为 `deque(maxlen=...)`。
-*   **优化**: 将所有历史序列容器替换为 `collections.deque(maxlen=200)`。
-
-#### 4.4 批次执行的“木桶效应” (Batch Latency)
-*   **状态**: ✅ 已修复。使用 `Semaphore` 实现了真正的异步任务隔离。
-*   **优化**: 采用 `asyncio.create_task` 将每个币种的 `run()` 任务彻底隔离，互不干扰。
-
----
+*   **4.4 内存积压优化**: ✅ 已修复。历史序列全部替换为 `collections.deque(maxlen=200)`。
+*   **4.5 异步任务隔离**: ✅ 已修复。使用 `Semaphore` 彻底消除单个币种超时导致的“木桶效应”。
 
 ### 🔵 P2: 扩展性限制 (已解决)
-
-#### 4.5 频率超限隐患 (Rate Limit)
-*   **状态**: ✅ 已修复。实现了全局 `GlobalRateLimiter` (令牌桶算法)。
-*   **优化**: 引入全局 `RateLimiter`，统一调度全系统的 API 调用频率。
+*   **4.6 全局限频器 (Rate Limiter)**: ✅ 已修复。基于令牌桶算法，全系统统一调度 API 调用频率 (10 req/s)。
