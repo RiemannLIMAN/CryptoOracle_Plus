@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 from core.utils import to_float
 from .rl_position_sizer import SmartPositionSizer
 
@@ -19,7 +20,8 @@ class PositionManager:
         # Simulation State
         self.sim_position = None 
         self.sim_balance = 10000.0 # Default sim balance
-        self.sim_trades = []
+        # [P1-4.3] 使用 deque 限制模拟交易历史长度
+        self.sim_trades = deque(maxlen=100)
         self.sim_realized_pnl = 0.0
         
         # [v3.9.6 New] Risk Control Factor (0.0 - 1.0)

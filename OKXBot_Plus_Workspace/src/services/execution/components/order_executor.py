@@ -1,7 +1,7 @@
 import time
 import asyncio
 from datetime import datetime
-from core.utils import retry_async
+from core.utils import retry_async, rate_limiter
 
 class OrderExecutor:
     def __init__(self, exchange, symbol, trade_mode, test_mode, position_manager, logger):
@@ -14,13 +14,34 @@ class OrderExecutor:
         
         self.taker_fee_rate = 0.001 # Default
 
+        # [P0-4.1] Circuit Breaker (熔断器) 状态
+        self.consecutive_failures = 0
+        self.failure_threshold = 3      # 连续失败 3 次触发熔断
+        self.cooldown_until = 0         # 熔断冷却截止时间
+        self.cooldown_duration = 600    # 熔断冷却 10 分钟 (600s)
+
+    def is_fused(self):
+        """检查当前交易对是否处于熔断状态"""
+        if self.cooldown_until > time.time():
+            remaining = int(self.cooldown_until - time.time())
+            self.logger.warning(f"🛡️ [{self.symbol}] 处于熔断保护中，剩余冷却时间: {remaining}s")
+            return True
+        return False
+
     def set_fee_rate(self, rate):
         self.taker_fee_rate = rate
 
     @retry_async(retries=2, delay=0.5)
     async def create_order_with_retry(self, side, amount, order_type='market', price=None, params={}):
+        # [P0-4.1] 检查熔断状态
+        if self.is_fused():
+            raise Exception(f"Circuit Breaker active for {self.symbol}")
+
+        # [P2-4.5] 全局限频
+        await rate_limiter.acquire()
+
         try:
-            return await self.exchange.create_order(
+            res = await self.exchange.create_order(
                 self.symbol,
                 order_type,
                 side,
@@ -28,6 +49,9 @@ class OrderExecutor:
                 price,
                 params=params
             )
+            # 成功则重置失败计数
+            self.consecutive_failures = 0
+            return res
         except Exception as e:
             error_msg = str(e)
             # [Auto-Fix] 余额不足 (51008) 自动降级重试
@@ -36,7 +60,7 @@ class OrderExecutor:
                 self.logger.warning(f"⚠️ 余额不足 (51008)，尝试减少数量重试: {amount} -> {amount * 0.95:.4f}")
                 
                 try:
-                    return await self.exchange.create_order(
+                    res2 = await self.exchange.create_order(
                         self.symbol,
                         order_type,
                         side,
@@ -44,12 +68,26 @@ class OrderExecutor:
                         price,
                         params=params
                     )
+                    # 成功则重置失败计数
+                    self.consecutive_failures = 0
+                    return res2
                 except Exception as e2:
-                    # 如果降级后还是失败，就抛出原始异常，让外部知道
+                    # 如果降级后还是失败，累计失败次数
+                    self.consecutive_failures += 1
+                    if self.consecutive_failures >= self.failure_threshold:
+                        self.cooldown_until = time.time() + self.cooldown_duration
+                        self.logger.error(f"🚨 [{self.symbol}] 连续失败 {self.consecutive_failures} 次，触发熔断器！冷却 {self.cooldown_duration}s")
+                    
                     # [User Request] 简化错误日志，并明确单位
                     unit = "张" if self.trade_mode == 'swap' else "个"
                     self.logger.error(f"❌ [{self.symbol}] × 保证金不足 (Code 51008): 尝试下单 {amount * 0.95:.4f} {unit}")
                     raise e
+            
+            # 其他错误也累计失败次数
+            self.consecutive_failures += 1
+            if self.consecutive_failures >= self.failure_threshold:
+                self.cooldown_until = time.time() + self.cooldown_duration
+                self.logger.error(f"🚨 [{self.symbol}] 连续失败 {self.consecutive_failures} 次，触发熔断器！冷却 {self.cooldown_duration}s")
             
             raise e # 其他错误继续抛出，让 retry_async 处理
 
@@ -234,5 +272,3 @@ class OrderExecutor:
             'info': {'pnl': pnl}
         }
         self.position_manager.sim_trades.append(trade)
-        if len(self.position_manager.sim_trades) > 100:
-            self.position_manager.sim_trades = self.position_manager.sim_trades[-100:]

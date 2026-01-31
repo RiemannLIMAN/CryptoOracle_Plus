@@ -65,16 +65,40 @@ class RiskManager:
         self.is_risk_reduced = False
 
     def load_state(self):
-        # 不加载历史基准资金，始终使用配置文件中的初始资金
-        self.smart_baseline = None
-        self.deposit_offset = 0.0
-        self.logger.info("✅ 使用配置文件中的初始资金，不加载历史基准")
+        """[P0-4.2] 加载历史状态，如果快照在 24 小时内则恢复"""
+        try:
+            if os.path.exists(self.state_file):
+                with open(self.state_file, 'r', encoding='utf-8') as f:
+                    state = json.load(f)
+                
+                last_ts = state.get('timestamp', 0)
+                # 检查快照是否在 24 小时内 (86400秒)
+                if time.time() - last_ts < 86400:
+                    self.smart_baseline = state.get('smart_baseline')
+                    self.deposit_offset = state.get('deposit_offset', 0.0)
+                    self.daily_start_equity = state.get('daily_start_equity', 0.0)
+                    self.daily_date = state.get('daily_date', "")
+                    
+                    if self.smart_baseline:
+                        self.is_initialized = True
+                        self._log(f"♻️ 成功恢复 24h 内的基准快照: {self.smart_baseline:.2f} U (Offset: {self.deposit_offset:.2f})")
+                        return
+            
+            self.smart_baseline = None
+            self.deposit_offset = 0.0
+            self._log("🆕 未发现有效历史快照或已过期 (>24h)，将重新执行零点校准")
+        except Exception as e:
+            self.logger.warning(f"⚠️ 加载状态失败: {e}")
 
     def save_state(self):
+        """[P0-4.2] 保存当前状态与时间戳"""
         try:
             state = {
                 'smart_baseline': self.smart_baseline,
-                'deposit_offset': self.deposit_offset
+                'deposit_offset': self.deposit_offset,
+                'daily_start_equity': self.daily_start_equity,
+                'daily_date': self.daily_date,
+                'timestamp': time.time()
             }
             with open(self.state_file, 'w', encoding='utf-8') as f:
                 json.dump(state, f)

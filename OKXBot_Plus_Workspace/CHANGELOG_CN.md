@@ -6,6 +6,19 @@
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
 
+## [v3.9.7] - 2026-02-01 (Architectural Stability & Risk Mitigation)
+
+### 🚀 核心风险修复 (P0 - High Priority)
+- **交易对熔断器 (Circuit Breaker)**: 在轨道 B (执行轨) 中引入了熔断机制。当单个交易对连续下单失败（如保证金不足）达到 3 次时，自动触发 10 分钟冷却期，有效防止重试死循环导致 API 封禁或逻辑混乱。
+- **零点校准持久化 (Snapshot Integrity)**: 强化了 `risk_manager` 的状态恢复能力。系统现在会自动保存并读取 24h 内的基准快照，确保机器人重启后能准确恢复 PnL 计算基准与每日利润锁定状态，解决了重启导致盈亏归零的痛点。
+
+### 🟡 稳定性隐患优化 (P1 - Medium Priority)
+- **内存积压优化 (Memory Bloat)**: 全面重构了历史记录缓存机制。将 `price_history`、`signal_history` 及模拟交易记录由无限增长的 `list` 替换为固定长度的 `collections.deque` (maxlen=200)。有效防止机器人 7x24 小时长期运行导致的内存缓慢泄露与 OOM 风险。
+- **并发隔离引擎 (Task Isolation)**: 彻底重构了多币种并行执行逻辑。移除了原有的“分批等待”机制，引入 `asyncio.Semaphore` 实现了真正的异步任务隔离。现在单个交易对的网络超时或卡顿不会再阻塞整批币种的风控响应，大幅提升了极端行情下的系统吞吐量。
+
+### 🔵 扩展性优化 (P2 - Low Priority)
+- **全局限频器 (Rate Limiter)**: 在 `core/utils.py` 中实现了基于令牌桶算法的 `GlobalRateLimiter`。统一调度全系统的 API 调用频率（默认 10 req/s），在 `get_ohlcv` 和 `create_order` 等关键入口强制执行，彻底规避因多币种高频运行导致的交易所封禁风险。
+
 ## [v3.9.6-stable] - 2026-01-31 (Alpha Sniper Optimized - Deep Refinement)
 
 ### 🚀 架构与稳定性 (Architecture & Stability)

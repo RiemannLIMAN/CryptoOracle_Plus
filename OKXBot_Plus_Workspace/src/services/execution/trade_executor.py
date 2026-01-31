@@ -4,7 +4,7 @@ import asyncio
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from core.utils import to_float, send_notification_async, exception_handler, retry_async
+from core.utils import to_float, send_notification_async, exception_handler, retry_async, rate_limiter
 from core.exceptions import (
     APIConnectionError, APIResponseError, TradingError, 
     DataProcessingError, RiskManagementError
@@ -14,6 +14,7 @@ from services.data.data_manager import DataManager
 from .components import PositionManager, OrderExecutor, SignalProcessor
 import json
 import os
+from collections import deque
 
 class DeepSeekTrader:
     def __init__(self, symbol_config, common_config, exchange, agent, market_data_service=None):
@@ -98,8 +99,9 @@ class DeepSeekTrader:
         
         self.signal_processor = SignalProcessor(logging.getLogger("crypto_oracle"))
         
-        self.price_history = []
-        self.signal_history = []
+        # [P1-4.3] 使用 deque 限制历史记录长度，防止内存积压
+        self.price_history = deque(maxlen=200)
+        self.signal_history = deque(maxlen=100)
         self.logger = logging.getLogger("crypto_oracle")
         
         # [New] Dynamic Risk Parameters (from AI)
@@ -753,6 +755,9 @@ class DeepSeekTrader:
     @exception_handler
     @retry_async(retries=3, delay=1.0, backoff=2.0)
     async def get_ohlcv(self):
+        # [P2-4.5] 全局限频
+        await rate_limiter.acquire()
+        
         # [Architecture Update] 优先使用 MarketDataService (Unified Data Architecture)
         # 注意: 这里的 self.market_data_service 由 OKXBot_Plus.py 注入
         if self.market_data_service:

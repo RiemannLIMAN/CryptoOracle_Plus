@@ -20,7 +20,7 @@ from services.risk.risk_manager import RiskManager
 from services.data.market_data_service import MarketDataService # [New] Import MarketDataService
 from services.data.data_manager import DataManager
 
-SYSTEM_VERSION = "v3.9.6 (Alpha Sniper Optimized)"
+SYSTEM_VERSION = "v3.9.7 (Alpha Sniper Optimized)"
 
 BANNER = r"""
    _____                  __           ____                  __   
@@ -326,22 +326,21 @@ async def main():
             # 3. 插件系统 - 每轮循环调用
             await plugin_manager.on_tick({"timestamp": current_ts, "traders": traders})
             
-            # 3. 并行执行所有 Traders 的分析与交易任务 (带并发限制)
+            # 3. 并行执行所有 Traders 的分析与交易任务 (P1-4.4: 彻底隔离任务，消除木桶效应)
             max_concurrent_traders = config['trading'].get('max_concurrent_traders', 5)
-            results = []
+            semaphore = asyncio.Semaphore(max_concurrent_traders)
             
-            # 分批执行交易任务
-            batch_size = min(max_concurrent_traders, len(traders))
-            for i in range(0, len(traders), batch_size):
-                batch_traders = traders[i:i+batch_size]
-                batch_tasks = [trader.run() for trader in batch_traders]
-                batch_results = await asyncio.gather(*batch_tasks)
-                results.extend(batch_results)
-                
-                # 如果不是最后一批，暂停一下
-                if i + batch_size < len(traders):
-                    logger.debug(f"⏳ 已处理 {len(results)}/{len(traders)} 个交易对，休息 1 秒...")
-                    await asyncio.sleep(1)
+            async def run_trader_isolated(trader):
+                async with semaphore:
+                    try:
+                        return await trader.run()
+                    except Exception as e:
+                        logger.error(f"❌ [{trader.symbol}] 执行异常: {e}")
+                        return {'symbol': trader.symbol, 'status': 'ERROR', 'error': str(e)}
+
+            # 创建所有任务并同时启动 (受 Semaphore 限制并发数)
+            tasks = [run_trader_isolated(t) for t in traders]
+            results = await asyncio.gather(*tasks)
             
             # 4. 结构化表格输出
             table_lines = []

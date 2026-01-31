@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import aiohttp
+import asyncio
 from logging.handlers import RotatingFileHandler
 from datetime import datetime
 
@@ -14,6 +15,36 @@ from .exceptions import (
 
 # [New] Notification Cooldown Cache
 _notification_cooldowns = {}
+
+# [New] Global Rate Limiter (P2-4.5)
+class GlobalRateLimiter:
+    """
+    全局限频器 (令牌桶算法)
+    确保全系统的 API 调用频率符合交易所限制
+    """
+    def __init__(self, requests_per_second=10):
+        self.capacity = requests_per_second
+        self.tokens = requests_per_second
+        self.last_fill_time = time.time()
+        self.lock = asyncio.Lock()
+
+    async def acquire(self):
+        """获取令牌，若无则等待"""
+        async with self.lock:
+            while self.tokens < 1:
+                now = time.time()
+                elapsed = now - self.last_fill_time
+                # 填充令牌
+                self.tokens = min(self.capacity, self.tokens + elapsed * self.capacity)
+                self.last_fill_time = now
+                
+                if self.tokens < 1:
+                    await asyncio.sleep(0.1)
+            
+            self.tokens -= 1
+
+# 全局单例
+rate_limiter = GlobalRateLimiter(requests_per_second=10)
 
 async def send_notification_async(webhook_url, message, title=None):
     """
