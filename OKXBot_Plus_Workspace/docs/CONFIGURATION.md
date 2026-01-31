@@ -1,98 +1,87 @@
-# ⚙️ 配置文件 (config.json) 详解
+# ⚙️ 配置文件 (config.json) 深度指南 (v3.9.6)
 
-本文档详细解释 `config.json` 中各个参数的含义与建议配置。
-> **提示**: 更完整的项目使用说明，请参考 [项目概览](PROJECT_OVERVIEW.md)。
-
----
-
-## 完整配置示例 (v3.9.6 Alpha Sniper Optimized)
-
-```json
-{
-  "exchanges": {
-    "okx": {
-      "options": {
-        "defaultType": "swap"
-      }
-    }
-  },
-  "models": {
-    "deepseek": {
-      "base_url": "https://api.deepseek.com",
-      "model": "deepseek-chat"
-    }
-  },
-  "trading": {
-    "market_type": "swap",      
-    "timeframe": "15m",
-    "loop_interval": 10,
-    "test_mode": false,
-    "proxy": "",
-    "max_slippage_percent": 2.0,
-    "min_confidence": "MEDIUM",
-    "strategy": {
-      "enable_4h_filter": true,
-      "ai_interval": 300,
-      "signal_limit": 30,
-      "trailing_stop": {
-        "enabled": true,
-        "activation_pnl": 0.02,
-        "callback_rate": "auto"
-      },
-      "partial_tp_stages": [
-        {"threshold": 0.05, "ratio": 0.3},
-        {"threshold": 0.10, "ratio": 0.3}
-      ],
-      "signal_gate": {
-        "rsi_min": 30,
-        "rsi_max": 70,
-        "adx_min": 20
-      }
-    },
-    "risk_control": {
-      "initial_balance_usdt": 100.0,
-      "max_profit_usdt": 15.0,
-      "max_loss_usdt": 15.0,
-      "max_loss_rate": 0.15,
-      "global_risk_factor": 1.0
-    }
-  },
-  "symbols": [
-    {
-      "symbol": "BTC/USDT:USDT",
-      "amount": "auto",
-      "allocation": 0.2,
-      "leverage": 5
-    }
-  ]
-}
-```
+> **核心原则**: 每个参数的背后都是对市场波动的数学假设。**不要只配置数字，要理解数字背后的博弈。**
 
 ---
 
-## 参数详解
+## 1. 交易核心配置 (trading)
 
-### 1. 交易核心配置 (trading)
-*   **`loop_interval`**: 机器人主循环检测间隔（秒）。在 v3.9.6 中，这代表了 **轨道 C (Orbit C)** 的频率。建议 `10` 秒，用于高频止盈止损监控。
-*   **`strategy`** (策略配置):
-    *   `ai_interval`: AI 深度分析的间隔（秒）。建议 `300` 秒 (5分钟)。
-    *   **`trailing_stop`** (动态移动止盈):
-        *   `callback_rate`: 回撤比例。设置为 `"auto"` 时，将根据 ATR 波动率自动调节。
-    *   **`partial_tp_stages`**: **[v3.9.6 新增]** 分段止盈阶梯。例如在浮盈 5% 时减仓 30%。
-*   **`risk_control`** (风控模块):
-    *   **`max_profit_usdt`**: **[v3.9.6 关键]** 每日利润锁定目标。达到该金额后，系统自动激活利润保护模式。
-    *   **`global_risk_factor`**: 全局风险因子。利润锁定触发后，该值会自动降至 `0.5`，使后续开仓量减半。
+### `loop_interval` (主循环间隔)
+*   **设计原理**: 这是机器人的“心跳频率”，对应架构中的 **轨道 C (Orbit C)**。
+*   **知其所以然**: 为什么建议 `10` 秒？
+    *   **实时风控**: 止盈止损不能等待 15 分钟 K 线结束，必须在插针发生时立即响应。
+    *   **资源平衡**: 过短（如 < 1s）会导致 API 频率超限 (Rate Limit)；过长（如 > 60s）会导致止盈点位大幅滑点。
+*   **建议**: 10-20s。
 
-### 4. 通知配置 (notification)
-*   `enabled`: 是否开启通知。
-*   `telegram_token`: Telegram Bot Token。
-*   `telegram_chat_id`: Telegram Chat ID。
+### `max_slippage_percent` (最大滑点限制)
+*   **设计原理**: 保护成交价格不偏离预期。
+*   **知其所以然**: 
+    *   在山寨币（如 PEPE）剧烈波动时，买一和卖一的价差可能瞬间拉大。
+    *   如果设为 `0.5%`，机器人可能在暴涨启动时因“价格跳得太快”而无法买入，错失行情。
+    *   如果设为 `5.0%`，则面临极大的入场损耗。
+*   **建议**: 主流币 0.5% - 1.0%，山寨币 1.5% - 2.5%。
 
-### 5. 交易对配置 (symbols)
-这是一个数组，支持同时监控多个币种。
-*   **`symbol`**: 交易对名称。
-    *   合约: `BTC/USDT:USDT` (必须带 `:USDT` 后缀)
-*   `amount`: 单次开仓数量。`auto` 表示根据 allocation 自动计算。
-*   `allocation`: 该币种占用总资金的比例 (0.0 ~ 1.0)。
-*   `leverage`: 杠杆倍数。建议 `3` 到 `5`。
-*   `trade_mode`: 交易模式，`cross` (全仓) 或 `isolated` (逐仓)。
+---
+
+## 2. 策略深度配置 (strategy)
+
+### `ai_interval` (AI 深度决策间隔)
+*   **设计原理**: 对应 **轨道 A (Orbit A)**。
+*   **知其所以然**: 
+    *   AI 负责的是“定性”而非“定量”。K 线形态的形成需要时间，频繁调用 AI 不仅浪费 Token，还会因为 K 线尚未收盘而获得不稳定的信号。
+    *   系统会在 `ai_interval` 期间利用本地指标（RSI/ADX）进行“影子监控”，只有在 AI 决策周期到期时才进行逻辑同步。
+*   **建议**: 300s (5分钟)。
+
+### `trailing_stop.callback_rate` (移动止盈回撤)
+*   **设计原理**: 追踪趋势，在趋势反转时离场。
+*   **知其所以然**: 
+    *   **"auto" 模式**: 这是 v3.9.6 的核心亮点。它通过 **ATR (平均真实波幅)** 计算当前市场的“噪音水平”。
+    *   如果市场波动剧烈，系统会自动放宽 `callback_rate`，防止被正常的波动“震”下车。
+    *   如果市场平稳，系统会收紧水位线，确保利润不被回撤。
+*   **建议**: 开启 `enabled: true` 并使用 `"auto"`。
+
+### `partial_tp_stages` (分段止盈阶梯)
+*   **设计原理**: 降低胜率依赖，提升资金周转率。
+*   **知其所以然**: 
+    *   很多时候行情会“差一点点到目标位”就反转。分段止盈确保你在获得初步利润（如 5%）时已经收回了部分成本。
+    *   **心理博弈**: 一旦平掉 50% 仓位，剩下的仓位就是“零成本博弈”，能极大缓解交易焦虑，助你拿住大趋势。
+
+---
+
+## 3. 风险控制模块 (risk_control)
+
+### `initial_balance_usdt` (零点校准基准)
+*   **设计原理**: 盈亏计算的锚点。
+*   **知其所以然**: 
+    *   如果你账户里有 1000U，但只想用 15U 跑这个策略，请务必设为 `15.0`。
+    *   系统会以此计算 **Session PnL**。如果该值设为 `0`，系统将以启动时的实时余额为准，但这会导致你无法准确评估“该笔投资”的真实回报率。
+
+### `max_profit_usdt` (每日利润锁定目标)
+*   **设计原理**: 防范“赢了不走，最后倒亏”的人性弱点。
+*   **知其所以然**: 
+    *   达到此值后，系统会将 `global_risk_factor` 降至 **0.5**。
+    *   **逻辑**: 今天的市场你已经赚到了足够的利润，说明你的策略与今天的行情契合。但市场是多变的，后续开仓量减半是为了在行情转折时，用更小的代价去试错。
+
+---
+
+## 4. 交易对精要 (symbols)
+
+### `allocation` (资金分配比例)
+*   **设计原理**: 破产风险管理。
+*   **知其所以然**: 
+    *   不要把 `allocation` 设满 1.0。
+    *   **保证金陷阱**: 交易所需要保证金来维持仓位。如果两个币都开了 50% 仓位且使用了 10x 杠杆，一旦行情剧烈波动，账户可能因为没有多余资金支付利息或维持保证金而触发强制平仓。
+*   **建议**: 所有币种加起来的总和建议在 **0.7 - 0.9** 之间。
+
+### `leverage` (杠杆倍数)
+*   **知其所以然**: 杠杆不是为了让你赌命，而是为了提升**资金利用率**。
+    *   15U 本金如果不加杠杆，只能买 0.0002 个 BTC，很多时候连开仓门槛都够不到。
+    *   **山寨币警告**: 10x 杠杆意味着 10% 的反向波动就会爆仓。配合 `max_loss_rate`，系统会在亏损达到 50% 时主动砍仓，确保你还有“翻身的本金”。
+*   **建议**: 5x - 10x。
+
+---
+
+## 💡 总结：如何微调？
+1.  **想更稳健？** 提高 `adx_min` 到 25，调低 `leverage` 到 3x。
+2.  **想更激进？** 降低 `rsi_min/max` 门槛，增加 `allocation`。
+3.  **玩山寨币？** 必须开启 `trailing_stop` 并将 `max_slippage_percent` 设大。

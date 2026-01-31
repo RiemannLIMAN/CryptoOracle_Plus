@@ -177,6 +177,23 @@ async def main():
     if proxy:
         exchange_params['aiohttp_proxy'] = proxy
 
+    # [v3.9.6 Fix] Monkey Patch CCXT to prevent NoneType error in parse_market and sorting
+    # This fixes the crash during load_markets() when OKX returns incomplete instrument data
+    _original_okx_parse_market = ccxt.okx.parse_market
+    def _patched_okx_parse_market(self, market):
+        try:
+            return _original_okx_parse_market(self, market)
+        except Exception:
+            return None
+    ccxt.okx.parse_market = _patched_okx_parse_market
+
+    # Also patch parse_markets to filter out the None results, preventing sort crashes later
+    _original_okx_parse_markets = ccxt.okx.parse_markets
+    def _patched_okx_parse_markets(self, markets):
+        results = _original_okx_parse_markets(self, markets)
+        return [m for m in results if m is not None]
+    ccxt.okx.parse_markets = _patched_okx_parse_markets
+
     exchange = ccxt.okx(exchange_params)
     await exchange.load_markets()
     
