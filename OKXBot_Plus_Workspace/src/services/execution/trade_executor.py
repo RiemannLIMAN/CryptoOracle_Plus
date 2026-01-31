@@ -1181,12 +1181,23 @@ class DeepSeekTrader:
                  if signal_data['signal'] == 'SELL' and current_position['side'] == 'long': is_flip = True
                  
                  if is_flip:
-                     # Only allow flip if the NEW signal is also a Pattern (High Priority)
-                     new_pattern = signal_data.get('pattern')
-                     if not new_pattern:
-                         self._log(f"🛡️ 策略保护: 当前持仓由策略(SL:{self.dynamic_stop_loss})保护，忽略非形态反转信号", 'warning')
-                         signal_data['signal'] = 'HOLD'
-                         return "HOLD_PROTECTED", "策略保护中"
+                    # [P0 Fix] 优化反手拦截逻辑
+                    # 只有当 NEW signal 既不是 Pattern，也不是明确的 Flip 指令，且信心不足时，才拦截
+                    new_pattern = signal_data.get('pattern', False)
+                    reason_lower = signal_data.get('reason', '').lower()
+                    summary_lower = signal_data.get('summary', '').lower()
+                    is_explicit_flip = any(k in reason_lower or k in summary_lower for k in ["反手", "flip", "reverse", "反向", "平仓并"])
+                    
+                    confidence_levels = {'LOW': 1, 'MEDIUM': 2, 'HIGH': 3}
+                    conf_val = confidence_levels.get(signal_data.get('confidence', 'LOW').upper(), 1)
+                    
+                    # 允许条件：是形态信号 OR 明确的反手指令 OR 高信心信号
+                    if not (new_pattern or is_explicit_flip or conf_val >= 3):
+                        self._log(f"🛡️ 策略保护: 当前持仓由策略(SL:{self.dynamic_stop_loss})保护，忽略非形态反转信号", 'warning')
+                        signal_data['signal'] = 'HOLD'
+                        return "HOLD_PROTECTED", "策略保护中"
+                    else:
+                        self._log(f"⚡ 策略突破: 识别到明确反手指令或高信心信号，允许执行反手动作", 'info')
 
         # [v3.9.6] Soft Technical Filters (ATR, Vol, RSI, ADX)
         # 不再硬拦截，而是根据市场恶劣程度降级信心
