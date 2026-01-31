@@ -6,6 +6,23 @@
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
 
+## [v3.9.6-stable] - 2026-01-31 (Alpha Sniper Optimized - Deep Refinement)
+
+### 🚀 架构与稳定性 (Architecture & Stability)
+- **三轨异步内核 (Triple-Track Async)**: 架构深度细化。将系统拆分为 **轨道 A (战略)**、**轨道 B (执行)**、**轨道 C (高频战术)**。轨道 C 以 10s 极高频独立运行，专门负责移动止盈、分段止盈与利润锁定，彻底解决 AI 思考延迟导致的止损滞后问题。
+- **CCXT 兼容性修复 (Monkey Patch)**: 实施了深度 Monkey Patch 拦截 `ccxt.okx.parse_market` 与 `parse_markets`。自动过滤交易所返回的无效/脏数据，修复了在加载市场阶段因 `NoneType` 或排序逻辑导致的 `Subscriptable` 报错，大幅提升跨平台稳定性。
+- **PID 文件管理迁移**: 将 `bot.pid` 文件从项目根目录迁移至 `log/` 文件夹。同步更新了 Windows (`.bat`) 与 Linux (`.sh`) 的所有一键启停脚本，确保根目录整洁并符合标准运维习惯。
+- **自动环境识别与清理**: 启动脚本现在能智能识别 `venv`、`conda` 或系统 Python 环境，并在启动前自动清理旧数据库与状态文件，确保每次运行都是“零点校准”的纯净状态。
+
+### 📚 文档深度细化 (Documentation Refinement)
+- **知其所以然 (Rationale First)**: 全面重构了 `docs/` 下的所有文档。不仅提供了配置参数，还深入解析了每个参数背后的**数学假设与博弈逻辑**。
+- **配置规则强制化**: 在 `README.md` 中增加了显著的警告标识，要求用户在实盘前必须熟悉配置规则，提升风险意识。
+- **白皮书补充**: 在 `PROJECT_OVERVIEW.md` 中补充了“双脑决策”的数学边界与针对“AI 幻觉”的本地指标防御机制。
+
+### 🛡️ 风控与资金管理 (Risk & Capital Management)
+- **15U 小金额适配 (Micro Sniper)**: 针对小本金账户进行了专项优化。精选了 PEPE/DOGE 等小面值币种，配合 10x 杠杆与 45% 仓位分配，确保在满足交易所最小开仓门槛的同时，获得最大化的风险收益比。
+- **动态移动止盈升级**: 优化了 `"auto"` 模式下的 ATR 步进算法，使水位线在震荡行情中更具韧性，在趋势行情中锁利更果断。
+
 ## [v3.9.6] - 2026-01-29 (Alpha Sniper Optimization)
 
 ### 🚀 策略核心升级 (Strategy Core Upgrade)

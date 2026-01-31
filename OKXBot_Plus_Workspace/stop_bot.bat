@@ -2,7 +2,7 @@
 setlocal
 
 :: 设置 PID 文件路径 (与启动脚本保持一致)
-set "PID_FILE=bot.pid"
+set "PID_FILE=log\bot.pid"
 
 :: 检查 PID 文件是否存在
 if not exist "%PID_FILE%" (

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 设置 PID 文件路径
-PID_FILE="bot.pid"
+PID_FILE="log/bot.pid"
 
 # 检查 PID 文件是否存在
 if [ ! -f "$PID_FILE" ]; then

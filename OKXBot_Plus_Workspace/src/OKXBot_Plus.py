@@ -598,9 +598,11 @@ if __name__ == "__main__":
     
     # print(f"🔥 正在启动 CryptoOracle 进程 (PID: {os.getpid()})...", flush=True)
     
-    # [New] Record PID for stop script
+    # [New] Record PID for stop script in log folder
     try:
-        with open("bot.pid", "w") as f:
+        if not os.path.exists("log"):
+            os.makedirs("log")
+        with open("log/bot.pid", "w") as f:
             f.write(str(os.getpid()))
     except:
         pass

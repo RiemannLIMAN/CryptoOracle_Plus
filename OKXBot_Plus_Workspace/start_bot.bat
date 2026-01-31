@@ -35,7 +35,7 @@ if %errorlevel% equ 0 (
 )
 
 :: 3. 启动
-:: 放弃在 BAT 里获取 PID，改由 Python 脚本自己记录 PID 到 bot.pid 文件
+:: 放弃在 BAT 里获取 PID，改由 Python 脚本自己记录 PID 到 log/bot.pid 文件
 :: 这样最准确，且不影响前台日志显示
 python -u src/OKXBot_Plus.py
 
