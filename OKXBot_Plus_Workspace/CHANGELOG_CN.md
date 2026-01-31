@@ -14,6 +14,7 @@
 - **零点校准持久化 (Snapshot Integrity)**: 强化了 `risk_manager` 的状态恢复能力。系统现在会自动保存并读取 24h 内的基准快照，确保机器人重启后能准确恢复 PnL 计算基准与每日利润锁定状态，解决了重启导致盈亏归零的痛点。
 
 ### 🟡 稳定性隐患优化 (P1 - Medium Priority)
+- **盈利阶梯移动止盈 (Profit-Based Trailing Stop) [v3.9.7 Upgrade]**: 引入了“盈利压制 (Profit Compression)”算法。当仓位利润超过 5%/10%/20% 时，系统会自动按比例收紧移动止盈的回撤阈值（最高收紧至 30%），确保在大行情中能够更紧凑地锁定浮盈，防止利润大幅回吐。
 - **全自动交易对动态同步 (Dynamic Symbol Hot-Reload) [v3.9.7 Upgrade]**: 彻底解决了增删币种需重启机器人的痛点。现在主循环会自动监听 `config.json` 变动，检测到新交易对时自动初始化 Trader，移除交易对时自动停止，实现了真正的“不停机热插拔”。
 - **并发隔离引擎 (Task Isolation)**: 彻底重构了多币种并行执行逻辑。移除了原有的“分批等待”机制，引入 `asyncio.Semaphore` 实现了真正的异步任务隔离。现在单个交易对的网络超时或卡顿不会再阻塞整批币种的风控响应，大幅提升了极端行情下的系统吞吐量。
 - **内存积压优化 (Memory Bloat)**: 全面重构了历史记录缓存机制。将 `price_history`、`signal_history` 及模拟交易记录由无限增长的 `list` 替换为固定长度的 `collections.deque` (maxlen=200)。有效防止机器人 7x24 小时长期运行导致的内存缓慢泄露与 OOM 风险。
