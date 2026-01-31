@@ -309,10 +309,70 @@ async def main():
     
     current_interval = interval
     
+    # [v3.9.7 New] 全局热重载状态
+    last_config_mtime = os.path.getmtime('config.json')
+
     try:
         while True:
             current_ts = time.time()
             
+            # [v3.9.7 New] 全局配置同步 (增删币种热重载)
+            try:
+                mtime = os.path.getmtime('config.json')
+                if mtime > last_config_mtime:
+                    last_config_mtime = mtime
+                    logger.info("🔄 [SYSTEM] 检测到 config.json 列表更新，正在同步交易对...")
+                    
+                    # 重新加载配置
+                    new_config_obj = Config('config.json')
+                    new_config = new_config_obj.get_config()
+                    
+                    # 1. 识别新增币种
+                    existing_symbols = {t.symbol for t in traders}
+                    new_symbols_conf = {s['symbol']: s for s in new_config['symbols']}
+                    
+                    # 增加新币种
+                    added_count = 0
+                    for sym, sym_conf in new_symbols_conf.items():
+                        if sym not in existing_symbols:
+                            logger.info(f"🆕 [SYSTEM] 发现新币种: {sym}, 正在初始化 Trader...")
+                            try:
+                                new_trader = DeepSeekTrader(
+                                    sym_conf, 
+                                    new_config['trading'], 
+                                    exchange, 
+                                    agent,
+                                    market_data_service=market_data_service
+                                )
+                                await new_trader.initialize()
+                                traders.append(new_trader)
+                                added_count += 1
+                            except Exception as e:
+                                logger.error(f"❌ [SYSTEM] 初始化新币种 {sym} 失败: {e}")
+                    
+                    # 2. 识别并移除已删除币种
+                    new_symbols_set = set(new_symbols_conf.keys())
+                    to_remove = []
+                    for t in traders:
+                        if t.symbol not in new_symbols_set:
+                            logger.info(f"🗑️ [SYSTEM] 币种已从配置移除: {t.symbol}, 正在停止 Trader...")
+                            to_remove.append(t)
+                    
+                    for t in to_remove:
+                        traders.remove(t)
+                    
+                    if added_count > 0 or to_remove:
+                        logger.info(f"✅ [SYSTEM] 同步完成: 新增 {added_count}, 移除 {len(to_remove)}, 当前共 {len(traders)} 个币种")
+                        # 更新全局配置引用
+                        config = new_config
+                        # 更新活跃币种计数
+                        config['trading']['active_symbols_count'] = len(traders)
+                        # 更新风控管理器的交易员列表
+                        risk_manager.traders = traders
+                        
+            except Exception as e:
+                logger.error(f"⚠️ [SYSTEM] 同步配置失败: {e}")
+
             # 1. 批次执行开始日志 (静默模式)
             # current_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             # logger.info(f"─" * 60)
