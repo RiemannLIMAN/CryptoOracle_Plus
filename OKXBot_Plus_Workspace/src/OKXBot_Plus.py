@@ -325,7 +325,7 @@ async def main():
                     
                     # 重新加载配置
                     new_config_obj = Config('config.json')
-                    new_config = new_config_obj.get_config()
+                    new_config = new_config_obj.data
                     
                     # 1. 识别新增币种
                     existing_symbols = {t.symbol for t in traders}
