@@ -264,7 +264,13 @@ class PositionManager:
             # 1. 动态计算回调比例 (ATR驱动)
             # [Optimized] 高波动放宽，低波动收紧
             atr_ratio = indicators.get('atr_ratio', 1.0) if indicators else 1.0
-            base_callback = self.trailing_config.get('callback_rate', 0.005)
+            
+            # [Fix] 确保 callback_rate 是 float，防止与 str 比较报错
+            raw_callback = self.trailing_config.get('callback_rate', 0.005)
+            try:
+                base_callback = float(raw_callback)
+            except (ValueError, TypeError):
+                base_callback = 0.005 # 回滚默认值
             
             if atr_ratio > 2.0:         # 极高波动 (山寨币暴涨)
                 dynamic_callback = 0.025 # 2.5% 回撤触发
@@ -275,7 +281,12 @@ class PositionManager:
             else:
                 dynamic_callback = base_callback
 
-            activation_pnl = self.trailing_config.get('activation_pnl', 0.01)
+            # [Fix] 确保 activation_pnl 是 float
+            raw_activation = self.trailing_config.get('activation_pnl', 0.01)
+            try:
+                activation_pnl = float(raw_activation)
+            except (ValueError, TypeError):
+                activation_pnl = 0.01
 
             # 2. 更新最高水位线
             if pnl_ratio > self.trailing_max_pnl:
