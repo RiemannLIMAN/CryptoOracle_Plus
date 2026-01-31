@@ -5,7 +5,7 @@
 
 ---
 
-## 完整配置示例 (v3.9.0)
+## 完整配置示例 (v3.9.6 Alpha Sniper Optimized)
 
 ```json
 {
@@ -30,48 +30,39 @@
     "proxy": "",
     "max_slippage_percent": 2.0,
     "min_confidence": "MEDIUM",
-    "enable_aggressive_mode": false,
     "strategy": {
       "enable_4h_filter": true,
-      "ai_interval": 60,
+      "ai_interval": 300,
       "signal_limit": 30,
       "trailing_stop": {
         "enabled": true,
         "activation_pnl": 0.02,
-        "callback_rate": 0.005
+        "callback_rate": "auto"
       },
+      "partial_tp_stages": [
+        {"threshold": 0.05, "ratio": 0.3},
+        {"threshold": 0.10, "ratio": 0.3}
+      ],
       "signal_gate": {
         "rsi_min": 30,
         "rsi_max": 70,
-        "adx_min": 15
-      },
-      "sentiment_filter": {
-        "enabled": true,
-        "extreme_fear_threshold": 25,
-        "extreme_greed_threshold": 75
+        "adx_min": 20
       }
     },
-    "margin_mode": "cross",
-    "trade_mode": "cross",
     "risk_control": {
-      "initial_balance_usdt": 30.0,
-      "max_loss_usdt": 10.0,
+      "initial_balance_usdt": 100.0,
+      "max_profit_usdt": 15.0,
+      "max_loss_usdt": 15.0,
       "max_loss_rate": 0.15,
-      "max_drawdown_per_trade": 0.08
+      "global_risk_factor": 1.0
     }
-  },
-  "notification": {
-    "enabled": true,
-    "telegram_token": "",
-    "telegram_chat_id": ""
   },
   "symbols": [
     {
       "symbol": "BTC/USDT:USDT",
       "amount": "auto",
       "allocation": 0.2,
-      "leverage": 5,
-      "trade_mode": "cross"
+      "leverage": 5
     }
   ]
 }
@@ -81,37 +72,16 @@
 
 ## 参数详解
 
-### 1. 交易所配置 (exchanges)
-*   `okx`: 目前支持 OKX 交易所。
-*   `options`: 交易所特定选项，`defaultType: "swap"` 表示默认交易永续合约。
-
-### 2. AI 模型配置 (models)
-*   `deepseek`:
-    *   `base_url`: API 地址，通常为 `https://api.deepseek.com`。
-    *   `model`: 模型名称，推荐使用 `deepseek-chat`。
-
-### 3. 交易核心配置 (trading)
-*   `market_type`: 市场类型，通常为 `swap` (永续合约)。
-*   **`timeframe`**: K 线周期。建议 `15m` 或 `1h` (中线波段)。
-*   `loop_interval`: 机器人主循环检测间隔（秒）。建议 `10` 秒，以确保实时监控移动止盈。
-*   `test_mode`: 是否开启测试模式 (模拟盘)。
-*   `max_slippage_percent`: 最大允许滑点百分比 (如 `2.0`%)。
-*   `min_confidence`: 最小开仓信心阈值 (`MEDIUM` 或 `HIGH`)。
+### 1. 交易核心配置 (trading)
+*   **`loop_interval`**: 机器人主循环检测间隔（秒）。在 v3.9.6 中，这代表了 **轨道 C (Orbit C)** 的频率。建议 `10` 秒，用于高频止盈止损监控。
 *   **`strategy`** (策略配置):
-    *   `enable_4h_filter`: 是否开启 4H 趋势过滤 (顺势而为)。
-    *   `ai_interval`: AI 深度分析的间隔（秒）。建议 `60` 秒。
-    *   `signal_limit`: 信号有效性检查 (如 `30` 秒)。
-    *   **`trailing_stop`** (移动止盈):
-        *   `enabled`: 是否开启。
-        *   `activation_pnl`: 激活阈值 (如 `0.02` 代表 2% 浮盈)。
-        *   `callback_rate`: 回撤比例 (如 `0.005` 代表 0.5%)。
-    *   `signal_gate`: 信号过滤门限 (RSI, ADX)。
-    *   `sentiment_filter`: 情绪过滤 (恐惧/贪婪指数)。
+    *   `ai_interval`: AI 深度分析的间隔（秒）。建议 `300` 秒 (5分钟)。
+    *   **`trailing_stop`** (动态移动止盈):
+        *   `callback_rate`: 回撤比例。设置为 `"auto"` 时，将根据 ATR 波动率自动调节。
+    *   **`partial_tp_stages`**: **[v3.9.6 新增]** 分段止盈阶梯。例如在浮盈 5% 时减仓 30%。
 *   **`risk_control`** (风控模块):
-    *   `initial_balance_usdt`: 初始本金基准。用于计算总账户盈亏。
-    *   `max_loss_usdt`: 最大允许亏损金额 (U)。触及此线机器人停止。
-    *   `max_loss_rate`: 最大允许亏损比例 (如 `0.15` 代表 15%)。触及此线触发账户级熔断。
-    *   `max_drawdown_per_trade`: 单笔交易最大回撤限制。
+    *   **`max_profit_usdt`**: **[v3.9.6 关键]** 每日利润锁定目标。达到该金额后，系统自动激活利润保护模式。
+    *   **`global_risk_factor`**: 全局风险因子。利润锁定触发后，该值会自动降至 `0.5`，使后续开仓量减半。
 
 ### 4. 通知配置 (notification)
 *   `enabled`: 是否开启通知。
