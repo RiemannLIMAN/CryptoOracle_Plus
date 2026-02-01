@@ -94,7 +94,26 @@ CryptoOracle 并非传统的“线性轮询”脚本，而是一个基于 **Asyn
 
 ---
 
-## 3. 全新热重载机制 (v3.9.7)
+## 4. 插件系统：情绪分析器 (SentimentAnalyzer)
+
+系统通过 `SentimentPlugin` 实现了与主流市场情绪指标的深度集成：
+
+1.  **数据链路**: 
+    - 每小时通过 API 获取 **Crypto Fear & Greed Index**。
+    - 自动将情绪分值 (0-100) 注入到全局分析上下文。
+2.  **逆向风控逻辑**:
+    - **极度贪婪 (Greed > 75)**: 强制将 `BUY` 信号转为 `HOLD`。
+    - **极度恐慌 (Fear < 25)**: 强制将 `SELL` 信号转为 `HOLD`。
+3.  **动态控仓**:
+    - 在 `SmartPositionSizer` 中，情绪得分作为权重因子：
+        - `Greed > 80`: 仓位乘以 **0.6**。
+        - `Fear < 20`: 仓位乘以 **0.3** 且封顶比例为 **0.5**。
+
+**设计理念**: 情绪逻辑是系统的“心理制动器”。它确保机器人能在群体狂热中保持克制，在群体绝望中保持警惕，从而规避大多数“情绪化”带来的追高杀跌风险。
+
+---
+
+## 5. 全新热重载机制 (v3.9.7)
 
 在 [OKXBot_Plus.py](file:///d:/local_open_project/OKX_Plus_workspace/OKXBot_Plus_Workspace/src/OKXBot_Plus.py) 中，主循环实现了真正的“不停机动态同步”：
 
