@@ -20,20 +20,23 @@
     "proxy": "",
     "max_slippage_percent": 2.0,
     "min_confidence": "MEDIUM",
-    "enable_aggressive_mode": false,
+    "max_concurrent_traders": 5,
     "strategy": {
       "enable_4h_filter": true,
-      "ai_interval": 60,
+      "ai_interval": 40,
       "signal_limit": 30,
       "trailing_stop": {
         "enabled": true,
-        "activation_pnl": 0.02,
-        "callback_rate": 0.005
+        "activation_pnl": 0.05,
+        "callback_rate": "auto"
       },
+      "partial_tp_stages": [
+        {"threshold": 0.08, "ratio": 0.5}
+      ],
       "signal_gate": {
-        "rsi_min": 30,
-        "rsi_max": 70,
-        "adx_min": 15
+        "rsi_min": 25,
+        "rsi_max": 75,
+        "adx_min": 20
       },
       "sentiment_filter": {
         "enabled": true,
@@ -44,29 +47,27 @@
     "margin_mode": "cross",
     "trade_mode": "cross",
     "risk_control": {
-      "initial_balance_usdt": 30.0,
+      "initial_balance_usdt": 15.0,
       "max_loss_usdt": 10.0,
-      "max_loss_rate": 0.15,
-      "max_drawdown_per_trade": 0.08
+      "max_loss_rate": 0.6,
+      "max_drawdown_per_trade": 0.1
     }
   },
   "notification": {
-    "enabled": true,
-    "telegram_token": "",
-    "telegram_chat_id": ""
+    "enabled": true
   },
   "symbols": [
     {
-      "symbol": "BTC/USDT:USDT",
+      "symbol": "ZKP/USDT:USDT",
       "amount": "auto",
-      "allocation": 0.2,
+      "allocation": 0.3,
       "leverage": 5,
       "trade_mode": "cross"
     },
     {
-      "symbol": "ETH/USDT:USDT",
+      "symbol": "ZORA/USDT:USDT",
       "amount": "auto",
-      "allocation": 0.2,
+      "allocation": 0.3,
       "leverage": 5,
       "trade_mode": "cross"
     }
