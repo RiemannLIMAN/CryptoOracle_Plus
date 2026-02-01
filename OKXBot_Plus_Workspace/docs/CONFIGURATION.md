@@ -4,6 +4,25 @@
 
 ---
 
+## 🔥 热重载 (Hot Reload) 机制说明
+
+系统支持对 `config.json` 的部分参数进行实时热重载，无需重启机器人即可生效。
+
+### ✅ 支持热重载的参数
+- **`symbols` 列表**: 
+    - **新增币种**: 在列表中添加新交易对，系统会自动初始化并启动新的交易器。
+    - **移除币种**: 从列表中删除交易对，系统会自动停止该币种的交易器并释放资源。
+- **单个币种的 `leverage` (杠杆)**: 修改后，系统会实时调用交易所 API 同步新的杠杆设置。
+- **单个币种的 `allocation` (资金分配比例)**: 修改后，下一轮下单计算将自动采用新比例。
+
+### ❌ 不支持热重载的参数 (修改后必须重启)
+- **全局交易参数 (`trading`)**: 如 `loop_interval`、`timeframe`、`test_mode` 等。
+- **具体策略参数 (`strategy`)**: 如 `rsi_min` / `rsi_max`、`trailing_stop` 阈值等。
+- **全局风控参数 (`risk_control`)**: 如 `max_loss_usdt`、`initial_balance_usdt` 等。
+- **模型与交易所设置 (`models`, `exchanges`)**: API 地址、模型名称等。
+
+---
+
 ## 1. 交易核心配置 (trading)
 
 ### `loop_interval` (主循环间隔)
