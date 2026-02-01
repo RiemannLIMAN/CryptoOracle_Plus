@@ -15,6 +15,16 @@ if exist "..\venv\Scripts\activate.bat" (
     echo ⚠️ 未检测到 venv，将尝试使用系统 Python
 )
 
+:: [New] 自动清理旧数据 (Auto-Clean)
+:: 强制执行零点校准 (Zero-Start)，清理所有历史基准和状态
+echo 🧹 正在执行自动清理 (Zero-Start)...
+if exist "data" (
+    del /q data\*.db 2>nul
+    del /q data\state_*.json 2>nul
+    del /q data\bot_state.json 2>nul
+    echo ✅ 已清理历史基准和状态文件，确保 Session PnL 归零
+)
+
 :: 2. 检查 Python 是否安装
 python --version >nul 2>&1
 if %errorlevel% neq 0 (

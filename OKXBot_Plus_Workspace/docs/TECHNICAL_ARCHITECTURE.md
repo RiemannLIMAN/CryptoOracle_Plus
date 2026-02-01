@@ -62,7 +62,25 @@ CryptoOracle 并非传统的“线性轮询”脚本，而是一个基于 **Asyn
 
 ---
 
-## 2. 核心模块详解：RL 智能调仓 (Smart Position Sizing)
+## 2. 三级风控防护体系 (Three-Level Protection System)
+
+针对用户关心的“10s 检查频率是否过低”的问题，系统构建了多层级、全方位的防护体系：
+
+1.  **硬件级止损 (Hard Stop)**: 
+    - **原理**: 这是由 `PositionManager` 计算并**直接挂在交易所服务器**上的止损单。
+    - **优势**: 一旦触发，交易所引擎会毫秒级响应成交，**完全不受本地 10s 循环或网络延迟影响**。这是真正的“保命符”。
+2.  **策略级移动止盈 (Trailing Stop)**: 
+    - **原理**: 属于轨道 C (Orbit C) 的逻辑，每 10s 扫描一次。
+    - **权衡**: 10s 的延迟在极端插针下可能产生 1-2% 的滑点，但它是为了**平衡 API 频率 (429 Rate Limit)**。对于小资金账户，频繁（如 1s）拉取 API 极易导致账号被交易所临时封禁。
+3.  **系统级动态心跳 (Dynamic Interval)**: 
+    - **原理**: 系统会根据市场状态自动调整心跳。
+    - **机制**: 当检测到 `HIGH_TREND` (强趋势) 或 `LOW` (网格波动) 时，系统会自动尝试加速轮询频率，以缩短空档期，捕捉更细腻的价格变动。
+
+**结论**: 对于 15U - 1000U 规模的资金，10s 是在**“风控灵敏度”**与**“账户安全性”**之间取得的最佳平衡点。
+
+---
+
+## 3. 核心模块详解：RL 智能调仓 (Smart Position Sizing)
 
 [rl_position_sizer.py](file:///d:/local_open_project/OKX_Plus_workspace/OKXBot_Plus_Workspace/src/services/execution/components/rl_position_sizer.py) 是系统的“油门与刹车”。它在 AI 给出 `position_ratio` 后，会根据以下 5 个实时维度进行二次过滤：
 
