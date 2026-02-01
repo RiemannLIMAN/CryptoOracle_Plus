@@ -280,14 +280,14 @@ class PositionManager:
             else:                       dynamic_callback = base_callback
 
             # 维度 B: 盈利阶梯 (Profit Compression) -> 盈利越高，回撤容忍度越低 (锁定利润)
-            # [v3.9.7 Refined] 6级深度阶梯锁定
+            # [v3.9.7 Refined] 6级深度阶梯锁定 (灵敏度平衡优化)
             profit_compression = 1.0
-            if pnl_ratio >= 1.00:       profit_compression = 0.05 # 利润 > 100%，回撤仅允许原有的 5% (极速锁定)
-            elif pnl_ratio >= 0.50:     profit_compression = 0.1  # 利润 > 50%，回撤仅允许 10%
-            elif pnl_ratio >= 0.20:     profit_compression = 0.2  # 利润 > 20%，回撤仅允许 20%
-            elif pnl_ratio >= 0.10:     profit_compression = 0.4  # 利润 > 10%，回撤仅允许 40%
-            elif pnl_ratio >= 0.05:     profit_compression = 0.6  # 利润 > 5%，回撤仅允许 60%
-            elif pnl_ratio >= 0.02:     profit_compression = 0.8  # 利润 > 2%，回撤仅允许 80% (初步保护)
+            if pnl_ratio >= 1.00:       profit_compression = 0.2  # 利润 > 100%，回撤仅允许原有的 20% (更稳健)
+            elif pnl_ratio >= 0.50:     profit_compression = 0.3  # 利润 > 50%，回撤仅允许 30%
+            elif pnl_ratio >= 0.20:     profit_compression = 0.5  # 利润 > 20%，回撤仅允许 50%
+            elif pnl_ratio >= 0.10:     profit_compression = 0.7  # 利润 > 10%，回撤仅允许 70%
+            elif pnl_ratio >= 0.05:     profit_compression = 0.85 # 利润 > 5%，回撤仅允许 85%
+            elif pnl_ratio >= 0.02:     profit_compression = 0.95 # 利润 > 2%，回撤仅允许 95% (轻微保护)
             
             dynamic_callback *= profit_compression
 
