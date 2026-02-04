@@ -2670,10 +2670,43 @@ class DeepSeekTrader:
                 # 这里我们选择: 如果没有初始止损，就不启用移动逻辑，避免误伤
                 return
             
-            # 三线战法移动逻辑:
-            # 如果是做多 (Long): 止损位 = 最近 3 根 K 线的最低点 (Low of last 3 candles)
-            # 如果是做空 (Short): 止损位 = 最近 3 根 K 线的最高点 (High of last 3 candles)
+            # [New] 三线战法 (Three-Line Strike) 专属移动止损逻辑
+            # Logic: 如果当前持仓是三线战法触发的 (或者即使不是，也可以复用此优秀逻辑)
+            # - 多单: 止损移动到最近 N 根 K 线的最低点 (Low)
+            # - 空单: 止损移动到最近 N 根 K 线的最高点 (High)
+            # 这种移动方式能完美贴合趋势，在趋势加速时不掉队，在趋势反转时立即离场。
             
+            # 从 kwargs 或 self 获取最近的 kline_data
+            kline_data = price_data.get('kline_data', [])
+            if len(kline_data) >= 3:
+                last_3_klines = kline_data[-3:]
+                
+                if side == 'long':
+                    # 找到最近3根K线的最低点
+                    recent_low = min([float(k['low']) for k in last_3_klines])
+                    # 如果该低点 高于 当前止损，则上移止损
+                    if recent_low > self.dynamic_stop_loss:
+                        # 确保不回撤 (One-way Ratchet)
+                        new_sl = recent_low
+                        if new_sl > self.dynamic_stop_loss:
+                            self.dynamic_stop_loss = new_sl
+                            self._log(f"📈 [Trailing] 趋势跟随上移止损至 {new_sl:.4f} (最近3K低点)", 'info')
+                            # [Shadow Following] 同步更新交易所止损单
+                            await self._modify_exchange_sl_order(self.symbol, new_sl)
+                            
+                else: # short
+                    # 找到最近3根K线的最高点
+                    recent_high = max([float(k['high']) for k in last_3_klines])
+                    # 如果该高点 低于 当前止损，则下移止损
+                    if recent_high < self.dynamic_stop_loss:
+                        # 确保不回撤 (One-way Ratchet)
+                        new_sl = recent_high
+                        if self.dynamic_stop_loss == 0 or new_sl < self.dynamic_stop_loss:
+                            self.dynamic_stop_loss = new_sl
+                            self._log(f"📉 [Trailing] 趋势跟随下移止损至 {new_sl:.4f} (最近3K高点)", 'info')
+                            # [Shadow Following] 同步更新交易所止损单
+                            await self._modify_exchange_sl_order(self.symbol, new_sl)
+
             # [New] Breakeven Logic (保本优先)
             # 当浮盈达到设定阈值 (默认 2%) 时，强制把止损提到开仓价
             trailing_config = self.common_config.get('strategy', {}).get('trailing_stop', {})

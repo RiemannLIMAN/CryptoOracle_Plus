@@ -48,9 +48,14 @@ class PinbarStrategy(BaseStrategy):
             entry_price = low_p + (lower_shadow * 0.5)
             # Stop Loss: Just below the low
             stop_loss = low_p * 0.998
-            # Take Profit: 2x risk
+            
+            # [Requirement 2] Take Profit: At least 1x Pinbar amplitude (total_len)
+            # [Requirement 1] Risk/Reward Ratio > 1:1.5
+            
             risk = entry_price - stop_loss
-            take_profit = entry_price + (risk * 2)
+            reward_target = max(risk * 1.5, total_len) # 取 两者中的最大值
+            
+            take_profit = entry_price + reward_target
 
         # Bearish Pinbar (Shooting Star)
         elif upper_shadow / total_len > shadow_ratio and body_len / total_len < body_ratio:
@@ -61,9 +66,14 @@ class PinbarStrategy(BaseStrategy):
             entry_price = high_p - (upper_shadow * 0.5)
             # Stop Loss: Just above the high
             stop_loss = high_p * 1.002
-            # Take Profit: 2x risk
+            
+            # [Requirement 2] Take Profit: At least 1x Pinbar amplitude (total_len)
+            # [Requirement 1] Risk/Reward Ratio > 1:1.5
+            
             risk = stop_loss - entry_price
-            take_profit = entry_price - (risk * 2)
+            reward_target = max(risk * 1.5, total_len) # 取 两者中的最大值
+            
+            take_profit = entry_price - reward_target
             
         if signal == "HOLD":
             return None
