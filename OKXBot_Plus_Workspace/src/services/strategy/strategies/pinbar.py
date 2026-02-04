@@ -39,10 +39,53 @@ class PinbarStrategy(BaseStrategy):
         shadow_ratio = 0.6
         body_ratio = 0.3
         
+        # [Rule 2] 位置要对，震荡行情无效 (Market Regime Filter)
+        # 引入 ADX 指标过滤震荡
+        # 引入 RSI 指标辅助判断超买超卖 (Location)
+        
+        adx = price_data.get('adx', 20)
+        rsi = price_data.get('rsi', 50)
+        
+        # 震荡过滤: 如果 ADX < 20，认为是无趋势的垃圾时间，Pinbar 往往是陷阱
+        if adx < 20:
+             return None
+
+        # [Rule 4] 至少2条以上入场理由 (Confluence)
+        # 我们使用 "积分制" (Score System)
+        # 基础分: Pinbar 形态成立 (+1)
+        # 额外分: 
+        #   1. 顺大势 (Trend Alignment)
+        #   2. 关键位置 (Support/Resistance via RSI)
+        #   3. 量能配合 (Volume Confirmation)
+        
+        confluence_score = 0
+        confluence_reasons = []
+
         # Bullish Pinbar (Hammer)
         if lower_shadow / total_len > shadow_ratio and body_len / total_len < body_ratio:
+            # 基础形态成立
+            confluence_score += 1
+            confluence_reasons.append("Hammer Pattern")
+            
+            # 额外理由 A: 位置 (RSI 超卖或低位) -> 认为是支撑位
+            if rsi < 40:
+                confluence_score += 1
+                confluence_reasons.append("RSI Oversold Zone")
+            
+            # 额外理由 B: 顺势 (EMA 过滤，这里简化用 K 线排列)
+            # 如果上一根是阴线，且 Pinbar 低点更低，可能是反转。
+            # 如果我们在上升趋势中 (EMA20 > EMA50)，效果更好。
+            # 暂时用 ADX > 25 作为趋势强度的佐证
+            if adx > 25:
+                confluence_score += 1
+                confluence_reasons.append("Strong Trend Context")
+            
+            # [Check Rule 4] 至少 2 条理由
+            if confluence_score < 2:
+                 return None
+
             signal = "BUY"
-            reason = "Bullish Pinbar (Hammer) detected"
+            reason = f"Bullish Pinbar confirmed by {', '.join(confluence_reasons)}"
             confidence = "HIGH"
             # Limit Entry: 50% retrace of the tail
             entry_price = low_p + (lower_shadow * 0.5)
@@ -59,8 +102,26 @@ class PinbarStrategy(BaseStrategy):
 
         # Bearish Pinbar (Shooting Star)
         elif upper_shadow / total_len > shadow_ratio and body_len / total_len < body_ratio:
+            # 基础形态成立
+            confluence_score += 1
+            confluence_reasons.append("Shooting Star Pattern")
+            
+            # 额外理由 A: 位置 (RSI 超买或高位) -> 认为是阻力位
+            if rsi > 60:
+                confluence_score += 1
+                confluence_reasons.append("RSI Overbought Zone")
+                
+            # 额外理由 B: 趋势强度
+            if adx > 25:
+                confluence_score += 1
+                confluence_reasons.append("Strong Trend Context")
+            
+            # [Check Rule 4] 至少 2 条理由
+            if confluence_score < 2:
+                 return None
+
             signal = "SELL"
-            reason = "Bearish Pinbar (Shooting Star) detected"
+            reason = f"Bearish Pinbar confirmed by {', '.join(confluence_reasons)}"
             confidence = "HIGH"
             # Limit Entry: 50% retrace of the tail
             entry_price = high_p - (upper_shadow * 0.5)
