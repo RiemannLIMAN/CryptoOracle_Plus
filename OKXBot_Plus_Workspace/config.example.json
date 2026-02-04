@@ -21,6 +21,10 @@
     "max_slippage_percent": 2.0,
     "min_confidence": "MEDIUM",
     "max_concurrent_traders": 5,
+    "active_strategies": [
+      "ai_trend",
+      "pinbar_reversal"
+    ],
     "strategy": {
       "enable_4h_filter": true,
       "ai_interval": 40,

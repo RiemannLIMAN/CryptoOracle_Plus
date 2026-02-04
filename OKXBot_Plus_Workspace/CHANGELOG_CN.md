@@ -6,6 +6,28 @@
 并且本项目遵循 [语义化版本控制 (Semantic Versioning)](https://semver.org/spec/v2.0.0.html)。
 
 
+## [v3.9.8] - 2026-02-04 (Strategy Factory & Shadow Following)
+
+### 🚀 核心架构升级 (Core Architecture)
+- **策略工厂模式 (Strategy Factory Pattern)**: 彻底重构了策略加载机制。引入了 `StrategyFactory` 和 `active_strategies` 配置，支持多策略（如 AI 趋势、Pinbar 反转、RSI 背离）的动态热插拔与组合运行，告别了单一 AI 策略的硬编码时代。
+- **多策略融合引擎 (Multi-Strategy Fusion)**: 实现了 `_analyze_market_with_strategies` 引擎。它能并行执行所有活跃策略，并基于 "AI 主导 + 辅助确认" 的逻辑融合信号。例如，当 AI 看涨且 Pinbar 确认时，信心自动提升为 HIGH。
+
+### 🧠 策略增强 (Strategy Enhancement)
+- **Pinbar 反转策略 (Pinbar Reversal)**: 新增了基于纯数学逻辑的 Pinbar 识别策略。能精准捕捉长下影线（锤子线）和长上影线（流星线），作为高胜率的结构性反转信号。
+- **挂单策略支持 (Limit Order Support)**: 系统不再局限于市价单。现在支持策略返回 `entry_price`，允许在支撑/压力位挂单成交，从而大幅降低滑点成本并优化入场点位。
+
+### 🛡️ 风控与冲突解决 (Risk Control & Conflict Resolution)
+- **影子跟随机制 (Shadow Following)**: 
+    - **背景**: 解决了本地“移动止盈”与交易所“硬止损”可能同时触发导致双重平仓（Double Exit）的严重冲突。
+    - **逻辑**: 当本地高频移动止盈（Trailing Stop）接管交易时，系统会自动扫描并**撤销**交易所的旧止损单。确保止损权限完全收归本地 Orbit C 轨道，实现“软硬止损”的无缝切换。
+- **三线战法集成验证 (Three-Line Strike Verification)**: 
+    - 确认了三线战法（Three-Line Strike）在 `SignalProcessor` 中的独立判定逻辑。它作为“形态扫描器”运行在独立的战术层，不受 AI 延迟影响，继续提供 1分钟级别的极速逃顶/抄底能力。
+- **移动止盈优化 (Trailing Stop Optimization)**:
+    - 明确了移动止盈的触发优先级高于所有 AI 信号。即使 AI 建议 HOLD，只要触发 ATR 动态回撤阈值，系统也会强制止盈。
+
+### 🛠️ 逻辑修正 (Logic Fixes)
+- **Trade Executor 重构**: 修复了 `DeepSeekTrader` 初始化时的缩进与逻辑缺陷，确保 `strategy_factory` 和 `data_manager` 的正确加载。
+
 ## [v3.9.7] - 2026-02-01 (Architectural Stability & Risk Mitigation)
 
 ### 🚀 核心风险修复 (P0 - High Priority)

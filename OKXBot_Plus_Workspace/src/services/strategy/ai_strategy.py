@@ -4,8 +4,9 @@ import time
 from openai import AsyncOpenAI
 import httpx
 from core.utils import to_float, retry_async
+from .base import BaseStrategy
 
-class DeepSeekAgent:
+class DeepSeekAgent(BaseStrategy):
     def __init__(self, api_key, base_url="https://api.deepseek.com/v1", proxy=None):
         self.logger = logging.getLogger("crypto_oracle")
         
@@ -67,6 +68,7 @@ class DeepSeekAgent:
     "signal": "BUY" | "SELL" | "HOLD",
     "reason": "核心逻辑(100字内，请用你最专业的术语直击要害)",
     "summary": "看板摘要(40字内)",
+    "entry_price": 建议挂单价格(数字，0或null表示市价),
     "stop_loss": 止损价格(数字，0表示不设置),
     "take_profit": 止盈价格(数字，0表示不设置),
     "confidence": "HIGH" | "MEDIUM" | "LOW",
@@ -286,7 +288,7 @@ class DeepSeekAgent:
         Capital Flow: 买盘占比 {buy_prop_str} ({flow_status}) | OBV: {obv_val} (能量潮)
         {trend_4h_msg}"""
 
-    def _build_fund_status_message(self, balance, price_data):
+    def _build_fund_status_message(self, balance, price_data, has_position):
         """
         构建资金状态提示词
         """
@@ -295,17 +297,30 @@ class DeepSeekAgent:
         
         min_notional_val = to_float(min_notional_info) or 5.0
         fund_status_msg = ""
-        # 这里的 balance 是可用余额 (Avail)。如果 < 5U，说明真的没钱了
+        # 这里的 balance 是可用余额 (Avail)。
         if balance < min_notional_val:
-            fund_status_msg = f"""
+            if has_position:
+                # 情况A: 有持仓，余额不足 -> 满仓状态
+                fund_status_msg = f"""
         ⚠️ **状态更新：资金已满仓 (Full Position)**
-        当前可用余额 ({balance:.2f} U) 已耗尽，说明资金利用率已达 100%。
+        当前可用余额 ({balance:.2f} U) 已耗尽，说明大部分资金已投入持仓。
         
         【你的决策逻辑需调整】：
-        1. **关于加仓 (BUY)**：虽然你仍可以建议 BUY (表达你看涨的信心)，但请知悉系统将无法执行，会显示 "🔒 满仓持有"。
+        1. **关于加仓 (BUY)**：系统无法执行加仓，除非你先平仓释放资金。
         2. **重点转向 (Focus)**：请把注意力从 "寻找买点" 转移到 "持仓管理" 和 "寻找卖点"。
         3. **风险评估**：既然已满仓，风险敞口最大。请更严格地审视 K 线结构，一旦发现趋势反转信号，必须果断建议 SELL (减仓/平仓) 以锁定利润或止损。
-            """
+                """
+            else:
+                # 情况B: 无持仓，余额不足 -> 没钱状态
+                fund_status_msg = f"""
+        ⛔ **严重警告：账户资金不足 (Insufficient Funds)**
+        当前可用余额 ({balance:.2f} U) 低于最小下单金额 ({min_notional_val} U)，且当前无任何持仓。
+        
+        【系统限制】：
+        1. **无法交易**: 你现在发出的任何 BUY/SELL 指令都无法被执行。
+        2. **建议行动**: 请在 reason 中明确告知用户 "账户资金不足，请充值"，并仅对行情做纯粹的观察分析 (Paper Trading)。
+                """
+                
         return fund_status_msg, min_notional_info, min_limit_info
 
     def _build_btc_instruction(self, btc_change_24h):
@@ -394,7 +409,7 @@ class DeepSeekAgent:
         signal_def_msg = self._build_signal_definition(current_pos)
         kline_text = self._build_kline_text(price_data, timeframe)
         indicator_text = self._build_indicator_text(price_data)
-        fund_status_msg, min_notional_info, min_limit_info = self._build_fund_status_message(balance, price_data)
+        fund_status_msg, min_notional_info, min_limit_info = self._build_fund_status_message(balance, price_data, current_pos is not None)
         btc_instruction = self._build_btc_instruction(btc_change_24h)
         market_instruction = self._build_market_instruction()
         surge_instruction = self._build_surge_instruction(is_surge, candlestick_pattern)
@@ -472,11 +487,15 @@ class DeepSeekAgent:
             self.logger.error(f"DeepSeek API 调用失败 ({self.failure_count}/3): {e}")
             raise e
 
-    async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0, dynamic_tp=True, btc_change_24h=None, is_surge=False, candlestick_pattern=None):
+    async def analyze(self, symbol, timeframe, price_data, current_pos, balance, default_amount=0, taker_fee_rate=0.001, leverage=1, risk_control={}, current_account_pnl=0.0, funding_rate=0.0, dynamic_tp=True, btc_change_24h=None, is_surge=False, candlestick_pattern=None, **kwargs):
         """
         调用 DeepSeek 进行市场分析
         """
         try:
+            # Handle default_amount if passed via kwargs or positional
+            # In BaseStrategy, signature is analyze(self, symbol, timeframe, price_data, current_pos, balance, **kwargs)
+            # So extra args might come in kwargs if called via factory
+            
             volatility_status = "NORMAL" 
             if 'volatility_status' in price_data:
                 volatility_status = price_data['volatility_status']
@@ -515,6 +534,7 @@ class DeepSeekAgent:
                 signal_data = json.loads(json_str)
                 
                 signal_data['signal'] = str(signal_data.get('signal', '')).upper()
+                signal_data['entry_price'] = to_float(signal_data.get('entry_price'))
                 signal_data['stop_loss'] = to_float(signal_data.get('stop_loss'))
                 signal_data['take_profit'] = to_float(signal_data.get('take_profit'))
                 signal_data['position_ratio'] = to_float(signal_data.get('position_ratio', 1.0))

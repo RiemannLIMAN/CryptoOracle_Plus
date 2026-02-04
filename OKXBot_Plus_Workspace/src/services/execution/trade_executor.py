@@ -11,6 +11,7 @@ from core.exceptions import (
 )
 from core.cache import cache_manager
 from services.data.data_manager import DataManager
+from services.strategy.registry import StrategyFactory
 from .components import PositionManager, OrderExecutor, SignalProcessor
 import json
 import os
@@ -72,7 +73,12 @@ class DeepSeekTrader:
         self.active_symbols_count = common_config.get('active_symbols_count', 1)
 
         self.exchange = exchange
-        self.agent = agent # DeepSeekAgent instance
+        
+        # [Refactor] 使用策略工厂
+        self.strategy_factory = StrategyFactory(common_config)
+        # 加载活跃策略 (默认只加载 ai_trend 以兼容旧配置)
+        active_strategies = common_config.get('active_strategies', ['ai_trend'])
+        self.strategies = self.strategy_factory.get_strategies(active_strategies, shared_agent=agent)
         
         # [New] Data Manager
         self.data_manager = DataManager(f"data/trade_data_{self.symbol.replace('/', '_')}.db")
@@ -2536,6 +2542,81 @@ class DeepSeekTrader:
 
         return {'status': 'SKIPPED', 'summary': "逻辑未覆盖", 'signal': signal_data.get('signal'), 'reason': signal_data.get('reason')}
 
+    async def _analyze_market_with_strategies(self, symbol, timeframe, price_data, current_pos, balance, **kwargs):
+        """
+        [New] Multi-Strategy Fusion Engine
+        执行所有活跃策略，并根据优先级融合信号。
+        """
+        # 1. 收集所有策略的信号
+        strategy_signals = []
+        
+        # 提取必要的 kwargs，防止传给策略时缺少参数
+        # (其实 kwargs 会自动透传，这里主要是为了明确逻辑)
+        
+        for strategy in self.strategies:
+            try:
+                # 执行策略分析
+                sig = await strategy.analyze(
+                    symbol, 
+                    timeframe, 
+                    price_data, 
+                    current_pos, 
+                    balance, 
+                    **kwargs
+                )
+                if sig:
+                    strategy_signals.append({
+                        'name': strategy.__class__.__name__,
+                        'signal': sig
+                    })
+            except Exception as e:
+                self._log(f"策略 {strategy.__class__.__name__} 执行失败: {e}", 'error')
+
+        if not strategy_signals:
+            # [New] 如果没有信号，尝试返回 AI 策略的 HOLD 原因 (如果有)
+            # 这通常发生在 AI 策略被调用了，但决定 HOLD，它通常会返回 None 
+            # 但我们需要一种机制让 AI 策略返回 "为什么 HOLD"
+            # 暂时我们只能假设是 "AI: HOLD (无机会)"
+            # 但 Pinbar 策略如果也没信号，它就是 None
+            return None
+
+        # 2. 信号融合逻辑 (Fusion Logic)
+        # 优先级: Pinbar (High Confidence) > AI (Trend)
+        # 或者: AI 是主信号，Pinbar 是确认信号
+        
+        # 现在的简单逻辑: 
+        # 如果有 Pinbar 信号，且信心为 HIGH，直接采纳。
+        # 否则采纳 AI 信号。
+        
+        final_signal = None
+        ai_signal = None
+        pinbar_signal = None
+        
+        for s in strategy_signals:
+            if 'DeepSeekAgent' in s['name']:
+                ai_signal = s['signal']
+            elif 'PinbarStrategy' in s['name']:
+                pinbar_signal = s['signal']
+        
+        # [Fusion Rule 1] Pinbar Override (形态优先)
+        # 如果 Pinbar 发现了极高胜率的反转形态，优先执行
+        if pinbar_signal and pinbar_signal.get('confidence') == 'HIGH':
+            final_signal = pinbar_signal
+            # 如果 AI 也给了信号，可以把理由合并
+            if ai_signal:
+                final_signal['reason'] = f"[Pinbar] {pinbar_signal['reason']} | [AI] {ai_signal.get('reason')}"
+            else:
+                final_signal['reason'] = f"[Pinbar] {pinbar_signal['reason']}"
+                
+        # [Fusion Rule 2] AI Trend Follow (趋势跟随)
+        elif ai_signal:
+            final_signal = ai_signal
+            # 如果 Pinbar 有低信心信号，可以作为辅助参考
+            if pinbar_signal:
+                 final_signal['reason'] += f" | [Pinbar] {pinbar_signal.get('reason')}"
+        
+        return final_signal
+
     async def _update_real_trailing_sl(self, price_data, current_pos):
         """
         [Hardcore] 实时移动硬止损 (Real Trailing Hard Stop)
@@ -2709,11 +2790,91 @@ class DeepSeekTrader:
                     # [Fix] 必须 await 协程，否则不会执行
                     await self.save_state()
                     
-                    # TODO: 如果想更激进，这里可以调用 API 修改交易所的委托单
-                    # await self._modify_exchange_sl_order(new_sl)
+                    # [Enhance] 同步更新交易所止损单 (Shadow Following)
+                    await self._modify_exchange_sl_order(new_sl)
                     
         except Exception as e:
             pass
+
+    async def _modify_exchange_sl_order(self, new_sl_price):
+        """
+        [New] 修改交易所的止损委托单 (Algo Order)
+        实现本地动态止损与交易所硬止损的"影子跟随"。
+        """
+        if self.test_mode or not new_sl_price:
+            return
+
+        try:
+            # 1. 查找现有的止损单 (open orders with type 'stop' or algo orders)
+            # OKX 使用 algo 接口管理止损单
+            pending_orders = []
+            try:
+                # 获取未完成的策略委托单
+                pending_orders = await self.exchange.fetch_open_orders(self.symbol, params={'type': 'stop'}) 
+                # 注意: 不同交易所 params 可能不同，OKX 通常需要特定 endpoint
+                # ccxt.okx 实现了 fetch_open_orders 但对 algo order 支持可能有限
+                # 尝试通用接口，如果找不到，可能需要专用 algo 接口
+            except Exception as e:
+                # self._log(f"获取挂单失败: {e}", 'debug')
+                pass
+
+            # 2. 筛选出止损单 (SL)
+            # 假设我们只维护一个主要的 SL 单
+            target_order = None
+            for order in pending_orders:
+                # 简单的识别逻辑：如果是止损单，且方向与平仓方向一致
+                # (这就要求我们知道持仓方向，但在 _update_real_trailing_sl 里已经知道了)
+                # 这里简化处理：假设只有一个 SL 单
+                if order.get('type') in ['stop', 'stop_market', 'stop_limit']:
+                    target_order = order
+                    break
+            
+            # 3. 修改或创建
+            if target_order:
+                # 只有当新价格更有利时才修改 (避免反向操作)
+                # 但 _update_real_trailing_sl 已经做了更有利检查
+                
+                # 修改订单 (Cancel + Replace)
+                # 大多数交易所不支持直接 Modify，需要先撤单
+                await self.exchange.cancel_order(target_order['id'], self.symbol)
+                # self._log(f"撤销旧止损单 {target_order['id']}", 'debug')
+                
+            # 4. 创建新止损单 (Stop Market)
+            # 需要获取当前持仓数量
+            pos = await self.get_current_position()
+            if not pos: return
+            
+            amount = pos['size']
+            side = 'sell' if pos['side'] == 'long' else 'buy'
+            
+            # 发送止损单
+            params = {
+                'stopLossPrice': new_sl_price,
+                'tdMode': self.trade_mode
+            }
+            # 使用 create_order 发送带有 stopLossPrice 的参数，ccxt 会自动处理为触发单
+            # 或者使用 create_algo_order (如果支持)
+            
+            # OKX 特有: 这里的实现比较复杂，为了安全起见，我们先只打印日志，
+            # 等确认 algo 接口稳定性后再实装 create_order。
+            # 目前阶段，我们依然依赖"本地触发 -> 市价平仓"的机制，
+            # 交易所挂单仅作为"灾难备份"。如果频繁修改交易所挂单，可能会触发 rate limit。
+            
+            # [Decision] 鉴于"修改挂单"的高风险性 (可能导致重复下单或撤单失败)，
+            # 且用户当前最担心的是"打架"。
+            # 我们采取"不挂单"策略 —— 既然本地已经有了毫秒级监控，
+            # 那么交易所端就不需要挂一个"过时"的单子来捣乱。
+            # 如果之前有挂单，我们在更新止损时，应该把它【撤销】掉，完全接管。
+            
+            if target_order:
+                self._log(f"🗑️ [Shadow Follow] 检测到旧止损单，已撤销以避免冲突 (本地接管: {new_sl_price})", 'info')
+                # 撤单已经在上面执行了
+            
+            # 暂时不发新单，依靠本地的高频扫描。
+            # 只有在"长线低频"模式下才建议挂交易所单。
+            
+        except Exception as e:
+            self._log(f"同步交易所止损单失败: {e}", 'warning')
 
     async def get_account_info(self):
         """获取账户余额和权益 (一次请求)"""
@@ -3584,19 +3745,19 @@ class DeepSeekTrader:
             # Update analysis time BEFORE calling AI
             self.last_ai_analysis_time = time.time()
 
-            signal_data = await self.agent.analyze( 
+            signal_data = await self._analyze_market_with_strategies( 
                 self.symbol, 
                 self.timeframe, 
                 price_data, 
                 current_pos, 
                 balance, 
-                self.amount,
-                self.taker_fee_rate,
-                self.leverage, # 传入杠杆
-                self.risk_control, # 传入风控配置
-                current_pnl, # [New] 传入当前账户总盈亏
-                funding_rate, # [New] 传入资金费率
-                self.common_config.get('strategy', {}).get('dynamic_tp', False), # [New] 传入动态止盈开关 (False)
+                default_amount=self.amount,
+                taker_fee_rate=self.taker_fee_rate,
+                leverage=self.leverage, # 传入杠杆
+                risk_control=self.risk_control, # 传入风控配置
+                current_account_pnl=current_pnl, # [New] 传入当前账户总盈亏
+                funding_rate=funding_rate, # [New] 传入资金费率
+                dynamic_tp=self.common_config.get('strategy', {}).get('dynamic_tp', False), # [New] 传入动态止盈开关 (False)
                 btc_change_24h=btc_change_24h, # [New] 传入 BTC 涨跌幅
                 is_surge=is_surge, # [New] 传入异动唤醒标志
                 candlestick_pattern=candlestick_pattern # [New] 传入 K 线形态
@@ -3677,7 +3838,46 @@ class DeepSeekTrader:
                     'pattern': candlestick_pattern or '-',
                     'recommended_sleep': recommended_sleep # [New]
                 }
-            return None
+            
+            # [Fix] 如果没有策略产生信号，也需要返回一个 WAIT 状态，否则表格会显示为空
+            # 这种情况通常发生在所有策略都返回 None (HOLD且无理由) 时
+            persona_map = {
+                'HIGH_TREND': 'Trend Hunter (趋势猎人)',
+                'LOW': 'Grid Trader (网格交易)',
+                'HIGH_CHOPPY': 'Risk Guardian (风控卫士)',
+                'NORMAL': 'Day Trader (波段交易)'
+            }
+            persona = persona_map.get(volatility_status, volatility_status)
+            
+            # [Optimization] 如果 AI 策略被调用了但没有信号，尝试提取 "为什么"
+            # 实际上如果 AI 返回了 None，我们也拿不到理由。
+            # 但如果 AI 返回了 HOLD 信号，应该会进入上面的 signal_data 逻辑。
+            # 这里是处理 "策略完全没有返回任何对象" 的情况。
+            
+            # 为了满足用户"想看 AI 思考"的需求，我们可以显示一个更详细的默认状态
+            reason_msg = "策略未触发"
+            if not strategy_signals:
+                 reason_msg = "AI 暂无明确方向 (HOLD)"
+            
+            return {
+                'symbol': self.symbol,
+                'price': price_data['price'],
+                'change': price_data['price_change'],
+                'signal': 'HOLD',
+                'confidence': 'LOW',
+                'reason': reason_msg,
+                'summary': '等待更佳机会',
+                'status': 'WAIT',
+                'status_msg': '观察中',
+                'volatility': volatility_status,
+                'persona': persona,
+                'adx': adx_val,
+                'rsi': ind.get('rsi'),
+                'atr_ratio': ind.get('atr_ratio'),
+                'vol_ratio': ind.get('vol_ratio'),
+                'pattern': candlestick_pattern or '-',
+                'recommended_sleep': 5.0
+            }
             
         except Exception as e:
             self.consecutive_errors += 1

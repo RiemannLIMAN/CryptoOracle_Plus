@@ -20,7 +20,7 @@ from services.risk.risk_manager import RiskManager
 from services.data.market_data_service import MarketDataService # [New] Import MarketDataService
 from services.data.data_manager import DataManager
 
-SYSTEM_VERSION = "v3.9.7 (Alpha Sniper Optimized)"
+SYSTEM_VERSION = "v3.9.8 (Strategy Factory Edition)"
 
 BANNER = r"""
    _____                  __           ____                  __   
