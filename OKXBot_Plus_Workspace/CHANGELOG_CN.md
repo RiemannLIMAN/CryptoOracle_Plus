@@ -11,22 +11,28 @@
 ### 🚀 核心架构升级 (Core Architecture)
 - **策略工厂模式 (Strategy Factory Pattern)**: 彻底重构了策略加载机制。引入了 `StrategyFactory` 和 `active_strategies` 配置，支持多策略（如 AI 趋势、Pinbar 反转、RSI 背离）的动态热插拔与组合运行，告别了单一 AI 策略的硬编码时代。
 - **多策略融合引擎 (Multi-Strategy Fusion)**: 实现了 `_analyze_market_with_strategies` 引擎。它能并行执行所有活跃策略，并基于 "AI 主导 + 辅助确认" 的逻辑融合信号。例如，当 AI 看涨且 Pinbar 确认时，信心自动提升为 HIGH。
+- **配置热修复 (Config Hotfix)**: 修复了 `config.json` 缺少 `active_strategies` 导致启动失败的问题，并在 `config.example.json` 中预置了默认的 AI+Pinbar 组合。
 
 ### 🧠 策略增强 (Strategy Enhancement)
-- **Pinbar 反转策略 (Pinbar Reversal)**: 新增了基于纯数学逻辑的 Pinbar 识别策略。能精准捕捉长下影线（锤子线）和长上影线（流星线），作为高胜率的结构性反转信号。
-- **挂单策略支持 (Limit Order Support)**: 系统不再局限于市价单。现在支持策略返回 `entry_price`，允许在支撑/压力位挂单成交，从而大幅降低滑点成本并优化入场点位。
+- **Pinbar 反转策略 (Pinbar Reversal)**: 
+    - 新增了基于纯数学逻辑的 Pinbar 识别策略。能精准捕捉长下影线（锤子线）和长上影线（流星线）。
+    - **严格过滤**: 引入 ADX < 20 震荡过滤，并在 RSI 超买超卖区才承认形态，拒绝震荡市陷阱。
+    - **共振评分**: 采用积分制 (Confluence Score)，只有当形态+位置+趋势至少满足 2 项时才开单。
+- **挂单策略支持 (Limit Order Support)**: 系统不再局限于市价单。现在支持策略返回 `entry_price`，允许在 Pinbar 影线 50% 回撤位挂单，大幅优化盈亏比。
 
 ### 🛡️ 风控与冲突解决 (Risk Control & Conflict Resolution)
 - **影子跟随机制 (Shadow Following)**: 
     - **背景**: 解决了本地“移动止盈”与交易所“硬止损”可能同时触发导致双重平仓（Double Exit）的严重冲突。
     - **逻辑**: 当本地高频移动止盈（Trailing Stop）接管交易时，系统会自动扫描并**撤销**交易所的旧止损单。确保止损权限完全收归本地 Orbit C 轨道，实现“软硬止损”的无缝切换。
-- **三线战法集成验证 (Three-Line Strike Verification)**: 
-    - 确认了三线战法（Three-Line Strike）在 `SignalProcessor` 中的独立判定逻辑。它作为“形态扫描器”运行在独立的战术层，不受 AI 延迟影响，继续提供 1分钟级别的极速逃顶/抄底能力。
-- **移动止盈优化 (Trailing Stop Optimization)**:
-    - 明确了移动止盈的触发优先级高于所有 AI 信号。即使 AI 建议 HOLD，只要触发 ATR 动态回撤阈值，系统也会强制止盈。
+- **三线战法移动止损 (Three-Line Trailing)**: 
+    - 实现了专属的移动止损逻辑：多单止损跟随最近3根K线最低点，空单跟随最高点。完美贴合趋势加速段。
+- **资金感知修复**: 
+    - 修复了 AI 在余额不足时误报“满仓”的问题。现在能区分“满仓”与“没钱”，并给出精准提示。
 
 ### 🛠️ 逻辑修正 (Logic Fixes)
-- **Trade Executor 重构**: 修复了 `DeepSeekTrader` 初始化时的缩进与逻辑缺陷，确保 `strategy_factory` 和 `data_manager` 的正确加载。
+- **Windows/Linux 兼容性**: 修复了 `start_bot.sh` 和 `stop_bot.sh` 的 CRLF 换行符问题，解决了 Linux 下运行报错 `\r` 的顽疾。
+- **Trade Executor 重构**: 修复了 `DeepSeekTrader` 缺失 `_analyze_market_with_strategies` 方法导致的运行崩溃。
+- **表格显示优化**: 修复了策略未触发时表格数据为空的问题，现在会显示 "WAIT" 状态和 "AI 暂无明确方向"。
 
 ## [v3.9.7] - 2026-02-01 (Architectural Stability & Risk Mitigation)
 
